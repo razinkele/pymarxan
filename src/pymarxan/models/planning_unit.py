@@ -1,0 +1,7 @@
+"""Planning unit status constants."""
+
+AVAILABLE = 0
+LOCKED_IN = 2
+LOCKED_OUT = 3
+
+VALID_STATUSES = {AVAILABLE, LOCKED_IN, LOCKED_OUT}
