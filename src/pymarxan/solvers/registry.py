@@ -49,12 +49,14 @@ class SolverRegistry:
 
 def get_default_registry() -> SolverRegistry:
     """Return a registry pre-loaded with built-in solvers."""
+    from pymarxan.solvers.heuristic import HeuristicSolver
     from pymarxan.solvers.marxan_binary import MarxanBinarySolver
     from pymarxan.solvers.mip_solver import MIPSolver
     from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
     from pymarxan.zones.solver import ZoneSASolver
 
     reg = SolverRegistry()
+    reg.register("greedy", HeuristicSolver)
     reg.register("mip", MIPSolver)
     reg.register("sa", SimulatedAnnealingSolver)
     reg.register("binary", MarxanBinarySolver)
