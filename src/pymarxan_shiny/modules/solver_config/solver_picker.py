@@ -11,6 +11,7 @@ def solver_picker_ui():
     binary_available = MarxanBinarySolver().available()
     solver_choices = {"mip": "MIP Solver (exact, PuLP/CBC)"}
     solver_choices["sa"] = "Simulated Annealing (Python)"
+    solver_choices["zone_sa"] = "Zone SA (Multi-Zone)"
     if binary_available:
         solver_choices["binary"] = "Marxan C++ Binary"
     return ui.card(
@@ -58,6 +59,19 @@ def solver_picker_ui():
                         value=10000, min=100, step=1000,
                     ),
                 ),
+                ui.panel_conditional(
+                    "input.solver_type === 'zone_sa'",
+                    ui.p("Uses Zone SA solver for multi-zone problems. "
+                         "Requires zone data to be loaded in the Zones tab."),
+                    ui.input_numeric(
+                        "zone_sa_iterations", "SA Iterations",
+                        value=1000000, min=1000, step=100000,
+                    ),
+                    ui.input_numeric(
+                        "zone_sa_temp_steps", "Temperature steps",
+                        value=10000, min=100, step=1000,
+                    ),
+                ),
                 width=350,
             ),
             ui.output_text_verbatim("solver_info"),
@@ -70,6 +84,7 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
     @reactive.event(
         input.solver_type, input.blm, input.num_solutions,
         input.seed, input.sa_iterations, input.sa_temp_steps,
+        input.zone_sa_iterations, input.zone_sa_temp_steps,
         ignore_init=False,
     )
     def _update_config():
@@ -85,6 +100,9 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         if input.solver_type() == "sa":
             config["num_iterations"] = int(input.sa_iterations() or 1000000)
             config["num_temp"] = int(input.sa_temp_steps() or 10000)
+        if input.solver_type() == "zone_sa":
+            config["num_iterations"] = int(input.zone_sa_iterations() or 1000000)
+            config["num_temp"] = int(input.zone_sa_temp_steps() or 10000)
         solver_config.set(config)
 
     @render.text
@@ -106,4 +124,9 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
                     "Native Python implementation of the Marxan SA algorithm.\n"
                     "No external binary needed. Supports multiple independent\n"
                     "runs with adaptive cooling schedule.")
+        elif st == "zone_sa":
+            return ("Zone SA (Multi-Zone)\n--------------------\n"
+                    "Simulated annealing for multi-zone conservation planning.\n"
+                    "Each planning unit is assigned to a zone (or left unassigned).\n"
+                    "Requires zone project data (zones, zone costs, etc.).")
         return ""

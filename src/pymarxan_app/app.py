@@ -10,6 +10,8 @@ from pymarxan.solvers.base import Solution, SolverConfig
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
 from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+from pymarxan.zones.readers import load_zone_project
+from pymarxan.zones.solver import ZoneSASolver
 from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,
     blm_explorer_ui,
@@ -22,6 +24,7 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 app_ui = ui.page_navbar(
     ui.nav_panel(
@@ -35,6 +38,10 @@ app_ui = ui.page_navbar(
     ui.nav_panel(
         "Calibrate",
         ui.layout_columns(blm_explorer_ui("blm_cal"), col_widths=12),
+    ),
+    ui.nav_panel(
+        "Zones",
+        ui.layout_columns(zone_config_ui("zone_config"), col_widths=12),
     ),
     ui.nav_panel("Run", ui.card(
         ui.card_header("Run Solver"),
@@ -67,11 +74,13 @@ def server(input: Inputs, output: Outputs, session: Session):
         "solver_type": "mip", "blm": 1.0, "num_solutions": 10, "seed": None,
     })
     current_solution: reactive.Value[Solution | None] = reactive.value(None)
+    zone_problem: reactive.Value = reactive.value(None)
 
     upload_server("upload", problem=problem)
     solver_picker_server("solver", solver_config=solver_config)
     solution_map_server("solution_map", problem=problem, solution=current_solution)
     summary_table_server("summary", problem=problem, solution=current_solution)
+    zone_config_server("zone_config", zone_problem=zone_problem)
 
     @reactive.calc
     def active_solver():
@@ -83,6 +92,8 @@ def server(input: Inputs, output: Outputs, session: Session):
             return SimulatedAnnealingSolver()
         elif st == "binary":
             return MarxanBinarySolver()
+        elif st == "zone_sa":
+            return ZoneSASolver()
         return MIPSolver()
 
     blm_explorer_server(
@@ -111,12 +122,17 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif solver_type == "sa":
             p.parameters["NUMITNS"] = config_dict.get("num_iterations", 1000000)
             p.parameters["NUMTEMP"] = config_dict.get("num_temp", 10000)
+        elif solver_type == "zone_sa":
+            p.parameters["NUMITNS"] = config_dict.get("num_iterations", 1000000)
+            p.parameters["NUMTEMP"] = config_dict.get("num_temp", 10000)
         if solver_type == "mip":
             solver = MIPSolver()
         elif solver_type == "binary":
             solver = MarxanBinarySolver()
         elif solver_type == "sa":
             solver = SimulatedAnnealingSolver()
+        elif solver_type == "zone_sa":
+            solver = ZoneSASolver()
         else:
             ui.notification_show(f"Unknown solver type: {solver_type}", type="error")
             return
