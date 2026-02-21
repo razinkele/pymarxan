@@ -15,6 +15,14 @@ from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,
     blm_explorer_ui,
 )
+from pymarxan_shiny.modules.calibration.sweep_explorer import (
+    sweep_explorer_server,
+    sweep_explorer_ui,
+)
+from pymarxan_shiny.modules.results.scenario_compare import (
+    scenario_compare_server,
+    scenario_compare_ui,
+)
 from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
 from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
 from pymarxan_shiny.modules.results.export import export_server, export_ui
@@ -39,6 +47,10 @@ app_ui = ui.page_navbar(
         ui.layout_columns(blm_explorer_ui("blm_cal"), col_widths=12),
     ),
     ui.nav_panel(
+        "Sweep",
+        ui.layout_columns(sweep_explorer_ui("sweep"), col_widths=12),
+    ),
+    ui.nav_panel(
         "Zones",
         ui.layout_columns(zone_config_ui("zone_config"), col_widths=12),
     ),
@@ -60,8 +72,9 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Results", ui.layout_columns(
         solution_map_ui("solution_map"),
         summary_table_ui("summary"),
+        scenario_compare_ui("scenarios"),
         export_ui("export"),
-        col_widths=[6, 6, 12],
+        col_widths=[6, 6, 12, 12],
     )),
     title="pymarxan",
     id="navbar",
@@ -97,6 +110,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,
+    )
+    sweep_explorer_server("sweep", problem=problem, solver=active_solver)
+    scenario_compare_server(
+        "scenarios", solution=current_solution, solver_config=solver_config,
     )
     export_server("export", problem=problem, solution=current_solution)
 
