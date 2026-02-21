@@ -44,7 +44,13 @@ def check_targets(
     selected: np.ndarray,
     pu_index: dict[int, int],
 ) -> dict[int, bool]:
-    """Check which feature targets are met by the selection."""
+    """Check which feature targets are met by the selection.
+
+    Uses the MISSLEVEL parameter (default 1.0) to allow fractional
+    target achievement.  A target is considered met when the achieved
+    amount >= target * misslevel.
+    """
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     targets_met: dict[int, bool] = {}
     for _, feat_row in problem.features.iterrows():
         fid = int(feat_row["id"])
@@ -58,7 +64,7 @@ def check_targets(
             idx = pu_index.get(pu_id)
             if idx is not None and selected[idx]:
                 total += float(r["amount"])
-        targets_met[fid] = total >= target
+        targets_met[fid] = total >= target * misslevel
     return targets_met
 
 
@@ -100,18 +106,61 @@ def compute_penalty(
     return total
 
 
+def compute_cost_threshold_penalty(
+    total_cost: float,
+    cost_thresh: float,
+    thresh_pen1: float,
+    thresh_pen2: float,
+) -> float:
+    """Compute penalty for exceeding a cost threshold.
+
+    Parameters
+    ----------
+    total_cost : float
+        Total cost of the current selection.
+    cost_thresh : float
+        Cost threshold above which a penalty applies.
+    thresh_pen1 : float
+        Fixed penalty applied when cost exceeds threshold.
+    thresh_pen2 : float
+        Multiplier for the amount by which cost exceeds threshold.
+
+    Returns
+    -------
+    float
+        ``0.0`` if *total_cost* <= *cost_thresh*, otherwise
+        ``thresh_pen1 + thresh_pen2 * (total_cost - cost_thresh)``.
+    """
+    if total_cost <= cost_thresh:
+        return 0.0
+    return thresh_pen1 + thresh_pen2 * (total_cost - cost_thresh)
+
+
 def compute_objective(
     problem: ConservationProblem,
     selected: np.ndarray,
     pu_index: dict[int, int],
     blm: float,
 ) -> float:
-    """Compute the full Marxan objective: cost + BLM*boundary + penalty."""
+    """Compute the full Marxan objective: cost + BLM*boundary + penalty.
+
+    When COSTTHRESH > 0, an additional cost-threshold penalty is added.
+    """
     costs = np.asarray(problem.planning_units["cost"].values)
     total_cost = float(np.sum(costs[selected]))
     total_boundary = compute_boundary(problem, selected, pu_index)
     penalty = compute_penalty(problem, selected, pu_index)
-    return total_cost + blm * total_boundary + penalty
+    obj = total_cost + blm * total_boundary + penalty
+
+    cost_thresh = float(problem.parameters.get("COSTTHRESH", 0.0))
+    if cost_thresh > 0:
+        thresh_pen1 = float(problem.parameters.get("THRESHPEN1", 0.0))
+        thresh_pen2 = float(problem.parameters.get("THRESHPEN2", 0.0))
+        obj += compute_cost_threshold_penalty(
+            total_cost, cost_thresh, thresh_pen1, thresh_pen2
+        )
+
+    return obj
 
 
 def build_solution(
