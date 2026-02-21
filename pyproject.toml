@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymarxan"
+version = "0.1.0"
+description = "Modular Python toolkit for Marxan conservation planning"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "geopandas>=0.14",
+    "shapely>=2.0",
+    "scipy>=1.11",
+    "PuLP>=2.7",
+]
+
+[project.optional-dependencies]
+shiny = [
+    "shiny>=1.0",
+    "shinywidgets>=0.3",
+    "ipyleaflet>=0.18",
+    "plotly>=5.18",
+    "matplotlib>=3.8",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "pandas-stubs",
+]
+all = ["pymarxan[shiny,dev]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pymarxan", "src/pymarxan_shiny", "src/pymarxan_app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
