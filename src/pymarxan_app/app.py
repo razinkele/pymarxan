@@ -9,8 +9,14 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, SolverConfig
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
 from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+from pymarxan_shiny.modules.calibration.blm_explorer import (
+    blm_explorer_server,
+    blm_explorer_ui,
+)
 from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
 from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
+from pymarxan_shiny.modules.results.export import export_server, export_ui
 from pymarxan_shiny.modules.results.summary_table import summary_table_server, summary_table_ui
 from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
@@ -18,8 +24,18 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
 )
 
 app_ui = ui.page_navbar(
-    ui.nav_panel("Data", ui.layout_columns(upload_ui("upload"), col_widths=12)),
-    ui.nav_panel("Configure", ui.layout_columns(solver_picker_ui("solver"), col_widths=12)),
+    ui.nav_panel(
+        "Data",
+        ui.layout_columns(upload_ui("upload"), col_widths=12),
+    ),
+    ui.nav_panel(
+        "Configure",
+        ui.layout_columns(solver_picker_ui("solver"), col_widths=12),
+    ),
+    ui.nav_panel(
+        "Calibrate",
+        ui.layout_columns(blm_explorer_ui("blm_cal"), col_widths=12),
+    ),
     ui.nav_panel("Run", ui.card(
         ui.card_header("Run Solver"),
         ui.layout_sidebar(
@@ -38,7 +54,8 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Results", ui.layout_columns(
         solution_map_ui("solution_map"),
         summary_table_ui("summary"),
-        col_widths=[6, 6],
+        export_ui("export"),
+        col_widths=[6, 6, 12],
     )),
     title="pymarxan",
     id="navbar",
@@ -55,6 +72,23 @@ def server(input: Inputs, output: Outputs, session: Session):
     solver_picker_server("solver", solver_config=solver_config)
     solution_map_server("solution_map", problem=problem, solution=current_solution)
     summary_table_server("summary", problem=problem, solution=current_solution)
+
+    @reactive.calc
+    def active_solver():
+        config_dict = solver_config()
+        st = config_dict.get("solver_type", "mip")
+        if st == "mip":
+            return MIPSolver()
+        elif st == "sa":
+            return SimulatedAnnealingSolver()
+        elif st == "binary":
+            return MarxanBinarySolver()
+        return MIPSolver()
+
+    blm_explorer_server(
+        "blm_cal", problem=problem, solver=active_solver,
+    )
+    export_server("export", problem=problem, solution=current_solution)
 
     @reactive.effect
     @reactive.event(input.run_solver)
@@ -74,10 +108,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         if solver_type == "binary":
             p.parameters["NUMITNS"] = config_dict.get("num_iterations", 1000000)
             p.parameters["NUMTEMP"] = config_dict.get("num_temp", 10000)
+        elif solver_type == "sa":
+            p.parameters["NUMITNS"] = config_dict.get("num_iterations", 1000000)
+            p.parameters["NUMTEMP"] = config_dict.get("num_temp", 10000)
         if solver_type == "mip":
             solver = MIPSolver()
         elif solver_type == "binary":
             solver = MarxanBinarySolver()
+        elif solver_type == "sa":
+            solver = SimulatedAnnealingSolver()
         else:
             ui.notification_show(f"Unknown solver type: {solver_type}", type="error")
             return
