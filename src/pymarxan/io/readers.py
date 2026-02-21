@@ -208,3 +208,72 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
         boundary=boundary,
         parameters=params,
     )
+
+
+def read_mvbest(path: str | Path) -> pd.DataFrame:
+    """Read a Marxan output missing values best (out_mvbest.csv) file.
+
+    Casts ``Feature_ID`` to int, ``Target``/``Amount_Held``/``Shortfall``
+    to float, and ``Target_Met`` to bool.
+
+    Parameters
+    ----------
+    path : str | Path
+        Path to out_mvbest.csv.
+
+    Returns
+    -------
+    pd.DataFrame
+        Missing values best data.
+    """
+    df = pd.read_csv(path)
+    df["Feature_ID"] = df["Feature_ID"].astype(int)
+    for col in ("Target", "Amount_Held", "Shortfall"):
+        df[col] = df[col].astype(float)
+    df["Target_Met"] = df["Target_Met"].astype(bool)
+    return df
+
+
+def read_ssoln(path: str | Path) -> pd.DataFrame:
+    """Read a Marxan output summed solution (out_ssoln.csv) file.
+
+    Casts ``Planning_Unit`` and ``Number`` to int.
+
+    Parameters
+    ----------
+    path : str | Path
+        Path to out_ssoln.csv.
+
+    Returns
+    -------
+    pd.DataFrame
+        Summed solution data.
+    """
+    df = pd.read_csv(path)
+    df["Planning_Unit"] = df["Planning_Unit"].astype(int)
+    df["Number"] = df["Number"].astype(int)
+    return df
+
+
+def read_sum(path: str | Path) -> pd.DataFrame:
+    """Read a Marxan output summary (out_sum.csv) file.
+
+    Casts ``Run``/``Planning_Units`` to int and
+    ``Score``/``Cost``/``Boundary``/``Penalty``/``Shortfall`` to float.
+
+    Parameters
+    ----------
+    path : str | Path
+        Path to out_sum.csv.
+
+    Returns
+    -------
+    pd.DataFrame
+        Summary data.
+    """
+    df = pd.read_csv(path)
+    df["Run"] = df["Run"].astype(int)
+    df["Planning_Units"] = df["Planning_Units"].astype(int)
+    for col in ("Score", "Cost", "Boundary", "Penalty", "Shortfall"):
+        df[col] = df[col].astype(float)
+    return df
