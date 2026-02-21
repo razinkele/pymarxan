@@ -14,7 +14,6 @@ from pymarxan.io.writers import save_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
-
 _BINARY_NAMES = ["Marxan_x64", "marxan", "Marxan", "marxan_x64"]
 
 
@@ -96,7 +95,6 @@ class MarxanBinarySolver(Solver):
 
             # Parse output solutions
             pu_ids = problem.planning_units["id"].tolist()
-            pu_index = {pid: i for i, pid in enumerate(pu_ids)}
             solutions = []
 
             for i in range(1, config.num_solutions + 1):
@@ -181,7 +179,7 @@ class MarxanBinarySolver(Solver):
         pu_index = {pid: i for i, pid in enumerate(pu_ids)}
 
         # Compute cost
-        costs = problem.planning_units["cost"].values
+        costs = np.asarray(problem.planning_units["cost"].values)
         total_cost = float(np.sum(costs[selected]))
 
         # Compute boundary

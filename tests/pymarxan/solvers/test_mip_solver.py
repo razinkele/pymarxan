@@ -1,5 +1,7 @@
 from pathlib import Path
+
 import numpy as np
+
 from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver

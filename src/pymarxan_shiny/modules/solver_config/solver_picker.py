@@ -1,8 +1,10 @@
 """Solver selection and configuration Shiny module."""
 from __future__ import annotations
+
 from shiny import module, reactive, render, ui
-from pymarxan.solvers.mip_solver import MIPSolver
+
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
+
 
 @module.ui
 def solver_picker_ui():
@@ -14,17 +16,35 @@ def solver_picker_ui():
         ui.card_header("Solver Configuration"),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_radio_buttons("solver_type", "Solver", choices=solver_choices, selected="mip"),
+                ui.input_radio_buttons(
+                    "solver_type", "Solver",
+                    choices=solver_choices, selected="mip",
+                ),
                 ui.hr(),
                 ui.h5("Parameters"),
-                ui.input_numeric("blm", "Boundary Length Modifier (BLM)", value=1.0, min=0, step=0.1),
-                ui.input_numeric("num_solutions", "Number of solutions", value=10, min=1, max=1000, step=1),
-                ui.input_numeric("seed", "Random seed (optional)", value=42, min=-1),
+                ui.input_numeric(
+                    "blm", "Boundary Length Modifier (BLM)",
+                    value=1.0, min=0, step=0.1,
+                ),
+                ui.input_numeric(
+                    "num_solutions", "Number of solutions",
+                    value=10, min=1, max=1000, step=1,
+                ),
+                ui.input_numeric(
+                    "seed", "Random seed (optional)",
+                    value=42, min=-1,
+                ),
                 ui.hr(),
                 ui.panel_conditional(
                     "input.solver_type === 'binary'",
-                    ui.input_numeric("num_iterations", "SA Iterations", value=1000000, min=1000, step=100000),
-                    ui.input_numeric("num_temp", "Temperature steps", value=10000, min=100, step=1000),
+                    ui.input_numeric(
+                        "num_iterations", "SA Iterations",
+                        value=1000000, min=1000, step=100000,
+                    ),
+                    ui.input_numeric(
+                        "num_temp", "Temperature steps",
+                        value=10000, min=100, step=1000,
+                    ),
                 ),
                 width=350,
             ),
@@ -35,7 +55,10 @@ def solver_picker_ui():
 @module.server
 def solver_picker_server(input, output, session, solver_config: reactive.Value):
     @reactive.effect
-    @reactive.event(input.solver_type, input.blm, input.num_solutions, input.seed, ignore_init=False)
+    @reactive.event(
+        input.solver_type, input.blm, input.num_solutions,
+        input.seed, ignore_init=False,
+    )
     def _update_config():
         config = {
             "solver_type": input.solver_type(),

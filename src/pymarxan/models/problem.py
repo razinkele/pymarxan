@@ -70,7 +70,7 @@ class ConservationProblem:
             Mapping from feature id to total amount.
         """
         totals = self.pu_vs_features.groupby("species")["amount"].sum()
-        return totals.to_dict()
+        return dict(totals.to_dict())  # type: ignore[arg-type]
 
     def targets_achievable(self) -> bool:
         """Check whether all feature targets can be met.

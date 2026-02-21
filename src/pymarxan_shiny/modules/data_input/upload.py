@@ -1,11 +1,14 @@
 """Data upload Shiny module for loading Marxan project files."""
 from __future__ import annotations
-from pathlib import Path
+
 import tempfile
 import zipfile
+from pathlib import Path
+
 from shiny import module, reactive, render, ui
+
 from pymarxan.io.readers import load_project
-from pymarxan.models.problem import ConservationProblem
+
 
 @module.ui
 def upload_ui():
@@ -49,7 +52,8 @@ def upload_server(input, output, session, problem: reactive.Value):
                 loaded = load_project(project_dir)
                 errors = loaded.validate()
                 if errors:
-                    ui.notification_show(f"Validation warnings: {'; '.join(errors)}", type="warning")
+                    msg = f"Validation warnings: {'; '.join(errors)}"
+                    ui.notification_show(msg, type="warning")
                 problem.set(loaded)
                 ui.notification_show("Project loaded successfully!", type="message")
             except Exception as e:
@@ -63,13 +67,16 @@ def upload_server(input, output, session, problem: reactive.Value):
             return
         project_dir = Path(path)
         if not (project_dir / "input.dat").exists():
-            ui.notification_show(f"No input.dat found in {project_dir}", type="error")
+            ui.notification_show(
+                f"No input.dat found in {project_dir}", type="error",
+            )
             return
         try:
             loaded = load_project(project_dir)
             errors = loaded.validate()
             if errors:
-                ui.notification_show(f"Validation warnings: {'; '.join(errors)}", type="warning")
+                msg = f"Validation warnings: {'; '.join(errors)}"
+                ui.notification_show(msg, type="warning")
             problem.set(loaded)
             ui.notification_show("Project loaded successfully!", type="message")
         except Exception as e:

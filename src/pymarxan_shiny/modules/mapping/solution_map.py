@@ -1,8 +1,8 @@
 """Solution map Shiny module — displays selected planning units."""
 from __future__ import annotations
+
 from shiny import module, reactive, render, ui
-from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution
+
 
 @module.ui
 def solution_map_ui():
@@ -18,7 +18,11 @@ def solution_map_server(input, output, session, problem: reactive.Value, solutio
             return ui.p("Run a solver to see results here.")
         pu_ids = p.planning_units["id"].tolist()
         costs = p.planning_units["cost"].tolist()
-        rows = [{"pu": pid, "cost": cost} for i, (pid, cost) in enumerate(zip(pu_ids, costs)) if s.selected[i]]
+        rows = [
+            {"pu": pid, "cost": cost}
+            for i, (pid, cost) in enumerate(zip(pu_ids, costs))
+            if s.selected[i]
+        ]
         if not rows:
             return ui.p("No planning units selected.")
         header = ui.div(
@@ -29,7 +33,10 @@ def solution_map_server(input, output, session, problem: reactive.Value, solutio
             ui.p(f"Objective: {s.objective:.2f}"),
             ui.p(f"Targets met: {sum(s.targets_met.values())} / {len(s.targets_met)}"),
         )
-        table_rows = [ui.tags.tr(ui.tags.td(str(r["pu"])), ui.tags.td(f"{r['cost']:.1f}")) for r in rows]
+        table_rows = [
+            ui.tags.tr(ui.tags.td(str(r["pu"])), ui.tags.td(f"{r['cost']:.1f}"))
+            for r in rows
+        ]
         table = ui.tags.table(
             ui.tags.thead(ui.tags.tr(ui.tags.th("Planning Unit"), ui.tags.th("Cost"))),
             ui.tags.tbody(*table_rows),

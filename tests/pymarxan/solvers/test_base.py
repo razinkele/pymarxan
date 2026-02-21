@@ -1,10 +1,15 @@
 import numpy as np
+
 from pymarxan.solvers.base import Solution, SolverConfig
+
 
 class TestSolution:
     def test_create_solution(self):
-        sol = Solution(selected=np.array([True, False, True]), cost=30.0, boundary=2.0,
-                       objective=32.0, targets_met={1: True, 2: False}, metadata={"solver": "test"})
+        sol = Solution(
+            selected=np.array([True, False, True]), cost=30.0,
+            boundary=2.0, objective=32.0,
+            targets_met={1: True, 2: False}, metadata={"solver": "test"},
+        )
         assert sol.cost == 30.0
         assert sol.selected.sum() == 2
         assert sol.targets_met[1] is True

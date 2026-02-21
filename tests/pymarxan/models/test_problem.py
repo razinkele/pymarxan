@@ -1,5 +1,5 @@
-import numpy as np
 import pandas as pd
+
 from pymarxan.models.problem import ConservationProblem
 
 

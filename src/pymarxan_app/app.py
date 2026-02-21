@@ -2,15 +2,20 @@
 Run with: shiny run src/pymarxan_app/app.py
 """
 from __future__ import annotations
+
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui
+
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, SolverConfig
-from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
-from pymarxan_shiny.modules.data_input.upload import upload_ui, upload_server
-from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui, solver_picker_server
-from pymarxan_shiny.modules.mapping.solution_map import solution_map_ui, solution_map_server
-from pymarxan_shiny.modules.results.summary_table import summary_table_ui, summary_table_server
+from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
+from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
+from pymarxan_shiny.modules.results.summary_table import summary_table_server, summary_table_ui
+from pymarxan_shiny.modules.solver_config.solver_picker import (
+    solver_picker_server,
+    solver_picker_ui,
+)
 
 app_ui = ui.page_navbar(
     ui.nav_panel("Data", ui.layout_columns(upload_ui("upload"), col_widths=12)),
@@ -19,7 +24,10 @@ app_ui = ui.page_navbar(
         ui.card_header("Run Solver"),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_action_button("run_solver", "Run Solver", class_="btn-primary btn-lg w-100"),
+                ui.input_action_button(
+                    "run_solver", "Run Solver",
+                    class_="btn-primary btn-lg w-100",
+                ),
                 ui.hr(),
                 ui.output_text_verbatim("run_log"),
                 width=300,
@@ -82,8 +90,11 @@ def server(input: Inputs, output: Outputs, session: Session):
             if solutions:
                 best = min(solutions, key=lambda s: s.objective)
                 current_solution.set(best)
+                met = sum(best.targets_met.values())
+                total = len(best.targets_met)
                 ui.notification_show(
-                    f"Done! Cost: {best.cost:.2f}, Targets met: {sum(best.targets_met.values())}/{len(best.targets_met)}",
+                    f"Done! Cost: {best.cost:.2f}, "
+                    f"Targets met: {met}/{total}",
                     type="message",
                 )
             else:
@@ -100,10 +111,14 @@ def server(input: Inputs, output: Outputs, session: Session):
         if s is None:
             return (f"Project loaded: {p.n_planning_units} PUs, {p.n_features} features.\n"
                     f"Step 2: Configure solver in 'Configure' tab, then click 'Run Solver'.")
-        return (f"Solution available!\n  Selected: {s.n_selected} PUs\n"
-                f"  Cost: {s.cost:.2f}\n  Boundary: {s.boundary:.2f}\n"
-                f"  Objective: {s.objective:.2f}\n  All targets met: {'Yes' if s.all_targets_met else 'No'}\n\n"
-                f"Go to 'Results' tab to explore the solution.")
+        all_met = "Yes" if s.all_targets_met else "No"
+        return (
+            f"Solution available!\n  Selected: {s.n_selected} PUs\n"
+            f"  Cost: {s.cost:.2f}\n  Boundary: {s.boundary:.2f}\n"
+            f"  Objective: {s.objective:.2f}\n"
+            f"  All targets met: {all_met}\n\n"
+            f"Go to 'Results' tab to explore the solution."
+        )
 
     @render.text
     def run_log():

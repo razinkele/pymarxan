@@ -1,8 +1,9 @@
-import shutil
 from pathlib import Path
 from unittest.mock import patch
+
 import numpy as np
 import pytest
+
 from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver

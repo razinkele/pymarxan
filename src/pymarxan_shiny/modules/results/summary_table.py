@@ -1,15 +1,17 @@
 """Results summary Shiny module — target achievement table."""
 from __future__ import annotations
+
 from shiny import module, reactive, render, ui
-from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution
+
 
 @module.ui
 def summary_table_ui():
     return ui.card(ui.card_header("Target Achievement"), ui.output_ui("target_table"))
 
 @module.server
-def summary_table_server(input, output, session, problem: reactive.Value, solution: reactive.Value):
+def summary_table_server(
+    input, output, session, problem: reactive.Value, solution: reactive.Value,
+):
     @render.ui
     def target_table():
         p = problem()
@@ -24,11 +26,18 @@ def summary_table_server(input, output, session, problem: reactive.Value, soluti
             fname = frow.get("name", f"Feature {fid}")
             target = float(frow.get("target", 0.0))
             mask = p.pu_vs_features["species"] == fid
-            achieved = sum(float(arow["amount"]) for _, arow in p.pu_vs_features[mask].iterrows()
-                          if int(arow["pu"]) in id_to_idx and s.selected[id_to_idx[int(arow["pu"])]])
+            achieved = sum(
+                float(arow["amount"])
+                for _, arow in p.pu_vs_features[mask].iterrows()
+                if int(arow["pu"]) in id_to_idx
+                and s.selected[id_to_idx[int(arow["pu"])]]
+            )
             met = achieved >= target
             pct = (achieved / target * 100) if target > 0 else 100.0
-            rows.append({"id": fid, "name": fname, "target": target, "achieved": achieved, "pct": pct, "met": met})
+            rows.append({
+                "id": fid, "name": fname, "target": target,
+                "achieved": achieved, "pct": pct, "met": met,
+            })
         table_rows = [
             ui.tags.tr(
                 ui.tags.td(str(r["id"])), ui.tags.td(r["name"]),

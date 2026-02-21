@@ -1,7 +1,14 @@
 from pathlib import Path
+
 import pandas as pd
+
 from pymarxan.io.readers import load_project, read_input_dat, read_pu, read_spec
-from pymarxan.io.writers import write_pu, write_spec, write_puvspr, write_bound, write_input_dat, save_project
+from pymarxan.io.writers import (
+    save_project,
+    write_input_dat,
+    write_pu,
+    write_spec,
+)
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 
@@ -15,7 +22,10 @@ class TestWritePu:
 
 class TestWriteSpec:
     def test_roundtrip(self, tmp_path):
-        original = pd.DataFrame({"id": [1, 2], "name": ["sp_a", "sp_b"], "target": [20.0, 10.0], "spf": [1.0, 1.0]})
+        original = pd.DataFrame({
+            "id": [1, 2], "name": ["sp_a", "sp_b"],
+            "target": [20.0, 10.0], "spf": [1.0, 1.0],
+        })
         out_path = tmp_path / "spec.dat"
         write_spec(original, out_path)
         loaded = read_spec(out_path)

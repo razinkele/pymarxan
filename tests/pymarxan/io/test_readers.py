@@ -1,6 +1,15 @@
 from pathlib import Path
+
 import pandas as pd
-from pymarxan.io.readers import read_pu, read_spec, read_puvspr, read_bound, read_input_dat, load_project
+
+from pymarxan.io.readers import (
+    load_project,
+    read_bound,
+    read_input_dat,
+    read_pu,
+    read_puvspr,
+    read_spec,
+)
 from pymarxan.models.problem import ConservationProblem
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"

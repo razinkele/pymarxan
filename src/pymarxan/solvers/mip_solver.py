@@ -31,9 +31,9 @@ class MIPSolver(Solver):
 
     def available(self) -> bool:
         try:
-            import pulp  # noqa: F811
-            return True
-        except ImportError:
+            import importlib.util
+            return importlib.util.find_spec("pulp") is not None
+        except (ImportError, ModuleNotFoundError):
             return False
 
     def solve(
@@ -131,7 +131,7 @@ class MIPSolver(Solver):
         )
 
         # Compute actual cost
-        costs = problem.planning_units["cost"].values
+        costs = np.asarray(problem.planning_units["cost"].values)
         total_cost = float(np.sum(costs[selected]))
 
         # Compute actual boundary
