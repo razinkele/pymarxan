@@ -5,14 +5,15 @@ import math
 
 import numpy as np
 
+from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import (
-    compute_zone_cost,
-    compute_zone_objective,
     check_zone_targets,
     compute_standard_boundary,
     compute_zone_boundary,
+    compute_zone_cost,
+    compute_zone_objective,
 )
 
 
@@ -32,8 +33,14 @@ class ZoneSASolver(Solver):
         return True
 
     def solve(
-        self, problem: ZonalProblem, config: SolverConfig | None = None
+        self,
+        problem: ConservationProblem,
+        config: SolverConfig | None = None,
     ) -> list[Solution]:
+        if not isinstance(problem, ZonalProblem):
+            raise TypeError(
+                "ZoneSASolver requires a ZonalProblem instance"
+            )
         if config is None:
             config = SolverConfig()
 

@@ -1,10 +1,10 @@
 import numpy as np
 
 from pymarxan.connectivity.metrics import (
-    compute_in_degree,
-    compute_out_degree,
     compute_betweenness_centrality,
     compute_eigenvector_centrality,
+    compute_in_degree,
+    compute_out_degree,
 )
 
 

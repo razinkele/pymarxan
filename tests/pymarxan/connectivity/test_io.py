@@ -1,10 +1,9 @@
-import numpy as np
 import pandas as pd
 
 from pymarxan.connectivity.io import (
+    connectivity_to_matrix,
     read_connectivity_edgelist,
     read_connectivity_matrix,
-    connectivity_to_matrix,
 )
 
 

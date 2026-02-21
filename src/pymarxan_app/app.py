@@ -10,7 +10,6 @@ from pymarxan.solvers.base import Solution, SolverConfig
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
 from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
-from pymarxan.zones.readers import load_zone_project
 from pymarxan.zones.solver import ZoneSASolver
 from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,

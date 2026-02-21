@@ -2,11 +2,11 @@ from pathlib import Path
 
 import numpy as np
 
-from pymarxan.io.readers import load_project
 from pymarxan.connectivity.features import (
-    metric_to_feature,
     add_connectivity_features,
+    metric_to_feature,
 )
+from pymarxan.io.readers import load_project
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 

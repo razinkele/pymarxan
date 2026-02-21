@@ -2,12 +2,12 @@ from pathlib import Path
 
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.readers import (
-    read_zones,
-    read_zone_costs,
-    read_zone_contributions,
-    read_zone_targets,
-    read_zone_boundary_costs,
     load_zone_project,
+    read_zone_boundary_costs,
+    read_zone_contributions,
+    read_zone_costs,
+    read_zone_targets,
+    read_zones,
 )
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "zones"

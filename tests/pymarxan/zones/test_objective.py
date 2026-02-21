@@ -2,13 +2,13 @@ from pathlib import Path
 
 import numpy as np
 
-from pymarxan.zones.readers import load_zone_project
 from pymarxan.zones.objective import (
-    compute_zone_cost,
-    compute_zone_boundary,
     check_zone_targets,
+    compute_zone_boundary,
+    compute_zone_cost,
     compute_zone_objective,
 )
+from pymarxan.zones.readers import load_zone_project
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
 
@@ -52,7 +52,8 @@ class TestComputeZoneBoundary:
         assert zbc == 0.0
 
     def test_different_zones_penalty(self):
-        # PU1=1, PU2=2 adjacent: cost=50; PU2=2, PU3=1 adjacent: cost=50; PU3=1, PU4=2 adjacent: cost=50
+        # PU1=1,PU2=2: cost=50; PU2=2,PU3=1: cost=50;
+        # PU3=1,PU4=2: cost=50
         assignment = np.array([1, 2, 1, 2])
         zbc = compute_zone_boundary(self.problem, assignment)
         assert zbc == 150.0

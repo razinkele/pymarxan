@@ -3,21 +3,20 @@ from pathlib import Path
 
 import numpy as np
 
+from pymarxan.connectivity.features import add_connectivity_features
+from pymarxan.connectivity.metrics import (
+    compute_betweenness_centrality,
+    compute_in_degree,
+)
 from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import SolverConfig
-from pymarxan.zones.readers import load_zone_project
-from pymarxan.zones.solver import ZoneSASolver
+from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.zones.objective import (
     compute_zone_cost,
     compute_zone_objective,
-    check_zone_targets,
 )
-from pymarxan.connectivity.metrics import (
-    compute_in_degree,
-    compute_betweenness_centrality,
-)
-from pymarxan.connectivity.features import add_connectivity_features
-from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.zones.readers import load_zone_project
+from pymarxan.zones.solver import ZoneSASolver
 
 ZONE_DIR = Path(__file__).parent / "data" / "zones"
 SIMPLE_DIR = Path(__file__).parent / "data" / "simple"

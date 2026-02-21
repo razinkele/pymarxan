@@ -12,14 +12,16 @@ def compute_in_degree(matrix: np.ndarray) -> np.ndarray:
     """Compute in-degree (incoming flow) for each node. Sum of each column (excluding diagonal)."""
     m = matrix.copy()
     np.fill_diagonal(m, 0)
-    return m.sum(axis=0)
+    result: np.ndarray = m.sum(axis=0)
+    return result
 
 
 def compute_out_degree(matrix: np.ndarray) -> np.ndarray:
     """Compute out-degree (outgoing flow) for each node. Sum of each row (excluding diagonal)."""
     m = matrix.copy()
     np.fill_diagonal(m, 0)
-    return m.sum(axis=1)
+    result: np.ndarray = m.sum(axis=1)
+    return result
 
 
 def compute_betweenness_centrality(matrix: np.ndarray) -> np.ndarray:
