@@ -104,7 +104,7 @@ class HeuristicSolver(Solver):
 
         # Compute objective
         blm = float(problem.parameters.get("BLM", 0.0))
-        total_cost = float(costs[selected].sum())
+        total_cost = float(np.asarray(costs[selected]).sum())
 
         boundary_val = 0.0
         if problem.boundary is not None and blm > 0:

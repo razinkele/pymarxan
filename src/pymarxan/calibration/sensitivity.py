@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.base import Solver, SolverConfig
 
 
 @dataclass

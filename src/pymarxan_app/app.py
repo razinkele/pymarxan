@@ -15,9 +15,17 @@ from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,
     blm_explorer_ui,
 )
+from pymarxan_shiny.modules.calibration.spf_explorer import (
+    spf_explorer_server,
+    spf_explorer_ui,
+)
 from pymarxan_shiny.modules.calibration.sweep_explorer import (
     sweep_explorer_server,
     sweep_explorer_ui,
+)
+from pymarxan_shiny.modules.connectivity.metrics_viz import (
+    metrics_viz_server,
+    metrics_viz_ui,
 )
 from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
 from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
@@ -27,21 +35,13 @@ from pymarxan_shiny.modules.results.scenario_compare import (
     scenario_compare_ui,
 )
 from pymarxan_shiny.modules.results.summary_table import summary_table_server, summary_table_ui
-from pymarxan_shiny.modules.solver_config.solver_picker import (
-    solver_picker_server,
-    solver_picker_ui,
-)
-from pymarxan_shiny.modules.calibration.spf_explorer import (
-    spf_explorer_server,
-    spf_explorer_ui,
-)
-from pymarxan_shiny.modules.connectivity.metrics_viz import (
-    metrics_viz_server,
-    metrics_viz_ui,
-)
 from pymarxan_shiny.modules.results.target_met import (
     target_met_server,
     target_met_ui,
+)
+from pymarxan_shiny.modules.solver_config.solver_picker import (
+    solver_picker_server,
+    solver_picker_ui,
 )
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
