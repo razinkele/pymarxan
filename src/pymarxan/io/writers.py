@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
+
+if TYPE_CHECKING:
+    from pymarxan.solvers.base import Solution
 
 
 def write_pu(df: pd.DataFrame, path: str | Path) -> None:
@@ -124,3 +127,129 @@ def save_project(problem: ConservationProblem, project_dir: str | Path) -> None:
         write_bound(problem.boundary, input_dir / params["BOUNDNAME"])
 
     write_input_dat(params, project_dir / "input.dat")
+
+
+def write_mvbest(
+    problem: ConservationProblem, solution: Solution, path: str | Path
+) -> None:
+    """Write missing value info for the best solution.
+
+    Produces a CSV with one row per feature showing how much of each
+    feature's target is met by the selected planning units.
+
+    Columns: Feature_ID, Feature_Name, Target, Amount_Held, Target_Met,
+    Shortfall.
+
+    Parameters
+    ----------
+    problem : ConservationProblem
+        The conservation planning problem.
+    solution : Solution
+        The best solution to report on.
+    path : str | Path
+        Output file path.
+    """
+    from pymarxan.solvers.utils import compute_feature_shortfalls
+
+    pu_ids = problem.planning_units["id"].tolist()
+    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    shortfalls = compute_feature_shortfalls(problem, solution.selected, pu_index)
+
+    rows = []
+    for _, feat_row in problem.features.iterrows():
+        fid = int(feat_row["id"])
+        target = float(feat_row["target"])
+        name = feat_row["name"]
+
+        # Compute amount held by summing amounts of selected PUs
+        feat_data = problem.pu_vs_features[
+            problem.pu_vs_features["species"] == fid
+        ]
+        amount_held = 0.0
+        for _, r in feat_data.iterrows():
+            pu_id = int(r["pu"])
+            idx = pu_index.get(pu_id)
+            if idx is not None and solution.selected[idx]:
+                amount_held += float(r["amount"])
+
+        shortfall = shortfalls.get(fid, 0.0)
+        target_met = amount_held >= target
+
+        rows.append({
+            "Feature_ID": fid,
+            "Feature_Name": name,
+            "Target": target,
+            "Amount_Held": amount_held,
+            "Target_Met": target_met,
+            "Shortfall": shortfall,
+        })
+
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def write_ssoln(
+    problem: ConservationProblem,
+    solutions: list[Solution],
+    path: str | Path,
+) -> None:
+    """Write summed solution showing how many times each PU was selected.
+
+    Produces a CSV with one row per planning unit, counting how many
+    solutions included it.
+
+    Columns: Planning_Unit, Number.
+
+    Parameters
+    ----------
+    problem : ConservationProblem
+        The conservation planning problem.
+    solutions : list[Solution]
+        All solutions to summarize.
+    path : str | Path
+        Output file path.
+    """
+    pu_ids = problem.planning_units["id"].tolist()
+    counts = [0] * len(pu_ids)
+
+    for sol in solutions:
+        for i, selected in enumerate(sol.selected):
+            if selected:
+                counts[i] += 1
+
+    rows = [
+        {"Planning_Unit": pu_id, "Number": count}
+        for pu_id, count in zip(pu_ids, counts)
+    ]
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def write_sum(solutions: list[Solution], path: str | Path) -> None:
+    """Write per-run summary.
+
+    Produces a CSV with one row per solution run containing cost,
+    boundary, penalty, and other summary statistics.
+
+    Columns: Run, Score, Cost, Planning_Units, Boundary, Penalty, Shortfall.
+
+    Parameters
+    ----------
+    solutions : list[Solution]
+        All solutions to summarize.
+    path : str | Path
+        Output file path.
+    """
+    rows = []
+    for i, sol in enumerate(solutions, start=1):
+        penalty = max(0.0, sol.objective - sol.cost - sol.boundary)
+        shortfall = penalty  # total shortfall approximated from penalty
+        rows.append({
+            "Run": i,
+            "Score": sol.objective,
+            "Cost": sol.cost,
+            "Planning_Units": sol.n_selected,
+            "Boundary": sol.boundary,
+            "Penalty": penalty,
+            "Shortfall": shortfall,
+        })
+
+    pd.DataFrame(rows).to_csv(path, index=False)
