@@ -1,7 +1,7 @@
 """Greedy heuristic solver for conservation planning.
 
-Selects planning units one-by-one based on cost-effectiveness
-(marginal contribution per unit cost). Fast baseline for comparison
+Selects planning units one-by-one based on a configurable scoring
+strategy (HEURTYPE 0-7, matching Marxan). Fast baseline for comparison
 with SA and MIP solvers.
 """
 from __future__ import annotations
@@ -11,9 +11,37 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
+_VALID_HEURTYPES = range(8)
+
 
 class HeuristicSolver(Solver):
-    """Greedy cost-effectiveness heuristic solver."""
+    """Greedy heuristic solver supporting all 8 Marxan HEURTYPE modes.
+
+    Parameters
+    ----------
+    heurtype : int
+        Scoring strategy (0-7). Default is 2 (Max Rarity), matching Marxan.
+        If the problem's ``parameters`` dict contains ``HEURTYPE``, that
+        value overrides the constructor argument at solve time.
+
+    Scoring strategies
+    ------------------
+    0 - Richness: count of unmet features the PU contributes to.
+    1 - Greedy cheapest: negative cost (prefer low cost).
+    2 - Max Rarity: highest rarity among contributed unmet features.
+    3 - Best Rarity: best (rarity / cost) ratio.
+    4 - Average Rarity: average rarity across contributed unmet features.
+    5 - Sum Rarity: sum of rarity scores.
+    6 - Product Irreplaceability: product of 1/(1-irreplaceability).
+    7 - Summation Irreplaceability: sum of irreplaceability scores.
+    """
+
+    def __init__(self, heurtype: int = 2) -> None:
+        heurtype = int(heurtype)  # coerce, may raise for non-numeric
+        if heurtype not in _VALID_HEURTYPES:
+            msg = f"heurtype must be 0-7, got {heurtype}"
+            raise ValueError(msg)
+        self.heurtype = heurtype
 
     def solve(
         self,
@@ -32,11 +60,106 @@ class HeuristicSolver(Solver):
 
         return solutions
 
+    # ------------------------------------------------------------------
+    # Scoring function
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _score_pu(
+        idx: int,
+        heurtype: int,
+        costs: np.ndarray,
+        contributions: dict[int, dict[int, float]],
+        remaining: dict[int, float],
+        total_available: dict[int, float],
+        noise: float,
+    ) -> float | None:
+        """Return a score for candidate planning unit *idx*.
+
+        Higher scores are preferred. A small random *noise* term is added
+        for tie-breaking diversity. Returns ``None`` if the PU contributes
+        nothing to any unmet feature.
+        """
+        pu_contribs = contributions.get(int(idx), {})
+        # Only consider features that still have unmet targets
+        unmet = {
+            fid: amt
+            for fid, amt in pu_contribs.items()
+            if remaining.get(fid, 0.0) > 0
+        }
+
+        if not unmet:
+            return None
+
+        cost = max(float(costs[idx]), 1e-10)
+        # Small cost-inverse tiebreaker: when primary scores are equal,
+        # prefer cheaper PUs (matching Marxan behaviour).
+        cost_tiebreaker = 1e-6 / cost
+
+        if heurtype == 0:
+            # Richness: count of unmet features this PU contributes to
+            return float(len(unmet)) + cost_tiebreaker + noise
+
+        if heurtype == 1:
+            # Greedy cheapest: negative cost (prefer low cost)
+            return -cost + noise
+
+        # Rarity for each unmet feature: target / total_available
+        rarities: list[float] = []
+        for fid in unmet:
+            avail = total_available.get(fid, 1.0)
+            target = remaining.get(fid, 0.0)
+            rarity = target / max(avail, 1e-10)
+            rarities.append(rarity)
+
+        if heurtype == 2:
+            # Max Rarity: contribute to the rarest unmet feature
+            return max(rarities) + cost_tiebreaker + noise
+
+        if heurtype == 3:
+            # Best Rarity: best (rarity / cost) ratio
+            return max(rarities) / cost + noise
+
+        if heurtype == 4:
+            # Average Rarity
+            return (sum(rarities) / len(rarities)) + cost_tiebreaker + noise
+
+        if heurtype == 5:
+            # Sum Rarity
+            return sum(rarities) + cost_tiebreaker + noise
+
+        # Irreplaceability for each feature: amount / total_available
+        irreplaceabilities: list[float] = []
+        for fid, amt in unmet.items():
+            avail = total_available.get(fid, 1.0)
+            irrep = min(amt / max(avail, 1e-10), 1.0 - 1e-10)
+            irreplaceabilities.append(irrep)
+
+        if heurtype == 6:
+            # Product Irreplaceability: product of 1/(1-irrep)
+            product = 1.0
+            for irrep in irreplaceabilities:
+                product *= 1.0 / (1.0 - irrep)
+            return product + cost_tiebreaker + noise
+
+        # heurtype == 7
+        # Summation Irreplaceability: sum of irreplaceability scores
+        return sum(irreplaceabilities) + cost_tiebreaker + noise
+
+    # ------------------------------------------------------------------
+    # Core greedy loop
+    # ------------------------------------------------------------------
+
     def _solve_once(
         self,
         problem: ConservationProblem,
         rng: np.random.Generator,
     ) -> Solution:
+        # Resolve effective heurtype: problem.parameters overrides constructor
+        effective_heurtype = int(
+            problem.parameters.get("HEURTYPE", self.heurtype)
+        )
+
         n = problem.n_planning_units
         pu_ids = problem.planning_units["id"].values
         costs = problem.planning_units["cost"].values.astype(float)
@@ -60,6 +183,12 @@ class HeuristicSolver(Solver):
             if idx is not None:
                 contributions.setdefault(idx, {})[fid] = amount
 
+        # Total available amount per feature (for rarity / irreplaceability)
+        total_available: dict[int, float] = {}
+        for fid_val, amt_val in contributions.items():
+            for fid, amt in amt_val.items():
+                total_available[fid] = total_available.get(fid, 0.0) + amt
+
         # Track remaining need per feature
         remaining: dict[int, float] = {}
         for _, row in problem.features.iterrows():
@@ -73,27 +202,33 @@ class HeuristicSolver(Solver):
                 if fid in remaining:
                     remaining[fid] -= amount
 
-        # Greedy loop: select most cost-effective PU until all targets met
+        # Greedy loop: select highest-scoring PU until all targets met
         available = np.where(~selected & ~locked_out)[0]
-        # Add small noise for diversity across runs
-        noise = rng.uniform(0.0, 0.01, size=n)
+        # Add small noise for diversity across runs (kept tiny so
+        # it does not override meaningful tiebreakers like cost).
+        noise = rng.uniform(0.0, 1e-8, size=n)
 
         while any(r > 0 for r in remaining.values()) and len(available) > 0:
             best_idx = -1
-            best_score = -1.0
+            best_score: float | None = None
 
             for idx in available:
-                marginal = 0.0
-                for fid, amount in contributions.get(int(idx), {}).items():
-                    if remaining.get(fid, 0.0) > 0:
-                        marginal += min(amount, remaining[fid])
-                cost = max(costs[idx], 1e-10)
-                score = marginal / cost + noise[idx]
-                if score > best_score:
+                score = self._score_pu(
+                    idx=idx,
+                    heurtype=effective_heurtype,
+                    costs=costs,
+                    contributions=contributions,
+                    remaining=remaining,
+                    total_available=total_available,
+                    noise=noise[idx],
+                )
+                if score is not None and (
+                    best_score is None or score > best_score
+                ):
                     best_score = score
                     best_idx = idx
 
-            if best_idx < 0 or best_score <= 0:
+            if best_idx < 0 or best_score is None:
                 break
 
             selected[best_idx] = True
@@ -138,7 +273,7 @@ class HeuristicSolver(Solver):
             boundary=boundary_val,
             objective=objective,
             targets_met=targets_met,
-            metadata={"solver": "greedy"},
+            metadata={"solver": "greedy", "heurtype": effective_heurtype},
         )
 
     def name(self) -> str:
