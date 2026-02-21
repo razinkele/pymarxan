@@ -19,6 +19,7 @@ class Solution:
     objective: float  # cost + BLM * boundary + penalties
     targets_met: dict[int, bool]  # Feature ID -> target met?
     metadata: dict = field(default_factory=dict)
+    zone_assignment: np.ndarray | None = None
 
     @property
     def all_targets_met(self) -> bool:
