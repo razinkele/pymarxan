@@ -13,6 +13,7 @@ import numpy as np
 from pymarxan.io.writers import save_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.utils import build_solution
 
 _BINARY_NAMES = ["Marxan_x64", "marxan", "Marxan", "marxan_x64"]
 
@@ -102,7 +103,10 @@ class MarxanBinarySolver(Solver):
                 if csv_path.exists():
                     csv_content = csv_path.read_text()
                     selected = self._parse_solution_csv(csv_content, pu_ids)
-                    sol = self._build_solution(problem, selected, blm)
+                    sol = build_solution(
+                        problem, selected, blm,
+                        metadata={"solver": "Marxan (C++ binary)"},
+                    )
                     solutions.append(sol)
 
             # If no individual solutions found, try best solution
@@ -111,7 +115,10 @@ class MarxanBinarySolver(Solver):
                 if best_path.exists():
                     csv_content = best_path.read_text()
                     selected = self._parse_solution_csv(csv_content, pu_ids)
-                    sol = self._build_solution(problem, selected, blm)
+                    sol = build_solution(
+                        problem, selected, blm,
+                        metadata={"solver": "Marxan (C++ binary)"},
+                    )
                     solutions.append(sol)
 
             return solutions
@@ -152,78 +159,3 @@ class MarxanBinarySolver(Solver):
             [solution_map.get(pid, False) for pid in pu_ids], dtype=bool
         )
         return selected
-
-    @staticmethod
-    def _build_solution(
-        problem: ConservationProblem,
-        selected: np.ndarray,
-        blm: float,
-    ) -> Solution:
-        """Build a Solution object from a selection array.
-
-        Parameters
-        ----------
-        problem : ConservationProblem
-            The conservation problem.
-        selected : np.ndarray
-            Boolean selection array.
-        blm : float
-            Boundary length modifier.
-
-        Returns
-        -------
-        Solution
-            Computed solution with cost, boundary, and target information.
-        """
-        pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-
-        # Compute cost
-        costs = np.asarray(problem.planning_units["cost"].values)
-        total_cost = float(np.sum(costs[selected]))
-
-        # Compute boundary
-        total_boundary = 0.0
-        if problem.boundary is not None:
-            for _, row in problem.boundary.iterrows():
-                id1 = int(row["id1"])
-                id2 = int(row["id2"])
-                bval = float(row["boundary"])
-
-                if id1 == id2:
-                    idx = pu_index.get(id1)
-                    if idx is not None and selected[idx]:
-                        total_boundary += bval
-                else:
-                    idx1 = pu_index.get(id1)
-                    idx2 = pu_index.get(id2)
-                    if idx1 is not None and idx2 is not None:
-                        if selected[idx1] != selected[idx2]:
-                            total_boundary += bval
-
-        # Check targets
-        targets_met: dict[int, bool] = {}
-        for _, feat_row in problem.features.iterrows():
-            fid = int(feat_row["id"])
-            target = float(feat_row["target"])
-            feat_data = problem.pu_vs_features[
-                problem.pu_vs_features["species"] == fid
-            ]
-            total_amount = 0.0
-            for _, r in feat_data.iterrows():
-                pu_id = int(r["pu"])
-                idx = pu_index.get(pu_id)
-                if idx is not None and selected[idx]:
-                    total_amount += float(r["amount"])
-            targets_met[fid] = total_amount >= target
-
-        objective = total_cost + blm * total_boundary
-
-        return Solution(
-            selected=selected,
-            cost=total_cost,
-            boundary=total_boundary,
-            objective=objective,
-            targets_met=targets_met,
-            metadata={"solver": "Marxan (C++ binary)"},
-        )

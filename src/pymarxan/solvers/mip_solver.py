@@ -6,6 +6,7 @@ import pulp
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.utils import compute_boundary, check_targets
 
 
 class MIPSolver(Solver):
@@ -135,10 +136,10 @@ class MIPSolver(Solver):
         total_cost = float(np.sum(costs[selected]))
 
         # Compute actual boundary
-        total_boundary = self._compute_boundary(problem, selected, pu_index)
+        total_boundary = compute_boundary(problem, selected, pu_index)
 
         # Check which targets are met
-        targets_met = self._check_targets(problem, selected, pu_index)
+        targets_met = check_targets(problem, selected, pu_index)
 
         # Compute objective value
         objective = total_cost + blm * total_boundary
@@ -153,59 +154,3 @@ class MIPSolver(Solver):
         )
 
         return [sol] * config.num_solutions
-
-    @staticmethod
-    def _compute_boundary(
-        problem: ConservationProblem,
-        selected: np.ndarray,
-        pu_index: dict[int, int],
-    ) -> float:
-        """Compute the total boundary length for a given selection."""
-        if problem.boundary is None:
-            return 0.0
-
-        total = 0.0
-        for _, row in problem.boundary.iterrows():
-            id1 = int(row["id1"])
-            id2 = int(row["id2"])
-            bval = float(row["boundary"])
-
-            if id1 == id2:
-                # Diagonal/external: add if PU is selected
-                idx = pu_index.get(id1)
-                if idx is not None and selected[idx]:
-                    total += bval
-            else:
-                # Off-diagonal: add if exactly one is selected
-                idx1 = pu_index.get(id1)
-                idx2 = pu_index.get(id2)
-                if idx1 is not None and idx2 is not None:
-                    sel1 = selected[idx1]
-                    sel2 = selected[idx2]
-                    if sel1 != sel2:
-                        total += bval
-
-        return total
-
-    @staticmethod
-    def _check_targets(
-        problem: ConservationProblem,
-        selected: np.ndarray,
-        pu_index: dict[int, int],
-    ) -> dict[int, bool]:
-        """Check which feature targets are met by the selection."""
-        targets_met = {}
-        for _, feat_row in problem.features.iterrows():
-            fid = int(feat_row["id"])
-            target = float(feat_row["target"])
-            feat_data = problem.pu_vs_features[
-                problem.pu_vs_features["species"] == fid
-            ]
-            total = 0.0
-            for _, r in feat_data.iterrows():
-                pu_id = int(r["pu"])
-                idx = pu_index.get(pu_id)
-                if idx is not None and selected[idx]:
-                    total += float(r["amount"])
-            targets_met[fid] = total >= target
-        return targets_met
