@@ -31,6 +31,18 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.calibration.spf_explorer import (
+    spf_explorer_server,
+    spf_explorer_ui,
+)
+from pymarxan_shiny.modules.connectivity.metrics_viz import (
+    metrics_viz_server,
+    metrics_viz_ui,
+)
+from pymarxan_shiny.modules.results.target_met import (
+    target_met_server,
+    target_met_ui,
+)
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 app_ui = ui.page_navbar(
@@ -44,11 +56,19 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel(
         "Calibrate",
-        ui.layout_columns(blm_explorer_ui("blm_cal"), col_widths=12),
+        ui.layout_columns(
+            blm_explorer_ui("blm_cal"),
+            spf_explorer_ui("spf_cal"),
+            col_widths=[6, 6],
+        ),
     ),
     ui.nav_panel(
         "Sweep",
         ui.layout_columns(sweep_explorer_ui("sweep"), col_widths=12),
+    ),
+    ui.nav_panel(
+        "Connectivity",
+        ui.layout_columns(metrics_viz_ui("connectivity"), col_widths=12),
     ),
     ui.nav_panel(
         "Zones",
@@ -72,9 +92,10 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Results", ui.layout_columns(
         solution_map_ui("solution_map"),
         summary_table_ui("summary"),
+        target_met_ui("targets"),
         scenario_compare_ui("scenarios"),
         export_ui("export"),
-        col_widths=[6, 6, 12, 12],
+        col_widths=[6, 6, 12, 12, 12],
     )),
     title="pymarxan",
     id="navbar",
@@ -87,6 +108,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     })
     current_solution: reactive.Value[Solution | None] = reactive.value(None)
     zone_problem: reactive.Value = reactive.value(None)
+    connectivity_matrix: reactive.Value = reactive.value(None)
+    connectivity_pu_ids: reactive.Value = reactive.value(None)
 
     upload_server("upload", problem=problem)
     solver_picker_server("solver", solver_config=solver_config)
@@ -106,12 +129,22 @@ def server(input: Inputs, output: Outputs, session: Session):
             return MarxanBinarySolver()
         elif st == "zone_sa":
             return ZoneSASolver()
+        elif st == "greedy":
+            from pymarxan.solvers.heuristic import HeuristicSolver
+            return HeuristicSolver()
         return MIPSolver()
 
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,
     )
+    spf_explorer_server("spf_cal", problem=problem, solver=active_solver)
     sweep_explorer_server("sweep", problem=problem, solver=active_solver)
+    metrics_viz_server(
+        "connectivity",
+        connectivity_matrix=connectivity_matrix,
+        pu_ids=connectivity_pu_ids,
+    )
+    target_met_server("targets", problem=problem, solution=current_solution)
     scenario_compare_server(
         "scenarios", solution=current_solution, solver_config=solver_config,
     )
@@ -149,6 +182,9 @@ def server(input: Inputs, output: Outputs, session: Session):
             solver = SimulatedAnnealingSolver()
         elif solver_type == "zone_sa":
             solver = ZoneSASolver()
+        elif solver_type == "greedy":
+            from pymarxan.solvers.heuristic import HeuristicSolver
+            solver = HeuristicSolver()
         else:
             ui.notification_show(f"Unknown solver type: {solver_type}", type="error")
             return
