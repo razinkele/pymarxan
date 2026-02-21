@@ -1,0 +1,13 @@
+INPUTDIR input
+PUNAME pu.dat
+SPECNAME spec.dat
+PUVSPRNAME puvspr.dat
+BOUNDNAME bound.dat
+ZONESNAME zones.dat
+ZONECOSTNAME zonecost.dat
+ZONECONTRIBNAME zonecontrib.dat
+ZONETARGETNAME zonetarget.dat
+ZONEBOUNDCOSTNAME zoneboundcost.dat
+BLM 1.0
+NUMITNS 1000000
+NUMREPS 10
