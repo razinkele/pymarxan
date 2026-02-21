@@ -1,10 +1,9 @@
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from pymarxan.io.readers import load_project
 from pymarxan.analysis.irreplaceability import compute_irreplaceability
+from pymarxan.io.readers import load_project
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 

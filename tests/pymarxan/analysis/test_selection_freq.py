@@ -1,10 +1,10 @@
 import numpy as np
 
-from pymarxan.solvers.base import Solution
 from pymarxan.analysis.selection_freq import (
-    compute_selection_frequency,
     SelectionFrequency,
+    compute_selection_frequency,
 )
+from pymarxan.solvers.base import Solution
 
 
 def _make_solutions() -> list[Solution]:

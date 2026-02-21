@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pandas as pd
-
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
@@ -73,6 +71,7 @@ def calibrate_spf(
         for fid in unmet:
             spf_values[fid] *= multiplier
 
+    assert best_solution is not None, "No iterations were run"
     return SPFResult(
         final_spf=spf_values,
         solution=best_solution,

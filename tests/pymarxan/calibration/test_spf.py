@@ -1,7 +1,7 @@
 from pathlib import Path
 
+from pymarxan.calibration.spf import SPFResult, calibrate_spf
 from pymarxan.io.readers import load_project
-from pymarxan.calibration.spf import calibrate_spf, SPFResult
 from pymarxan.solvers.mip_solver import MIPSolver
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"

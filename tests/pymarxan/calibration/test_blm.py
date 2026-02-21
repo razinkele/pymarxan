@@ -1,7 +1,7 @@
 from pathlib import Path
 
+from pymarxan.calibration.blm import BLMResult, calibrate_blm
 from pymarxan.io.readers import load_project
-from pymarxan.calibration.blm import calibrate_blm, BLMResult
 from pymarxan.solvers.mip_solver import MIPSolver
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"

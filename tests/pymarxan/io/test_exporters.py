@@ -3,14 +3,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pymarxan.io.readers import load_project
+from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.io.exporters import (
+    export_selection_frequency_csv,
     export_solution_csv,
     export_summary_csv,
-    export_selection_frequency_csv,
 )
+from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import Solution
-from pymarxan.analysis.selection_freq import compute_selection_frequency
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 

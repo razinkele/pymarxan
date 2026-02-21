@@ -1,17 +1,15 @@
 """Integration tests for Phase 2 features."""
 from pathlib import Path
 
-import numpy as np
-
-from pymarxan.io.readers import load_project
-from pymarxan.io.exporters import export_solution_csv, export_summary_csv
-from pymarxan.solvers.base import SolverConfig
-from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
-from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.analysis.irreplaceability import compute_irreplaceability
+from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.calibration.blm import calibrate_blm
 from pymarxan.calibration.spf import calibrate_spf
-from pymarxan.analysis.selection_freq import compute_selection_frequency
-from pymarxan.analysis.irreplaceability import compute_irreplaceability
+from pymarxan.io.exporters import export_solution_csv, export_summary_csv
+from pymarxan.io.readers import load_project
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
 
 DATA_DIR = Path(__file__).parent / "data" / "simple"
 

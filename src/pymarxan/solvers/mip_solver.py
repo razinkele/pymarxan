@@ -6,7 +6,7 @@ import pulp
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import compute_boundary, check_targets
+from pymarxan.solvers.utils import check_targets, compute_boundary
 
 
 class MIPSolver(Solver):

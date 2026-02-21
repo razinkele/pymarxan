@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from pymarxan.io.readers import load_project
-from pymarxan.solvers.utils import compute_boundary, check_targets, build_solution
+from pymarxan.solvers.utils import build_solution, check_targets, compute_boundary
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 

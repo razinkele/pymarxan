@@ -36,7 +36,6 @@ class TestSimulatedAnnealingSolver:
         config = SolverConfig(num_solutions=5, seed=None)
         solutions = self.solver.solve(self.problem, config)
         # At least some solutions should differ
-        costs = [s.cost for s in solutions]
         # With 5 runs, allow some to be the same but not all identical
         # (stochastic, so just check structure)
         assert all(s.cost >= 0 for s in solutions)
