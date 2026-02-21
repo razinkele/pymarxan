@@ -7,7 +7,6 @@ from __future__ import annotations
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
 from pymarxan.analysis.scenarios import ScenarioSet
-from pymarxan.solvers.base import Solution
 
 
 @module.ui

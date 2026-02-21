@@ -19,13 +19,13 @@ from pymarxan_shiny.modules.calibration.sweep_explorer import (
     sweep_explorer_server,
     sweep_explorer_ui,
 )
+from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
+from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
+from pymarxan_shiny.modules.results.export import export_server, export_ui
 from pymarxan_shiny.modules.results.scenario_compare import (
     scenario_compare_server,
     scenario_compare_ui,
 )
-from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
-from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
-from pymarxan_shiny.modules.results.export import export_server, export_ui
 from pymarxan_shiny.modules.results.summary_table import summary_table_server, summary_table_ui
 from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,

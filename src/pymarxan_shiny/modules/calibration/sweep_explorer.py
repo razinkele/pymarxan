@@ -7,8 +7,6 @@ from __future__ import annotations
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
 from pymarxan.calibration.sweep import SweepConfig, SweepResult, run_sweep
-from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solver
 
 
 @module.ui

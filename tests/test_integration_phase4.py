@@ -1,14 +1,13 @@
 """Integration tests for Phase 4 features."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
-from pymarxan.calibration.sweep import SweepConfig, run_sweep
-from pymarxan.calibration.parallel import run_sweep_parallel
 from pymarxan.analysis.scenarios import ScenarioSet
+from pymarxan.calibration.parallel import run_sweep_parallel
+from pymarxan.calibration.sweep import SweepConfig, run_sweep
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution, SolverConfig
+from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.solvers.registry import get_default_registry
 
