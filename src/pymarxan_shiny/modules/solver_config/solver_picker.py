@@ -1,0 +1,65 @@
+"""Solver selection and configuration Shiny module."""
+from __future__ import annotations
+from shiny import module, reactive, render, ui
+from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.solvers.marxan_binary import MarxanBinarySolver
+
+@module.ui
+def solver_picker_ui():
+    binary_available = MarxanBinarySolver().available()
+    solver_choices = {"mip": "MIP Solver (exact, PuLP/CBC)"}
+    if binary_available:
+        solver_choices["binary"] = "Marxan C++ Binary"
+    return ui.card(
+        ui.card_header("Solver Configuration"),
+        ui.layout_sidebar(
+            ui.sidebar(
+                ui.input_radio_buttons("solver_type", "Solver", choices=solver_choices, selected="mip"),
+                ui.hr(),
+                ui.h5("Parameters"),
+                ui.input_numeric("blm", "Boundary Length Modifier (BLM)", value=1.0, min=0, step=0.1),
+                ui.input_numeric("num_solutions", "Number of solutions", value=10, min=1, max=1000, step=1),
+                ui.input_numeric("seed", "Random seed (optional)", value=42, min=-1),
+                ui.hr(),
+                ui.panel_conditional(
+                    "input.solver_type === 'binary'",
+                    ui.input_numeric("num_iterations", "SA Iterations", value=1000000, min=1000, step=100000),
+                    ui.input_numeric("num_temp", "Temperature steps", value=10000, min=100, step=1000),
+                ),
+                width=350,
+            ),
+            ui.output_text_verbatim("solver_info"),
+        ),
+    )
+
+@module.server
+def solver_picker_server(input, output, session, solver_config: reactive.Value):
+    @reactive.effect
+    @reactive.event(input.solver_type, input.blm, input.num_solutions, input.seed, ignore_init=False)
+    def _update_config():
+        config = {
+            "solver_type": input.solver_type(),
+            "blm": float(input.blm()),
+            "num_solutions": int(input.num_solutions()),
+            "seed": int(input.seed()) if input.seed() and input.seed() > 0 else None,
+        }
+        if input.solver_type() == "binary":
+            config["num_iterations"] = int(input.num_iterations() or 1000000)
+            config["num_temp"] = int(input.num_temp() or 10000)
+        solver_config.set(config)
+
+    @render.text
+    def solver_info():
+        st = input.solver_type()
+        if st == "mip":
+            return ("MIP Solver (PuLP/CBC)\n---------------------\n"
+                    "Uses Mixed Integer Linear Programming to find the\n"
+                    "mathematically optimal solution. Guaranteed to find\n"
+                    "the minimum-cost reserve network that meets all targets.\n"
+                    "Equivalent to prioritizr in R.")
+        elif st == "binary":
+            return ("Marxan C++ Binary\n-----------------\n"
+                    "Wraps the original Marxan executable using simulated\n"
+                    "annealing. Produces multiple solutions across repeat\n"
+                    "runs. Heuristic — not guaranteed optimal but well-tested.")
+        return ""
