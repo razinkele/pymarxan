@@ -37,6 +37,7 @@ class SolverConfig:
     num_solutions: int = 10
     seed: int | None = None
     verbose: bool = False
+    metadata: dict = field(default_factory=dict)
 
 
 class Solver(ABC):

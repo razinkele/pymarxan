@@ -53,6 +53,8 @@ class SimulatedAnnealingSolver(Solver):
             problem.parameters.get("PROP", self._initial_prop)
         )
 
+        progress = config.metadata.get("progress") if config.metadata else None
+
         # Build cache once — all DataFrame iteration happens here
         cache = ProblemCache.from_problem(problem)
         n_pu = cache.n_pu
@@ -86,8 +88,17 @@ class SimulatedAnnealingSolver(Solver):
         # Convert swappable to numpy array for fast indexing
         swappable_arr = np.array(swappable, dtype=np.intp)
 
+        if progress is not None:
+            progress.status = "running"
+            progress.total_runs = config.num_solutions
+            progress.total_iterations = num_iterations
+
         solutions: list[Solution] = []
         for run_idx in range(config.num_solutions):
+            if progress is not None:
+                progress.current_run = run_idx + 1
+                progress.iteration = 0
+
             # Determine seed for this run
             if config.seed is not None:
                 rng = np.random.default_rng(config.seed + run_idx)
@@ -188,6 +199,9 @@ class SimulatedAnnealingSolver(Solver):
                     history["objective"].append(current_obj)
                     history["best_objective"].append(best_obj)
                     history["temperature"].append(temp)
+                    if progress is not None:
+                        progress.iteration = iter_count
+                        progress.best_objective = best_obj
 
             # Record final state if not already sampled
             if history["iteration"][-1] != num_iterations:
@@ -208,5 +222,8 @@ class SimulatedAnnealingSolver(Solver):
                 },
             )
             solutions.append(sol)
+
+        if progress is not None:
+            progress.status = "done"
 
         return solutions

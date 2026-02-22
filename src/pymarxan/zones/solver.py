@@ -44,6 +44,8 @@ class ZoneSASolver(Solver):
         if config is None:
             config = SolverConfig()
 
+        progress = config.metadata.get("progress") if config.metadata else None
+
         blm = float(problem.parameters.get("BLM", 0.0))
         num_iterations = int(
             problem.parameters.get("NUMITNS", self._num_iterations)
@@ -76,8 +78,17 @@ class ZoneSASolver(Solver):
         )
         n_swappable = len(swappable)
 
+        if progress is not None:
+            progress.status = "running"
+            progress.total_runs = config.num_solutions
+            progress.total_iterations = num_iterations
+
         solutions = []
         for run_idx in range(config.num_solutions):
+            if progress is not None:
+                progress.current_run = run_idx + 1
+                progress.iteration = 0
+
             if config.seed is not None:
                 rng = np.random.default_rng(config.seed + run_idx)
             else:
@@ -127,6 +138,7 @@ class ZoneSASolver(Solver):
             best_assignment = assignment.copy()
             best_obj = current_obj
             step_count = 0
+            iter_count = 0
 
             for _ in range(num_iterations):
                 idx = int(swappable[rng.integers(n_swappable)])
@@ -157,6 +169,11 @@ class ZoneSASolver(Solver):
                     temp *= alpha
                     step_count = 0
 
+                iter_count += 1
+                if progress is not None and iter_count % 1000 == 0:
+                    progress.iteration = iter_count
+                    progress.best_objective = best_obj
+
             selected = best_assignment > 0
             cost = compute_zone_cost(problem, best_assignment)
             std_boundary = compute_standard_boundary(problem, best_assignment)
@@ -181,5 +198,8 @@ class ZoneSASolver(Solver):
                 },
             )
             solutions.append(sol)
+
+        if progress is not None:
+            progress.status = "done"
 
         return solutions
