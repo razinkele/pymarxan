@@ -10,6 +10,8 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.utils import build_solution
 
+HISTORY_SAMPLE_INTERVAL = 1000
+
 
 class SimulatedAnnealingSolver(Solver):
     """Simulated annealing solver implemented natively in Python/NumPy.
@@ -139,6 +141,15 @@ class SimulatedAnnealingSolver(Solver):
             best_obj = current_obj
             step_count = 0
 
+            # History recording for convergence plot
+            history: dict[str, list] = {
+                "iteration": [0],
+                "objective": [current_obj],
+                "best_objective": [current_obj],
+                "temperature": [temp],
+            }
+            iter_count = 0
+
             for _ in range(num_iterations):
                 # Pick random swappable PU
                 idx = int(swappable_arr[rng.integers(n_swappable)])
@@ -170,6 +181,21 @@ class SimulatedAnnealingSolver(Solver):
                     temp *= alpha
                     step_count = 0
 
+                # Sample history
+                iter_count += 1
+                if iter_count % HISTORY_SAMPLE_INTERVAL == 0:
+                    history["iteration"].append(iter_count)
+                    history["objective"].append(current_obj)
+                    history["best_objective"].append(best_obj)
+                    history["temperature"].append(temp)
+
+            # Record final state if not already sampled
+            if history["iteration"][-1] != num_iterations:
+                history["iteration"].append(num_iterations)
+                history["objective"].append(current_obj)
+                history["best_objective"].append(best_obj)
+                history["temperature"].append(temp)
+
             sol = build_solution(
                 problem, best_selected, blm,
                 metadata={
@@ -178,6 +204,7 @@ class SimulatedAnnealingSolver(Solver):
                     "initial_temp": round(initial_temp, 4),
                     "final_temp": round(temp, 6),
                     "best_objective": round(best_obj, 4),
+                    "history": history,
                 },
             )
             solutions.append(sol)
