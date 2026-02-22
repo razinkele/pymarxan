@@ -162,7 +162,7 @@ class HeuristicSolver(Solver):
 
         n = problem.n_planning_units
         pu_ids = problem.planning_units["id"].values
-        costs = problem.planning_units["cost"].values.astype(float)
+        costs = np.asarray(problem.planning_units["cost"].values, dtype=float)
         statuses = problem.planning_units["status"].values.astype(int)
 
         selected = np.zeros(n, dtype=bool)

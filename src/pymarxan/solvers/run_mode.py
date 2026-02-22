@@ -11,6 +11,8 @@ RUNMODE values (matching Marxan):
 """
 from __future__ import annotations
 
+from typing import Any
+
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
@@ -95,9 +97,9 @@ class RunModePipeline(Solver):
         problem: ConservationProblem,
         runmode: int,
         config: SolverConfig,
-        heuristic_cls: type,
-        sa_cls: type,
-        ii_cls: type,
+        heuristic_cls: type[Solver],
+        sa_cls: type[Solver],
+        ii_cls: Any,
     ) -> Solution:
         """Execute the appropriate pipeline for the given RUNMODE."""
 
@@ -112,12 +114,14 @@ class RunModePipeline(Solver):
         if runmode == 2:
             # SA then iterative improvement
             sa_sol = sa_cls().solve(problem, config)[0]
-            return ii_cls().improve(problem, sa_sol)
+            improved: Solution = ii_cls().improve(problem, sa_sol)
+            return improved
 
         if runmode == 3:
             # Heuristic then iterative improvement
             heur_sol = heuristic_cls().solve(problem, config)[0]
-            return ii_cls().improve(problem, heur_sol)
+            improved = ii_cls().improve(problem, heur_sol)
+            return improved
 
         if runmode == 4:
             # Heuristic then SA -- pick best (minimum objective)
@@ -135,9 +139,10 @@ class RunModePipeline(Solver):
                 if heur_sol.objective <= sa_sol.objective
                 else sa_sol
             )
-            return ii_cls().improve(problem, best)
+            improved = ii_cls().improve(problem, best)
+            return improved
 
         # runmode == 6
         # Iterative improvement only (from all-selected)
-        # Use the IterativeImprovementSolver's solve() which starts all-selected
-        return ii_cls().solve(problem, config)[0]
+        ii_sols: list[Solution] = ii_cls().solve(problem, config)
+        return ii_sols[0]
