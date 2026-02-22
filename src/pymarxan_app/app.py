@@ -132,6 +132,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif st == "greedy":
             from pymarxan.solvers.heuristic import HeuristicSolver
             return HeuristicSolver()
+        elif st == "iterative_improvement":
+            from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+            return IterativeImprovementSolver()
+        elif st == "pipeline":
+            from pymarxan.solvers.run_mode import RunModePipeline
+            return RunModePipeline()
         return MIPSolver()
 
     blm_explorer_server(
@@ -185,6 +191,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif solver_type == "greedy":
             from pymarxan.solvers.heuristic import HeuristicSolver
             solver = HeuristicSolver()
+        elif solver_type == "iterative_improvement":
+            from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+            solver = IterativeImprovementSolver()
+        elif solver_type == "pipeline":
+            from pymarxan.solvers.run_mode import RunModePipeline
+            solver = RunModePipeline()
         else:
             ui.notification_show(f"Unknown solver type: {solver_type}", type="error")
             return
