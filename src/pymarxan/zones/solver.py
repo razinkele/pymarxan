@@ -7,13 +7,13 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import (
     check_zone_targets,
     compute_standard_boundary,
     compute_zone_boundary,
     compute_zone_cost,
-    compute_zone_objective,
 )
 
 
@@ -52,10 +52,14 @@ class ZoneSASolver(Solver):
             problem.parameters.get("NUMTEMP", self._num_temp_steps)
         )
 
+        # Build precomputed cache once
+        cache = ZoneProblemCache.from_zone_problem(problem)
+
         pu_ids = problem.planning_units["id"].tolist()
         n_pu = len(pu_ids)
         zone_ids_list = sorted(problem.zone_ids)
-        zone_options = [0] + zone_ids_list
+        zone_options = np.array([0] + zone_ids_list, dtype=int)
+        n_zone_options = len(zone_options)
 
         locked: dict[int, int] = {}
         if "status" in problem.planning_units.columns:
@@ -67,7 +71,10 @@ class ZoneSASolver(Solver):
                 elif s == 3:
                     locked[idx] = 0
 
-        swappable = [i for i in range(n_pu) if i not in locked]
+        swappable = np.array(
+            [i for i in range(n_pu) if i not in locked], dtype=int
+        )
+        n_swappable = len(swappable)
 
         solutions = []
         for run_idx in range(config.num_solutions):
@@ -80,24 +87,27 @@ class ZoneSASolver(Solver):
             for idx, zid in locked.items():
                 assignment[idx] = zid
             for idx in swappable:
-                assignment[idx] = zone_options[rng.integers(len(zone_options))]
+                assignment[idx] = zone_options[rng.integers(n_zone_options)]
 
-            current_obj = compute_zone_objective(problem, assignment, blm)
+            # Compute held_per_zone and initial objective from cache
+            held_per_zone = cache.compute_held_per_zone(assignment)
+            current_obj = cache.compute_full_zone_objective(
+                assignment, held_per_zone, blm
+            )
 
-            # Estimate initial temperature
+            # Estimate initial temperature using delta approach
             deltas = []
             for _ in range(min(1000, num_iterations // 10)):
-                idx = swappable[rng.integers(len(swappable))]
-                old_zone = assignment[idx]
-                new_zone = zone_options[rng.integers(len(zone_options))]
+                idx = int(swappable[rng.integers(n_swappable)])
+                old_zone = int(assignment[idx])
+                new_zone = int(zone_options[rng.integers(n_zone_options)])
                 if new_zone == old_zone:
                     continue
-                assignment[idx] = new_zone
-                new_obj = compute_zone_objective(problem, assignment, blm)
-                delta = new_obj - current_obj
+                delta = cache.compute_delta_zone_objective(
+                    idx, old_zone, new_zone, assignment, held_per_zone, blm
+                )
                 if delta > 0:
                     deltas.append(delta)
-                assignment[idx] = old_zone
 
             if deltas:
                 avg_delta = sum(deltas) / len(deltas)
@@ -119,26 +129,28 @@ class ZoneSASolver(Solver):
             step_count = 0
 
             for _ in range(num_iterations):
-                idx = swappable[rng.integers(len(swappable))]
-                old_zone = assignment[idx]
-                new_zone = zone_options[rng.integers(len(zone_options))]
+                idx = int(swappable[rng.integers(n_swappable)])
+                old_zone = int(assignment[idx])
+                new_zone = int(zone_options[rng.integers(n_zone_options)])
                 if new_zone == old_zone:
                     continue
 
-                assignment[idx] = new_zone
-                new_obj = compute_zone_objective(problem, assignment, blm)
-                delta = new_obj - current_obj
+                delta = cache.compute_delta_zone_objective(
+                    idx, old_zone, new_zone, assignment, held_per_zone, blm
+                )
 
-                if delta <= 0:
-                    current_obj = new_obj
-                elif temp > 0 and rng.random() < math.exp(-delta / temp):
-                    current_obj = new_obj
-                else:
-                    assignment[idx] = old_zone
+                if delta <= 0 or (
+                    temp > 0 and rng.random() < math.exp(-delta / temp)
+                ):
+                    assignment[idx] = new_zone
+                    cache.update_held_per_zone(
+                        held_per_zone, idx, old_zone, new_zone
+                    )
+                    current_obj += delta
 
-                if current_obj < best_obj:
-                    best_assignment = assignment.copy()
-                    best_obj = current_obj
+                    if current_obj < best_obj:
+                        best_assignment = assignment.copy()
+                        best_obj = current_obj
 
                 step_count += 1
                 if step_count >= iters_per_step:
