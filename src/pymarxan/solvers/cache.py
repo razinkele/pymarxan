@@ -97,8 +97,8 @@ class ProblemCache:
         for i, pid in enumerate(pu_ids):
             pu_id_to_idx[int(pid)] = i
 
-        costs = pu_df["cost"].values.astype(np.float64)
-        statuses = pu_df["status"].values.astype(np.int32)
+        costs = np.asarray(pu_df["cost"].values, dtype=np.float64)
+        statuses = np.asarray(pu_df["status"].values, dtype=np.int32)
 
         # Feature arrays
         feat_ids = feat_df["id"].values
@@ -106,8 +106,8 @@ class ProblemCache:
         for j, fid in enumerate(feat_ids):
             feat_id_to_col[int(fid)] = j
 
-        feat_targets = feat_df["target"].values.astype(np.float64)
-        feat_spf = feat_df["spf"].values.astype(np.float64)
+        feat_targets = np.asarray(feat_df["target"].values, dtype=np.float64)
+        feat_spf = np.asarray(feat_df["spf"].values, dtype=np.float64)
 
         # PU-feature matrix (dense)
         pu_feat_matrix = np.zeros((n_pu, n_feat), dtype=np.float64)
@@ -115,10 +115,10 @@ class ProblemCache:
             pu_id = int(row["pu"])
             sp_id = int(row["species"])
             amount = float(row["amount"])
-            i = pu_id_to_idx.get(pu_id)
-            j = feat_id_to_col.get(sp_id)
-            if i is not None and j is not None:
-                pu_feat_matrix[i, j] = amount
+            ri = pu_id_to_idx.get(pu_id)
+            ci = feat_id_to_col.get(sp_id)
+            if ri is not None and ci is not None:
+                pu_feat_matrix[ri, ci] = amount
 
         # Boundary: adjacency list + self-boundary
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
@@ -183,7 +183,8 @@ class ProblemCache:
         np.ndarray
             (n_feat,) float64 — total amount held for each feature.
         """
-        return self.pu_feat_matrix[selected].sum(axis=0)
+        result: np.ndarray = self.pu_feat_matrix[selected].sum(axis=0)
+        return result
 
     def compute_full_objective(
         self,
@@ -317,7 +318,7 @@ class ProblemCache:
             )
             delta += new_ct_penalty - old_ct_penalty
 
-        return delta
+        return float(delta)
 
     # ------------------------------------------------------------------
     # Internal helpers

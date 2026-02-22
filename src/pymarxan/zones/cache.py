@@ -106,7 +106,7 @@ class ZoneProblemCache:
         for j, fid in enumerate(feat_ids):
             feat_id_to_col[int(fid)] = j
 
-        feat_spf = feat_df["spf"].values.astype(np.float64)
+        feat_spf = np.asarray(feat_df["spf"].values, dtype=np.float64)
 
         # --- Zone index mapping (col 0 = unassigned) ---
         zone_ids = sorted(problem.zone_ids)
@@ -120,10 +120,10 @@ class ZoneProblemCache:
             pu_id = int(row["pu"])
             sp_id = int(row["species"])
             amount = float(row["amount"])
-            i = pu_id_to_idx.get(pu_id)
-            j = feat_id_to_col.get(sp_id)
-            if i is not None and j is not None:
-                pu_feat_matrix[i, j] = amount
+            ri = pu_id_to_idx.get(pu_id)
+            ci = feat_id_to_col.get(sp_id)
+            if ri is not None and ci is not None:
+                pu_feat_matrix[ri, ci] = amount
 
         # --- Zone cost matrix: (n_pu, n_zones+1) ---
         zone_cost_matrix = np.zeros((n_pu, n_zones + 1), dtype=np.float64)
@@ -131,10 +131,10 @@ class ZoneProblemCache:
             pu_id = int(row["pu"])
             zid = int(row["zone"])
             cost = float(row["cost"])
-            i = pu_id_to_idx.get(pu_id)
+            ri = pu_id_to_idx.get(pu_id)
             zcol = zone_id_to_col.get(zid)
-            if i is not None and zcol is not None:
-                zone_cost_matrix[i, zcol] = cost
+            if ri is not None and zcol is not None:
+                zone_cost_matrix[ri, zcol] = cost
 
         # --- Contribution matrix: (n_zones+1, n_feat) ---
         # Default: 1.0 for all zone-feature pairs (standard Marxan behavior)
@@ -406,7 +406,7 @@ class ZoneProblemCache:
             idx, old_col, new_col, held_per_zone
         )
 
-        return cost_delta + blm * std_boundary_delta + zone_boundary_delta + penalty_delta
+        return float(cost_delta + blm * std_boundary_delta + zone_boundary_delta + penalty_delta)
 
     # ------------------------------------------------------------------
     # Internal helpers
