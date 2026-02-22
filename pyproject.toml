@@ -41,6 +41,10 @@ packages = ["src/pymarxan", "src/pymarxan_shiny", "src/pymarxan_app"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 python_files = ["test_*.py", "bench_*.py"]
+markers = [
+    "slow: marks tests as slow (SA-heavy, zone solver, run_mode pipelines)",
+    "integration: marks phase integration tests",
+]
 
 [tool.ruff]
 src = ["src"]
