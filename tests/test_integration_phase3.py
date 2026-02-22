@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from pymarxan.connectivity.features import add_connectivity_features
 from pymarxan.connectivity.metrics import (
@@ -23,6 +24,8 @@ SIMPLE_DIR = Path(__file__).parent / "data" / "simple"
 
 
 class TestZoneIntegration:
+    @pytest.mark.integration
+    @pytest.mark.slow
     def test_load_and_solve_zones(self):
         problem = load_zone_project(ZONE_DIR)
         problem.parameters["NUMITNS"] = 5_000
@@ -35,6 +38,7 @@ class TestZoneIntegration:
             assert sol.zone_assignment is not None
             assert len(sol.zone_assignment) == 4
 
+    @pytest.mark.integration
     def test_zone_objective_components(self):
         problem = load_zone_project(ZONE_DIR)
         assignment = np.array([1, 2, 1, 2])
@@ -45,6 +49,7 @@ class TestZoneIntegration:
 
 
 class TestConnectivityIntegration:
+    @pytest.mark.integration
     def test_metrics_to_features_with_solver(self):
         problem = load_project(SIMPLE_DIR)
         pu_ids = problem.planning_units["id"].tolist()

@@ -1,6 +1,8 @@
 """Integration test: full roundtrip from loading data to solving."""
 from pathlib import Path
 
+import pytest
+
 from pymarxan.io.readers import load_project
 from pymarxan.io.writers import save_project
 from pymarxan.solvers.base import SolverConfig
@@ -10,6 +12,7 @@ DATA_DIR = Path(__file__).parent / "data" / "simple"
 
 
 class TestFullRoundtrip:
+    @pytest.mark.integration
     def test_load_solve_check(self):
         """Load test data -> solve with MIP -> verify all targets met."""
         problem = load_project(DATA_DIR)
@@ -24,6 +27,7 @@ class TestFullRoundtrip:
         assert sol.n_selected > 0
         assert sol.n_selected < problem.n_planning_units
 
+    @pytest.mark.integration
     def test_load_save_load_solve(self, tmp_path):
         """Load -> save -> reload -> solve -> verify results match."""
         original = load_project(DATA_DIR)
@@ -36,6 +40,7 @@ class TestFullRoundtrip:
         assert sol_original.cost == sol_reloaded.cost
         assert sol_original.n_selected == sol_reloaded.n_selected
 
+    @pytest.mark.integration
     def test_blm_affects_solution(self):
         """Higher BLM should lead to different solutions than BLM=0."""
         problem_low = load_project(DATA_DIR)
@@ -49,6 +54,7 @@ class TestFullRoundtrip:
         # High BLM should have <= boundary (more compact) OR different objective
         assert sol_high.boundary <= sol_low.boundary or sol_high.objective != sol_low.objective
 
+    @pytest.mark.integration
     def test_locked_in_respected(self):
         """Locked-in PU must appear in solution."""
         problem = load_project(DATA_DIR)
@@ -59,6 +65,7 @@ class TestFullRoundtrip:
         idx = pu_ids.index(3)
         assert sol.selected[idx], "Locked-in PU 3 should be selected"
 
+    @pytest.mark.integration
     def test_locked_out_respected(self):
         """Locked-out PU must NOT appear in solution."""
         problem = load_project(DATA_DIR)

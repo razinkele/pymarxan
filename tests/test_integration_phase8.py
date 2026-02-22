@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
@@ -16,12 +18,15 @@ from pymarxan_shiny.modules.run_control.run_panel import run_panel_ui
 DATA_DIR = Path(__file__).parent / "data" / "simple"
 
 
+@pytest.mark.integration
 def test_app_imports():
     """Verify the app can import all new modules."""
     from pymarxan_app import app
     assert app.app is not None
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_sa_with_progress_and_history():
     """End-to-end: SA solver produces progress updates and history."""
     problem = load_project(DATA_DIR)
@@ -53,16 +58,19 @@ def test_sa_with_progress_and_history():
     assert len(histories) == 2
 
 
+@pytest.mark.integration
 def test_run_panel_ui_renders():
     ui_elem = run_panel_ui("test")
     assert ui_elem is not None
 
 
+@pytest.mark.integration
 def test_convergence_ui_renders():
     ui_elem = convergence_ui("test")
     assert ui_elem is not None
 
 
+@pytest.mark.integration
 def test_progress_lifecycle():
     """Test the full progress lifecycle: idle -> running -> done."""
     p = SolverProgress()

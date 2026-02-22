@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.readers import load_zone_project
@@ -41,18 +42,21 @@ class TestZoneSASolver:
         for z in sol.zone_assignment:
             assert int(z) in valid_zones
 
+    @pytest.mark.slow
     def test_cost_nonnegative(self):
         config = SolverConfig(num_solutions=3, seed=42)
         for sol in self.solver.solve(self.problem, config):
             assert sol.cost >= 0
             assert sol.objective >= 0
 
+    @pytest.mark.slow
     def test_seed_reproducibility(self):
         config = SolverConfig(num_solutions=1, seed=99)
         sol1 = self.solver.solve(self.problem, config)[0]
         sol2 = self.solver.solve(self.problem, config)[0]
         np.testing.assert_array_equal(sol1.zone_assignment, sol2.zone_assignment)
 
+    @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)
         problem.parameters["BLM"] = 0.0

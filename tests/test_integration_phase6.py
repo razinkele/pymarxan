@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
@@ -36,6 +37,7 @@ def _problem() -> ConservationProblem:
     )
 
 
+@pytest.mark.integration
 def test_all_heurtypes_produce_solutions():
     p = _problem()
     for ht in range(8):
@@ -45,6 +47,7 @@ def test_all_heurtypes_produce_solutions():
         assert sols[0].n_selected > 0
 
 
+@pytest.mark.integration
 def test_iterative_improvement_improves():
     p = _problem()
     heur = HeuristicSolver(heurtype=0)
@@ -54,6 +57,8 @@ def test_iterative_improvement_improves():
     assert improved.objective <= initial.objective + 1e-10
 
 
+@pytest.mark.integration
+@pytest.mark.slow
 def test_runmode_5_end_to_end():
     p = _problem()
     pipeline = RunModePipeline(runmode=5)
@@ -62,6 +67,7 @@ def test_runmode_5_end_to_end():
     assert sols[0].objective >= 0
 
 
+@pytest.mark.integration
 def test_output_roundtrip(tmp_path):
     from pymarxan.io.readers import read_mvbest, read_ssoln, read_sum
     from pymarxan.io.writers import write_mvbest, write_ssoln, write_sum
@@ -83,6 +89,7 @@ def test_output_roundtrip(tmp_path):
     assert len(sm) == 3
 
 
+@pytest.mark.integration
 def test_registry_includes_new_solvers():
     reg = get_default_registry()
     names = reg.list_solvers()
@@ -90,5 +97,6 @@ def test_registry_includes_new_solvers():
     assert "pipeline" in names
 
 
+@pytest.mark.integration
 def test_app_imports():
     import pymarxan_app.app  # noqa: F401

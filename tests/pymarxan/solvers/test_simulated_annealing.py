@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from pymarxan.io.readers import load_project
 from pymarxan.solvers.base import SolverConfig
@@ -40,6 +41,7 @@ class TestSimulatedAnnealingSolver:
         # (stochastic, so just check structure)
         assert all(s.cost >= 0 for s in solutions)
 
+    @pytest.mark.slow
     def test_all_targets_met_on_simple_problem(self):
         """On a small solvable problem, SA should find feasible solutions."""
         import copy
@@ -92,6 +94,7 @@ class TestSimulatedAnnealingSolver:
         for sol in solutions:
             assert not sol.selected[idx], "Locked-out PU must not be selected"
 
+    @pytest.mark.slow
     def test_seed_reproducibility(self):
         config = SolverConfig(num_solutions=1, seed=12345)
         sol1 = self.solver.solve(self.problem, config)[0]

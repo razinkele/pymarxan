@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from pymarxan.analysis.scenarios import ScenarioSet
 from pymarxan.calibration.parallel import run_sweep_parallel
@@ -32,6 +33,7 @@ def _small_problem() -> ConservationProblem:
     )
 
 
+@pytest.mark.integration
 def test_sweep_with_mip():
     """End-to-end: sweep BLM with MIP solver."""
     p = _small_problem()
@@ -41,6 +43,7 @@ def test_sweep_with_mip():
     assert all(s.all_targets_met for s in result.solutions)
 
 
+@pytest.mark.integration
 def test_parallel_sweep_with_mip():
     """End-to-end: parallel sweep with MIP solver."""
     p = _small_problem()
@@ -49,6 +52,7 @@ def test_parallel_sweep_with_mip():
     assert len(result.solutions) == 2
 
 
+@pytest.mark.integration
 def test_scenario_workflow():
     """End-to-end: save scenarios and compare."""
     p = _small_problem()
@@ -65,6 +69,7 @@ def test_scenario_workflow():
     assert "BLM" in df.columns
 
 
+@pytest.mark.integration
 def test_registry_create_and_solve():
     """Registry creates working solver instances."""
     reg = get_default_registry()
@@ -74,6 +79,7 @@ def test_registry_create_and_solve():
     assert len(sols) == 1
 
 
+@pytest.mark.integration
 def test_app_imports():
     """App module imports successfully with new modules."""
     import pymarxan_app.app  # noqa: F401

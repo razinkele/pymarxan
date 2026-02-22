@@ -1,6 +1,8 @@
 """Integration tests for Phase 2 features."""
 from pathlib import Path
 
+import pytest
+
 from pymarxan.analysis.irreplaceability import compute_irreplaceability
 from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.calibration.blm import calibrate_blm
@@ -15,6 +17,8 @@ DATA_DIR = Path(__file__).parent / "data" / "simple"
 
 
 class TestSAIntegration:
+    @pytest.mark.integration
+    @pytest.mark.slow
     def test_sa_finds_feasible_solution(self):
         problem = load_project(DATA_DIR)
         # Override the high iteration count from input.dat so the test
@@ -30,6 +34,8 @@ class TestSAIntegration:
         feasible = [s for s in solutions if s.all_targets_met]
         assert len(feasible) > 0
 
+    @pytest.mark.integration
+    @pytest.mark.slow
     def test_sa_selection_frequency(self):
         problem = load_project(DATA_DIR)
         problem.parameters["NUMITNS"] = 10_000
@@ -45,6 +51,7 @@ class TestSAIntegration:
 
 
 class TestCalibrationIntegration:
+    @pytest.mark.integration
     def test_blm_calibration_with_mip(self):
         problem = load_project(DATA_DIR)
         solver = MIPSolver()
@@ -55,6 +62,7 @@ class TestCalibrationIntegration:
         assert len(result.blm_values) == 3
         assert all(s.all_targets_met for s in result.solutions)
 
+    @pytest.mark.integration
     def test_spf_calibration_converges(self):
         problem = load_project(DATA_DIR)
         solver = MIPSolver()
@@ -63,6 +71,7 @@ class TestCalibrationIntegration:
 
 
 class TestExportIntegration:
+    @pytest.mark.integration
     def test_export_after_solve(self, tmp_path):
         problem = load_project(DATA_DIR)
         solver = MIPSolver()
@@ -74,6 +83,7 @@ class TestExportIntegration:
 
 
 class TestIrreplaceabilityIntegration:
+    @pytest.mark.integration
     def test_irreplaceability_scores(self):
         problem = load_project(DATA_DIR)
         scores = compute_irreplaceability(problem)

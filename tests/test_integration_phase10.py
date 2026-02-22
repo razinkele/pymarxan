@@ -1,13 +1,17 @@
 """Phase 10 integration tests: MIP params, connectivity input, all solver types."""
 from __future__ import annotations
 
+import pytest
 
+
+@pytest.mark.integration
 def test_app_imports_phase10():
     """Verify the app still imports cleanly after phase 10 changes."""
     from pymarxan_app import app
     assert app.app is not None
 
 
+@pytest.mark.integration
 def test_matrix_input_importable():
     """Connectivity matrix input module is importable."""
     from pymarxan_shiny.modules.connectivity.matrix_input import (
@@ -18,6 +22,7 @@ def test_matrix_input_importable():
     assert callable(matrix_input_server)
 
 
+@pytest.mark.integration
 def test_matrix_input_ui_renders():
     """Matrix input UI renders without error."""
     from pymarxan_shiny.modules.connectivity.matrix_input import matrix_input_ui
@@ -25,6 +30,7 @@ def test_matrix_input_ui_renders():
     assert elem is not None
 
 
+@pytest.mark.integration
 def test_solver_picker_all_seven_types():
     """Solver picker shows all 7 solver types."""
     from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui
@@ -36,6 +42,7 @@ def test_solver_picker_all_seven_types():
         assert solver_type in html, f"Missing solver type: {solver_type}"
 
 
+@pytest.mark.integration
 def test_solver_picker_mip_params():
     """Solver picker has MIP parameter controls."""
     from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui
@@ -44,6 +51,7 @@ def test_solver_picker_mip_params():
         assert param in html, f"Missing MIP param: {param}"
 
 
+@pytest.mark.integration
 def test_solver_picker_mode_selectors():
     """Solver picker has mode selectors for greedy, iterative, pipeline."""
     from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui
@@ -53,6 +61,7 @@ def test_solver_picker_mode_selectors():
     assert "runmode" in html
 
 
+@pytest.mark.integration
 def test_mip_solver_accepts_params():
     """MIP solver reads time_limit and gap from problem.parameters."""
     from unittest.mock import patch

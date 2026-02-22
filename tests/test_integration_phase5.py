@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from pymarxan.analysis.gap_analysis import compute_gap_analysis
 from pymarxan.calibration.sensitivity import SensitivityConfig, run_sensitivity
@@ -37,6 +38,7 @@ def _problem() -> ConservationProblem:
     )
 
 
+@pytest.mark.integration
 def test_heuristic_end_to_end():
     solver = HeuristicSolver()
     sols = solver.solve(_problem(), SolverConfig(num_solutions=1))
@@ -44,6 +46,7 @@ def test_heuristic_end_to_end():
     assert sols[0].all_targets_met
 
 
+@pytest.mark.integration
 def test_gap_analysis_end_to_end():
     result = compute_gap_analysis(_problem())
     df = result.to_dataframe()
@@ -51,12 +54,14 @@ def test_gap_analysis_end_to_end():
     assert "percent_protected" in df.columns
 
 
+@pytest.mark.integration
 def test_sensitivity_end_to_end():
     config = SensitivityConfig(multipliers=[0.8, 1.0, 1.2])
     result = run_sensitivity(_problem(), MIPSolver(), config)
     assert len(result.runs) == 6
 
 
+@pytest.mark.integration
 def test_registry_includes_greedy():
     reg = get_default_registry()
     assert "greedy" in reg.list_solvers()
@@ -65,5 +70,6 @@ def test_registry_includes_greedy():
     assert len(sols) == 1
 
 
+@pytest.mark.integration
 def test_app_imports():
     import pymarxan_app.app  # noqa: F401
