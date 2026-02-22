@@ -7,11 +7,16 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import build_solution, compute_objective
+from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.utils import build_solution
 
 
 class SimulatedAnnealingSolver(Solver):
-    """Simulated annealing solver implemented natively in Python/NumPy."""
+    """Simulated annealing solver implemented natively in Python/NumPy.
+
+    Uses ProblemCache for O(degree + features_per_pu) delta computation
+    on each iteration instead of recomputing the full objective.
+    """
 
     def __init__(
         self,
@@ -46,29 +51,26 @@ class SimulatedAnnealingSolver(Solver):
             problem.parameters.get("PROP", self._initial_prop)
         )
 
-        pu_ids = problem.planning_units["id"].tolist()
-        n_pu = len(pu_ids)
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+        # Build cache once — all DataFrame iteration happens here
+        cache = ProblemCache.from_problem(problem)
+        n_pu = cache.n_pu
 
-        # Identify locked PUs
-        locked_in = set()
-        locked_out = set()
-        if "status" in problem.planning_units.columns:
-            for _, row in problem.planning_units.iterrows():
-                s = int(row["status"])
-                idx = pu_index[int(row["id"])]
-                if s == 2:
-                    locked_in.add(idx)
-                elif s == 3:
-                    locked_out.add(idx)
+        # Identify locked and swappable PUs from cached statuses
+        locked_in: list[int] = []
+        locked_out: list[int] = []
+        swappable: list[int] = []
+        for i in range(n_pu):
+            s = int(cache.statuses[i])
+            if s == 2:
+                locked_in.append(i)
+            elif s == 3:
+                locked_out.append(i)
+            else:
+                swappable.append(i)
 
-        # Swappable indices (not locked)
-        swappable = [
-            i for i in range(n_pu)
-            if i not in locked_in and i not in locked_out
-        ]
+        n_swappable = len(swappable)
 
-        if not swappable:
+        if n_swappable == 0:
             # Everything is locked — just build the forced solution
             selected = np.zeros(n_pu, dtype=bool)
             for idx in locked_in:
@@ -79,7 +81,10 @@ class SimulatedAnnealingSolver(Solver):
             )
             return [sol] * config.num_solutions
 
-        solutions = []
+        # Convert swappable to numpy array for fast indexing
+        swappable_arr = np.array(swappable, dtype=np.intp)
+
+        solutions: list[Solution] = []
         for run_idx in range(config.num_solutions):
             # Determine seed for this run
             if config.seed is not None:
@@ -96,22 +101,21 @@ class SimulatedAnnealingSolver(Solver):
                 if rng.random() < initial_prop:
                     selected[idx] = True
 
-            current_obj = compute_objective(
-                problem, selected, pu_index, blm
-            )
+            # Initialize incremental state
+            held = cache.compute_held(selected)
+            total_cost = float(np.sum(cache.costs[selected]))
+            current_obj = cache.compute_full_objective(selected, held, blm)
 
-            # Estimate initial temperature via sampling
-            deltas = []
-            for _ in range(min(1000, num_iterations // 10)):
-                idx = swappable[rng.integers(len(swappable))]
-                selected[idx] = not selected[idx]
-                new_obj = compute_objective(
-                    problem, selected, pu_index, blm
+            # Estimate initial temperature via sampling (using delta approach)
+            deltas: list[float] = []
+            n_samples = min(1000, num_iterations // 10)
+            for _ in range(n_samples):
+                idx = int(swappable_arr[rng.integers(n_swappable)])
+                delta = cache.compute_delta_objective(
+                    idx, selected, held, total_cost, blm
                 )
-                delta = new_obj - current_obj
                 if delta > 0:
                     deltas.append(delta)
-                selected[idx] = not selected[idx]  # revert
 
             if deltas:
                 # Set T so ~50% of worsening moves are accepted
@@ -135,30 +139,30 @@ class SimulatedAnnealingSolver(Solver):
             best_obj = current_obj
             step_count = 0
 
-            for iteration in range(num_iterations):
-                # Pick random swappable PU and flip
-                idx = swappable[rng.integers(len(swappable))]
-                selected[idx] = not selected[idx]
+            for _ in range(num_iterations):
+                # Pick random swappable PU
+                idx = int(swappable_arr[rng.integers(n_swappable)])
 
-                new_obj = compute_objective(
-                    problem, selected, pu_index, blm
+                # Compute delta without flipping
+                delta = cache.compute_delta_objective(
+                    idx, selected, held, total_cost, blm
                 )
-                delta = new_obj - current_obj
 
                 # Acceptance criterion
-                if delta <= 0:
-                    current_obj = new_obj
-                elif temp > 0 and rng.random() < math.exp(
-                    -delta / temp
+                if delta <= 0 or (
+                    temp > 0 and rng.random() < math.exp(-delta / temp)
                 ):
-                    current_obj = new_obj
-                else:
-                    selected[idx] = not selected[idx]  # reject
+                    # Accept the move — update incremental state
+                    sign = -1.0 if selected[idx] else 1.0
+                    selected[idx] = not selected[idx]
+                    held += sign * cache.pu_feat_matrix[idx]
+                    total_cost += sign * cache.costs[idx]
+                    current_obj += delta
 
-                # Track best
-                if current_obj < best_obj:
-                    best_selected = selected.copy()
-                    best_obj = current_obj
+                    # Track best
+                    if current_obj < best_obj:
+                        best_selected = selected.copy()
+                        best_obj = current_obj
 
                 # Cool
                 step_count += 1
