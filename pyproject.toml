@@ -8,6 +8,16 @@ version = "0.1.0"
 description = "Modular Python toolkit for Marxan conservation planning"
 requires-python = ">=3.11"
 license = "MIT"
+authors = [{name = "pymarxan contributors"}]
+readme = "README.md"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Intended Audience :: Science/Research",
+]
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
@@ -31,11 +41,16 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.8",
     "pandas-stubs",
+    "pdoc>=14.0",
 ]
 all = ["pymarxan[shiny,dev]"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pymarxan", "src/pymarxan_shiny", "src/pymarxan_app"]
+
+[project.urls]
+Repository = "https://github.com/pymarxan/pymarxan"
+Documentation = "https://github.com/pymarxan/pymarxan"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
