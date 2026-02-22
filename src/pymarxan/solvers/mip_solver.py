@@ -123,7 +123,12 @@ class MIPSolver(Solver):
             model += amount_expr >= target, f"target_{fid}"
 
         # Solve
-        solver = pulp.PULP_CBC_CMD(msg=0)
+        time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
+        gap = float(problem.parameters.get("MIP_GAP", 0.0))
+        verbose = config.verbose
+        solver = pulp.PULP_CBC_CMD(
+            msg=int(verbose), timeLimit=time_limit, gapRel=gap,
+        )
         model.solve(solver)
 
         # Extract solution
