@@ -72,6 +72,20 @@ def solver_picker_ui():
                         value=10000, min=100, step=1000,
                     ),
                 ),
+                ui.panel_conditional(
+                    "input.solver_type === 'mip'",
+                    ui.input_numeric(
+                        "mip_time_limit", "Time Limit (seconds)",
+                        value=300, min=10, step=30,
+                    ),
+                    ui.input_numeric(
+                        "mip_gap", "Optimality Gap",
+                        value=0.0, min=0.0, max=1.0, step=0.01,
+                    ),
+                    ui.input_checkbox(
+                        "mip_verbose", "Verbose output", value=False,
+                    ),
+                ),
                 width=350,
             ),
             ui.output_text_verbatim("solver_info"),
@@ -85,6 +99,7 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         input.solver_type, input.blm, input.num_solutions,
         input.seed, input.sa_iterations, input.sa_temp_steps,
         input.zone_sa_iterations, input.zone_sa_temp_steps,
+        input.mip_time_limit, input.mip_gap, input.mip_verbose,
         ignore_init=False,
     )
     def _update_config():
@@ -103,6 +118,12 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         if input.solver_type() == "zone_sa":
             config["num_iterations"] = int(input.zone_sa_iterations() or 1000000)
             config["num_temp"] = int(input.zone_sa_temp_steps() or 10000)
+        if input.solver_type() == "mip":
+            config["mip_time_limit"] = int(input.mip_time_limit() or 300)
+            config["mip_gap"] = float(
+                input.mip_gap() if input.mip_gap() is not None else 0.0
+            )
+            config["mip_verbose"] = bool(input.mip_verbose())
         solver_config.set(config)
 
     @render.text
