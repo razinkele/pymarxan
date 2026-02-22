@@ -12,6 +12,9 @@ def solver_picker_ui():
     solver_choices = {"mip": "MIP Solver (exact, PuLP/CBC)"}
     solver_choices["sa"] = "Simulated Annealing (Python)"
     solver_choices["zone_sa"] = "Zone SA (Multi-Zone)"
+    solver_choices["greedy"] = "Greedy Heuristic"
+    solver_choices["iterative_improvement"] = "Iterative Improvement"
+    solver_choices["pipeline"] = "Run Mode Pipeline"
     if binary_available:
         solver_choices["binary"] = "Marxan C++ Binary"
     return ui.card(
@@ -86,6 +89,52 @@ def solver_picker_ui():
                         "mip_verbose", "Verbose output", value=False,
                     ),
                 ),
+                ui.panel_conditional(
+                    "input.solver_type === 'greedy'",
+                    ui.input_select(
+                        "heurtype", "Scoring Mode (HEURTYPE)",
+                        choices={
+                            "0": "0 - Richness",
+                            "1": "1 - Greedy (cheapest)",
+                            "2": "2 - Max Rarity (default)",
+                            "3": "3 - Best Rarity/Cost",
+                            "4": "4 - Average Rarity",
+                            "5": "5 - Sum Rarity",
+                            "6": "6 - Product Irreplaceability",
+                            "7": "7 - Summation Irreplaceability",
+                        },
+                        selected="2",
+                    ),
+                ),
+                ui.panel_conditional(
+                    "input.solver_type === 'iterative_improvement'",
+                    ui.input_select(
+                        "itimptype", "Improvement Mode (ITIMPTYPE)",
+                        choices={
+                            "0": "0 - No improvement",
+                            "1": "1 - Removal pass",
+                            "2": "2 - Two-step (remove + add)",
+                            "3": "3 - Swap",
+                        },
+                        selected="0",
+                    ),
+                ),
+                ui.panel_conditional(
+                    "input.solver_type === 'pipeline'",
+                    ui.input_select(
+                        "runmode", "Pipeline Mode (RUNMODE)",
+                        choices={
+                            "0": "0 - SA only (default)",
+                            "1": "1 - Heuristic only",
+                            "2": "2 - SA + iterative improvement",
+                            "3": "3 - Heuristic + iterative improvement",
+                            "4": "4 - Heuristic + SA (pick best)",
+                            "5": "5 - Heur + SA + improvement",
+                            "6": "6 - Iterative improvement only",
+                        },
+                        selected="0",
+                    ),
+                ),
                 width=350,
             ),
             ui.output_text_verbatim("solver_info"),
@@ -100,6 +149,7 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         input.seed, input.sa_iterations, input.sa_temp_steps,
         input.zone_sa_iterations, input.zone_sa_temp_steps,
         input.mip_time_limit, input.mip_gap, input.mip_verbose,
+        input.heurtype, input.itimptype, input.runmode,
         ignore_init=False,
     )
     def _update_config():
@@ -124,6 +174,12 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
                 input.mip_gap() if input.mip_gap() is not None else 0.0
             )
             config["mip_verbose"] = bool(input.mip_verbose())
+        if input.solver_type() == "greedy":
+            config["heurtype"] = int(input.heurtype() or 2)
+        if input.solver_type() == "iterative_improvement":
+            config["itimptype"] = int(input.itimptype() or 0)
+        if input.solver_type() == "pipeline":
+            config["runmode"] = int(input.runmode() or 0)
         solver_config.set(config)
 
     @render.text
@@ -150,4 +206,22 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
                     "Simulated annealing for multi-zone conservation planning.\n"
                     "Each planning unit is assigned to a zone (or left unassigned).\n"
                     "Requires zone project data (zones, zone costs, etc.).")
+        elif st == "greedy":
+            return (
+                "Greedy Heuristic\n----------------\n"
+                "Selects planning units one-by-one based on a scoring\n"
+                "strategy (HEURTYPE 0-7). Fast baseline for comparison."
+            )
+        elif st == "iterative_improvement":
+            return (
+                "Iterative Improvement\n---------------------\n"
+                "Refines an existing solution by trying removals,\n"
+                "additions, or swaps (ITIMPTYPE 0-3)."
+            )
+        elif st == "pipeline":
+            return (
+                "Run Mode Pipeline\n-----------------\n"
+                "Chains heuristic, SA, and iterative improvement\n"
+                "in sequences matching Marxan RUNMODE 0-6."
+            )
         return ""
