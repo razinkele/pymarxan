@@ -27,6 +27,10 @@ from pymarxan_shiny.modules.calibration.sweep_explorer import (
     sweep_explorer_server,
     sweep_explorer_ui,
 )
+from pymarxan_shiny.modules.connectivity.matrix_input import (
+    matrix_input_server,
+    matrix_input_ui,
+)
 from pymarxan_shiny.modules.connectivity.metrics_viz import (
     metrics_viz_server,
     metrics_viz_ui,
@@ -101,9 +105,10 @@ app_ui = ui.page_navbar(
     ui.nav_panel(
         "Connectivity",
         ui.layout_columns(
+            matrix_input_ui("matrix_upload"),
             metrics_viz_ui("connectivity"),
             network_view_ui("network"),
-            col_widths=[12, 12],
+            col_widths=[12, 12, 12],
         ),
     ),
     ui.nav_panel(
@@ -169,11 +174,45 @@ def server(input: Inputs, output: Outputs, session: Session):
             return RunModePipeline()
         return MIPSolver()
 
+    @reactive.effect
+    def _sync_solver_params():
+        """Sync UI solver config values into problem.parameters."""
+        p = problem()
+        cfg = solver_config()
+        if p is None:
+            return
+        st = cfg.get("solver_type", "mip")
+        if st == "mip":
+            p.parameters["MIP_TIME_LIMIT"] = str(
+                cfg.get("mip_time_limit", 300)
+            )
+            p.parameters["MIP_GAP"] = str(
+                cfg.get("mip_gap", 0.0)
+            )
+        elif st == "greedy":
+            p.parameters["HEURTYPE"] = str(
+                cfg.get("heurtype", 2)
+            )
+        elif st == "iterative_improvement":
+            p.parameters["ITIMPTYPE"] = str(
+                cfg.get("itimptype", 0)
+            )
+        elif st == "pipeline":
+            p.parameters["RUNMODE"] = str(
+                cfg.get("runmode", 0)
+            )
+
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,
     )
     spf_explorer_server("spf_cal", problem=problem, solver=active_solver)
     sweep_explorer_server("sweep", problem=problem, solver=active_solver)
+    matrix_input_server(
+        "matrix_upload",
+        problem=problem,
+        connectivity_matrix=connectivity_matrix,
+        connectivity_pu_ids=connectivity_pu_ids,
+    )
     metrics_viz_server(
         "connectivity",
         connectivity_matrix=connectivity_matrix,
