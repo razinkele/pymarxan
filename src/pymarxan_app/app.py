@@ -15,6 +15,10 @@ from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,
     blm_explorer_ui,
 )
+from pymarxan_shiny.modules.calibration.sensitivity_ui import (
+    sensitivity_server,
+    sensitivity_ui,
+)
 from pymarxan_shiny.modules.calibration.spf_explorer import (
     spf_explorer_server,
     spf_explorer_ui,
@@ -27,8 +31,28 @@ from pymarxan_shiny.modules.connectivity.metrics_viz import (
     metrics_viz_server,
     metrics_viz_ui,
 )
+from pymarxan_shiny.modules.data.feature_table import (
+    feature_table_server,
+    feature_table_ui,
+)
 from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
+from pymarxan_shiny.modules.mapping.comparison_map import (
+    comparison_map_server,
+    comparison_map_ui,
+)
+from pymarxan_shiny.modules.mapping.frequency_map import (
+    frequency_map_server,
+    frequency_map_ui,
+)
+from pymarxan_shiny.modules.mapping.network_view import (
+    network_view_server,
+    network_view_ui,
+)
 from pymarxan_shiny.modules.mapping.solution_map import solution_map_server, solution_map_ui
+from pymarxan_shiny.modules.mapping.spatial_grid import (
+    spatial_grid_server,
+    spatial_grid_ui,
+)
 from pymarxan_shiny.modules.results.convergence import convergence_server, convergence_ui
 from pymarxan_shiny.modules.results.export import export_server, export_ui
 from pymarxan_shiny.modules.results.scenario_compare import (
@@ -50,7 +74,12 @@ from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_co
 app_ui = ui.page_navbar(
     ui.nav_panel(
         "Data",
-        ui.layout_columns(upload_ui("upload"), col_widths=12),
+        ui.layout_columns(
+            upload_ui("upload"),
+            feature_table_ui("features"),
+            spatial_grid_ui("pu_grid"),
+            col_widths=[12, 12, 12],
+        ),
     ),
     ui.nav_panel(
         "Configure",
@@ -61,7 +90,8 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             blm_explorer_ui("blm_cal"),
             spf_explorer_ui("spf_cal"),
-            col_widths=[6, 6],
+            sensitivity_ui("sensitivity"),
+            col_widths=[6, 6, 12],
         ),
     ),
     ui.nav_panel(
@@ -70,7 +100,11 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel(
         "Connectivity",
-        ui.layout_columns(metrics_viz_ui("connectivity"), col_widths=12),
+        ui.layout_columns(
+            metrics_viz_ui("connectivity"),
+            network_view_ui("network"),
+            col_widths=[12, 12],
+        ),
     ),
     ui.nav_panel(
         "Zones",
@@ -83,11 +117,13 @@ app_ui = ui.page_navbar(
     ui.nav_panel("Results", ui.layout_columns(
         solution_map_ui("solution_map"),
         summary_table_ui("summary"),
+        frequency_map_ui("frequency"),
+        comparison_map_ui("comparison"),
         target_met_ui("targets"),
         convergence_ui("convergence"),
         scenario_compare_ui("scenarios"),
         export_ui("export"),
-        col_widths=[6, 6, 12, 12, 12, 12],
+        col_widths=[6, 6, 6, 6, 12, 12, 12, 12],
     )),
     title="pymarxan",
     id="navbar",
@@ -161,5 +197,24 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     # Convergence plot
     convergence_server("convergence", all_solutions=all_solutions)
+
+    # Phase 9 modules
+    feature_table_server("features", problem=problem)
+    spatial_grid_server("pu_grid", problem=problem)
+    frequency_map_server(
+        "frequency", problem=problem, all_solutions=all_solutions,
+    )
+    comparison_map_server(
+        "comparison", problem=problem, all_solutions=all_solutions,
+    )
+    sensitivity_server(
+        "sensitivity", problem=problem, solver=active_solver,
+    )
+    network_view_server(
+        "network",
+        problem=problem,
+        connectivity_matrix=connectivity_matrix,
+        connectivity_pu_ids=connectivity_pu_ids,
+    )
 
 app = App(app_ui, server)
