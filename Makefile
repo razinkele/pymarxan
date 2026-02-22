@@ -1,4 +1,4 @@
-.PHONY: test test-fast lint types check app docker
+.PHONY: test test-fast lint types check app docker docs
 
 test:  ## Run full test suite with coverage
 	pytest tests/ -v --cov --cov-report=term-missing
@@ -20,3 +20,6 @@ app:  ## Start the Shiny app
 
 docker:  ## Build and run Docker container
 	docker compose up --build
+
+docs:  ## Generate API documentation with pdoc
+	pdoc src/pymarxan src/pymarxan_shiny -o docs/api
