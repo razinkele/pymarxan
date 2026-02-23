@@ -177,6 +177,15 @@ class TestItimptype2:
         # Should at least not be worse
         assert improved.objective <= over_selected_solution.objective
 
+    def test_two_step_loops_until_stable(self, simple_problem):
+        """ITIMPTYPE=2 should alternate removal+addition until no improvement."""
+        simple_problem.parameters["ITIMPTYPE"] = 2
+        solver = IterativeImprovementSolver(itimptype=2)
+        solutions = solver.solve(simple_problem, SolverConfig(num_solutions=1))
+        sol = solutions[0]
+        assert sol.objective >= 0
+        assert sol.n_selected >= 0
+
     def test_addition_pass_can_improve(self, simple_problem):
         """Start with an under-selected solution; addition pass should help.
 

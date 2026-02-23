@@ -216,10 +216,15 @@ class IterativeImprovementSolver(Solver):
         blm: float,
         solution: Solution,
     ) -> Solution:
-        """Removal pass followed by addition pass."""
-        after_removal = self._removal_pass(problem, cache, blm, solution)
-        after_addition = self._addition_pass(problem, cache, blm, after_removal)
-        return after_addition
+        """Alternating removal then addition passes until convergence."""
+        current = solution
+        while True:
+            after_removal = self._removal_pass(problem, cache, blm, current)
+            after_addition = self._addition_pass(problem, cache, blm, after_removal)
+            if after_addition.objective >= current.objective:
+                break
+            current = after_addition
+        return current
 
     def _addition_pass(
         self,
