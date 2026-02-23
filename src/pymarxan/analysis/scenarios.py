@@ -6,11 +6,16 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from pymarxan.solvers.base import Solution
+
+if TYPE_CHECKING:
+    from pymarxan.models.problem import ConservationProblem
+    from pymarxan.solvers.base import Solver, SolverConfig
 
 
 @dataclass
@@ -111,11 +116,11 @@ class ScenarioSet:
     def run_with_overrides(
         self,
         name: str,
-        problem: ConservationProblem,  # noqa: F821
-        solver: Solver,  # noqa: F821
+        problem: ConservationProblem,
+        solver: Solver,
         overrides: dict[int, dict[str, float]],
         parameter_overrides: dict | None = None,
-        config: SolverConfig | None = None,  # noqa: F821
+        config: SolverConfig | None = None,
     ) -> Scenario:
         """Create scenario by solving with feature overrides applied.
 
