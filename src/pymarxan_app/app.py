@@ -73,6 +73,7 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 app_ui = ui.page_navbar(
@@ -80,9 +81,10 @@ app_ui = ui.page_navbar(
         "Data",
         ui.layout_columns(
             upload_ui("upload"),
+            grid_builder_ui("grid_gen"),
             feature_table_ui("features"),
             spatial_grid_ui("pu_grid"),
-            col_widths=[12, 12, 12],
+            col_widths=[12, 12, 12, 12],
         ),
     ),
     ui.nav_panel(
@@ -236,6 +238,9 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     # Convergence plot
     convergence_server("convergence", all_solutions=all_solutions)
+
+    # Grid builder
+    grid_builder_server("grid_gen", problem=problem)
 
     # Phase 9 modules
     feature_table_server("features", problem=problem)
