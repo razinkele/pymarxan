@@ -10,6 +10,8 @@ import pandas as pd
 def read_connectivity_edgelist(
     path: str | Path,
     pu_ids: list[int],
+    *,
+    symmetric: bool = True,
 ) -> np.ndarray:
     """Read an edge list CSV and convert to NxN matrix. Expected columns: id1, id2, value."""
     df = pd.read_csv(path)
@@ -21,6 +23,8 @@ def read_connectivity_edgelist(
         j = id_to_idx.get(int(row["id2"]))
         if i is not None and j is not None:
             matrix[i, j] = float(row["value"])
+            if symmetric:
+                matrix[j, i] = float(row["value"])
     return matrix
 
 
@@ -33,6 +37,8 @@ def read_connectivity_matrix(path: str | Path) -> np.ndarray:
 def connectivity_to_matrix(
     edgelist: pd.DataFrame,
     pu_ids: list[int],
+    *,
+    symmetric: bool = True,
 ) -> np.ndarray:
     """Convert an edge list DataFrame to NxN matrix."""
     n = len(pu_ids)
@@ -43,4 +49,6 @@ def connectivity_to_matrix(
         j = id_to_idx.get(int(row["id2"]))
         if i is not None and j is not None:
             matrix[i, j] = float(row["value"])
+            if symmetric:
+                matrix[j, i] = float(row["value"])
     return matrix
