@@ -192,26 +192,29 @@ def server(input: Inputs, output: Outputs, session: Session):
         cfg = solver_config()
         if p is None:
             return
+        import copy
+        updated = copy.deepcopy(p)
         st = cfg.get("solver_type", "mip")
         if st == "mip":
-            p.parameters["MIP_TIME_LIMIT"] = str(
+            updated.parameters["MIP_TIME_LIMIT"] = str(
                 cfg.get("mip_time_limit", 300)
             )
-            p.parameters["MIP_GAP"] = str(
+            updated.parameters["MIP_GAP"] = str(
                 cfg.get("mip_gap", 0.0)
             )
         elif st == "greedy":
-            p.parameters["HEURTYPE"] = str(
+            updated.parameters["HEURTYPE"] = str(
                 cfg.get("heurtype", 2)
             )
         elif st == "iterative_improvement":
-            p.parameters["ITIMPTYPE"] = str(
+            updated.parameters["ITIMPTYPE"] = str(
                 cfg.get("itimptype", 0)
             )
         elif st == "pipeline":
-            p.parameters["RUNMODE"] = str(
+            updated.parameters["RUNMODE"] = str(
                 cfg.get("runmode", 0)
             )
+        problem.set(updated)
 
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,
