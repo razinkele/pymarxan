@@ -1,6 +1,8 @@
 """Grid builder Shiny module — generate planning unit grids."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pandas as pd
 from shiny import module, reactive, render, ui
 
@@ -42,6 +44,7 @@ def grid_builder_ui():
             ),
             col_widths=[6, 6],
         ),
+        ui.input_checkbox("clip_gadm", "Clip to GADM boundary", value=False),
         ui.input_action_button("generate", "Generate Grid", class_="btn-primary"),
         map_output,
         ui.output_text_verbatim("grid_info"),
@@ -49,15 +52,24 @@ def grid_builder_ui():
 
 
 @module.server
-def grid_builder_server(input, output, session, problem: reactive.Value):
+def grid_builder_server(
+    input, output, session, problem: reactive.Value,
+    gadm_boundary: reactive.Value | Callable | None = None,
+):
     @reactive.effect
     @reactive.event(input.generate)
     def _generate():
         bounds = (input.minx(), input.miny(), input.maxx(), input.maxy())
+        clip_to = None
+        if gadm_boundary is not None and input.clip_gadm():
+            boundary = gadm_boundary()
+            if boundary is not None and len(boundary) > 0:
+                clip_to = boundary.union_all()
         gdf = generate_planning_grid(
             bounds=bounds,
             cell_size=input.cell_size(),
             grid_type=input.grid_type(),
+            clip_to=clip_to,
         )
         if len(gdf) == 0:
             ui.notification_show(

@@ -221,7 +221,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     convergence_server("convergence", all_solutions=all_solutions)
 
     # Spatial modules
-    grid_builder_server("grid_gen", problem=problem)
+    grid_builder_server("grid_gen", problem=problem, gadm_boundary=gadm_boundary)
     gadm_picker_server("gadm", boundary=gadm_boundary)
     wdpa_overlay_server("wdpa", problem=problem)
     import_wizard_server("import_wiz", problem=problem)
