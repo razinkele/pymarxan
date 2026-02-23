@@ -4,11 +4,12 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 from pymarxan.models.geometry import generate_grid
+from pymarxan.models.problem import has_geometry
 
 try:
     from shinywidgets import output_widget, render_widget
 
-    from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -45,11 +46,15 @@ def solution_map_server(
                 return None
 
             n_pu = len(p.planning_units)
-            grid = generate_grid(n_pu)
             colors = [
                 "#2ecc71" if s.selected[i] else "#95a5a6"
                 for i in range(n_pu)
             ]
+
+            if has_geometry(p):
+                return create_geo_map(p.planning_units, colors)
+
+            grid = generate_grid(n_pu)
             return create_grid_map(grid, colors)
 
         @render.text

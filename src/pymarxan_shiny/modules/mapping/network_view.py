@@ -5,12 +5,13 @@ from shiny import module, reactive, render, ui
 
 from pymarxan.connectivity.metrics import compute_in_degree
 from pymarxan.models.geometry import generate_grid
+from pymarxan.models.problem import has_geometry
 
 try:
     import ipyleaflet
     from shinywidgets import output_widget, render_widget
 
-    from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -106,7 +107,6 @@ def network_view_server(
             else:
                 metric_values = compute_in_degree(matrix)
 
-            grid = generate_grid(n_pu)
             max_val = float(metric_values.max()) if len(metric_values) > 0 else 0.0
             min_val = float(metric_values.min()) if len(metric_values) > 0 else 0.0
             rng = max_val - min_val if max_val > min_val else 1.0
@@ -117,10 +117,19 @@ def network_view_server(
                 for i in range(n_pu)
             ]
 
-            m = create_grid_map(grid, colors)
+            if has_geometry(p):
+                m = create_geo_map(p.planning_units, colors)
+                # Centroids from real geometry (lat, lon)
+                centroids = [
+                    (geom.centroid.y, geom.centroid.x)
+                    for geom in p.planning_units.geometry
+                ]
+            else:
+                grid = generate_grid(n_pu)
+                m = create_grid_map(grid, colors)
+                centroids = compute_centroids(grid)
 
             # Add polyline edges
-            centroids = compute_centroids(grid)
             n = min(matrix.shape[0], n_pu)
             for i in range(n):
                 for j in range(n):

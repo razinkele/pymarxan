@@ -4,11 +4,12 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 from pymarxan.models.geometry import generate_grid
+from pymarxan.models.problem import has_geometry
 
 try:
     from shinywidgets import output_widget, render_widget
 
-    from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -77,7 +78,6 @@ def spatial_grid_server(
 
             n_pu = len(p.planning_units)
             color_mode = input.color_by()
-            grid = generate_grid(n_pu)
 
             if color_mode == "status":
                 statuses = p.planning_units["status"].tolist()
@@ -89,6 +89,10 @@ def spatial_grid_server(
                     cost_color(c / max_c if max_c > 0 else 0.0) for c in costs
                 ]
 
+            if has_geometry(p):
+                return create_geo_map(p.planning_units, colors)
+
+            grid = generate_grid(n_pu)
             return create_grid_map(grid, colors)
 
         @render.text

@@ -4,11 +4,12 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 from pymarxan.models.geometry import generate_grid
+from pymarxan.models.problem import has_geometry
 
 try:
     from shinywidgets import output_widget, render_widget
 
-    from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -102,12 +103,16 @@ def comparison_map_server(
             sol_a = sols[idx_a]
             sol_b = sols[idx_b]
             n_pu = len(p.planning_units)
-            grid = generate_grid(n_pu)
 
             colors = [
                 comparison_color(sol_a.selected[i], sol_b.selected[i])
                 for i in range(n_pu)
             ]
+
+            if has_geometry(p):
+                return create_geo_map(p.planning_units, colors)
+
+            grid = generate_grid(n_pu)
             return create_grid_map(grid, colors)
 
         @render.text
