@@ -84,4 +84,7 @@ exclude_lines = [
     "if __name__",
     "pragma: no cover",
     "raise NotImplementedError",
+    "if _HAS_IPYLEAFLET",
+    "if not _HAS_IPYLEAFLET",
+    "except ImportError",
 ]

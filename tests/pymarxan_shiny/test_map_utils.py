@@ -1,9 +1,21 @@
 """Tests for shared map helper."""
 from __future__ import annotations
 
-from pymarxan.models.geometry import generate_grid
+import pytest
 
+from pymarxan.models.geometry import generate_grid
 from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+
+
+@pytest.fixture(autouse=True)
+def _allow_widget_outside_session():
+    """Temporarily remove shinywidgets session check so we can test map creation."""
+    from ipywidgets import Widget
+
+    original = Widget._widget_construction_callback
+    Widget._widget_construction_callback = None
+    yield
+    Widget._widget_construction_callback = original
 
 
 def test_create_grid_map_returns_map():
