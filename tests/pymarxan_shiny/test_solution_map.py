@@ -16,8 +16,7 @@ def test_solution_map_server_callable():
     assert callable(solution_map_server)
 
 
-def test_module_has_no_dead_map_code():
-    """Verify _pu_color helper was removed with the dead Map code."""
-    import pymarxan_shiny.modules.mapping.solution_map as mod
-
-    assert not hasattr(mod, "_pu_color")
+def test_solution_map_ui_has_output_widget():
+    """UI should contain an output_widget for the map."""
+    html = str(solution_map_ui("test_sol"))
+    assert "ipywidget" in html.lower()
