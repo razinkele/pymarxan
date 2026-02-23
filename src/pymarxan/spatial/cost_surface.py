@@ -68,8 +68,14 @@ def apply_cost_from_vector(
         elif aggregation == "max":
             new_costs[pu_id] = group[cost_column].max()
 
-    for pu_id, cost in new_costs.items():
-        result.loc[result["id"] == pu_id, "cost"] = cost
+    if new_costs:
+        id_to_idx = {pid: i for i, pid in enumerate(result["id"].values)}
+        cost_arr = result["cost"].values.copy()
+        for pu_id, cost in new_costs.items():
+            idx = id_to_idx.get(pu_id)
+            if idx is not None:
+                cost_arr[idx] = cost
+        result["cost"] = cost_arr
 
     return result
 
