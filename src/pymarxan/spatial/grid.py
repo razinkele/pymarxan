@@ -45,7 +45,11 @@ def generate_planning_grid(
 
     if not cells:
         return gpd.GeoDataFrame(
-            {"id": pd.array([], dtype="int64"), "cost": pd.array([], dtype="float64"), "status": pd.array([], dtype="int64")},
+            {
+                "id": pd.array([], dtype="int64"),
+                "cost": pd.array([], dtype="float64"),
+                "status": pd.array([], dtype="int64"),
+            },
             geometry=[],
             crs=crs,
         )

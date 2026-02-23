@@ -101,6 +101,6 @@ class TestCreateGeoMap:
         colors = ["#ff0000", "#00ff00"]
         m = create_geo_map(gdf, colors)
         geo_layers = [
-            l for l in m.layers if isinstance(l, ipyleaflet.GeoJSON)
+            layer for layer in m.layers if isinstance(layer, ipyleaflet.GeoJSON)
         ]
         assert len(geo_layers) == 2
