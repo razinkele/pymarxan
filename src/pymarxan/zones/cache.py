@@ -177,6 +177,7 @@ class ZoneProblemCache:
                 zcol2 = zone_id_to_col.get(z2)
                 if zcol1 is not None and zcol2 is not None:
                     zbc[(zcol1, zcol2)] = cost
+                    zbc[(zcol2, zcol1)] = cost
 
         # --- Boundary: adjacency list + self-boundary ---
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]

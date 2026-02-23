@@ -108,6 +108,13 @@ class TestConstruction:
         assert cache.zone_boundary_costs.get((col1, col2), 0.0) == 50.0
         assert cache.zone_boundary_costs.get((col2, col1), 0.0) == 50.0
 
+    def test_zone_boundary_costs_symmetric(self, cache):
+        """Zone boundary costs must be stored in both directions."""
+        for (z1, z2), cost in list(cache.zone_boundary_costs.items()):
+            reverse = cache.zone_boundary_costs.get((z2, z1), None)
+            assert reverse is not None, f"Missing reverse for ({z1},{z2})"
+            assert reverse == cost
+
     def test_pu_feat_matrix_shape(self, cache):
         assert cache.pu_feat_matrix.shape == (4, 2)
 
