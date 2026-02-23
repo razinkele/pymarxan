@@ -59,6 +59,12 @@ def grid_builder_server(
     @reactive.effect
     @reactive.event(input.generate)
     def _generate():
+        vals = [input.minx(), input.miny(), input.maxx(), input.maxy(), input.cell_size()]
+        if any(v is None for v in vals):
+            ui.notification_show(
+                "Please fill in all numeric fields.", type="warning"
+            )
+            return
         bounds = (input.minx(), input.miny(), input.maxx(), input.maxy())
         clip_to = None
         if gadm_boundary is not None and input.clip_gadm():
