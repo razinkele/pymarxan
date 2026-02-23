@@ -48,6 +48,7 @@ def calibrate_blm(
     boundaries = []
     objectives = []
     solutions_list = []
+    feasible_blm_values = []
 
     for blm in blm_values:
         modified = ConservationProblem(
@@ -58,14 +59,17 @@ def calibrate_blm(
             parameters={**problem.parameters, "BLM": blm},
         )
         sols = solver.solve(modified, config)
+        if not sols:
+            continue
         best = min(sols, key=lambda s: s.objective)
+        feasible_blm_values.append(blm)
         costs.append(best.cost)
         boundaries.append(best.boundary)
         objectives.append(best.objective)
         solutions_list.append(best)
 
     return BLMResult(
-        blm_values=blm_values,
+        blm_values=feasible_blm_values,
         costs=costs,
         boundaries=boundaries,
         objectives=objectives,

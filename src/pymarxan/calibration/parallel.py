@@ -35,6 +35,8 @@ def _solve_single(
         parameters={**problem_data["parameters"], **params},
     )
     sols = solver.solve(modified, solver_config)
+    if not sols:
+        raise ValueError("Solver returned no solutions (infeasible)")
     best = min(sols, key=lambda s: s.objective)
     return (index, best)
 

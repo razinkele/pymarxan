@@ -15,7 +15,7 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 class SPFResult:
     """Results of an SPF calibration run."""
     final_spf: dict[int, float]
-    solution: Solution
+    solution: Solution | None
     history: list[dict]
 
 
@@ -52,6 +52,8 @@ def calibrate_spf(
         )
 
         sols = solver.solve(modified, config)
+        if not sols:
+            continue
         best = min(sols, key=lambda s: s.objective)
         best_solution = best
 
@@ -71,7 +73,6 @@ def calibrate_spf(
         for fid in unmet:
             spf_values[fid] *= multiplier
 
-    assert best_solution is not None, "No iterations were run"
     return SPFResult(
         final_spf=spf_values,
         solution=best_solution,

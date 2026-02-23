@@ -82,6 +82,7 @@ def run_sweep(
     costs: list[float] = []
     boundaries: list[float] = []
     objectives: list[float] = []
+    feasible_param_dicts: list[dict] = []
 
     for params in param_dicts:
         modified = ConservationProblem(
@@ -92,14 +93,17 @@ def run_sweep(
             parameters={**problem.parameters, **params},
         )
         sols = solver.solve(modified, solver_config)
+        if not sols:
+            continue
         best = min(sols, key=lambda s: s.objective)
+        feasible_param_dicts.append(params)
         solutions.append(best)
         costs.append(best.cost)
         boundaries.append(best.boundary)
         objectives.append(best.objective)
 
     return SweepResult(
-        param_dicts=param_dicts,
+        param_dicts=feasible_param_dicts,
         solutions=solutions,
         costs=costs,
         boundaries=boundaries,

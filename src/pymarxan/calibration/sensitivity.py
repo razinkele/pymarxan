@@ -67,6 +67,8 @@ def run_sensitivity(
                 parameters=problem.parameters,
             )
             sols = solver.solve(modified, solver_config)
+            if not sols:
+                continue
             best = min(sols, key=lambda s: s.objective)
             runs.append({
                 "feature_id": fid,
