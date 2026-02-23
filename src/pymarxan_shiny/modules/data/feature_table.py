@@ -67,7 +67,11 @@ def feature_table_server(
             return
         df = feature_grid.data_view()
         updated = copy.deepcopy(p)
-        updated.features["target"] = df["target"].values
-        updated.features["spf"] = df["spf"].values
+        # Join on id to handle user-sorted/filtered views correctly
+        edits = df.set_index("id")[["target", "spf"]]
+        for fid in edits.index:
+            mask = updated.features["id"] == fid
+            updated.features.loc[mask, "target"] = float(edits.at[fid, "target"])
+            updated.features.loc[mask, "spf"] = float(edits.at[fid, "spf"])
         problem.set(updated)
         ui.notification_show("Feature targets saved.", type="message")
