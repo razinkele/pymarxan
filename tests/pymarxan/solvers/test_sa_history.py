@@ -60,6 +60,16 @@ class TestSAHistory:
             assert "history" in sol.metadata
             assert len(sol.metadata["history"]["iteration"]) > 0
 
+    def test_temperature_non_increasing(self):
+        """Temperature should decrease (or stay same) over the run."""
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(self.problem, config)
+        temps = solutions[0].metadata["history"]["temperature"]
+        for i in range(1, len(temps)):
+            assert temps[i] <= temps[i - 1] + 1e-9, (
+                f"Temperature increased at step {i}: {temps[i-1]} -> {temps[i]}"
+            )
+
     def test_existing_tests_still_pass(self):
         """Verify basic solve still works with history recording."""
         config = SolverConfig(num_solutions=2, seed=42)
