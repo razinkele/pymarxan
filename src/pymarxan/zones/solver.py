@@ -209,6 +209,17 @@ class ZoneSASolver(Solver):
             iter_count = 0
 
             for _ in range(num_iterations):
+                # Cool and count BEFORE any early-continue
+                step_count += 1
+                if step_count >= iters_per_step:
+                    temp *= alpha
+                    step_count = 0
+
+                iter_count += 1
+                if progress is not None and iter_count % 1000 == 0:
+                    progress.iteration = iter_count
+                    progress.best_objective = best_obj
+
                 idx = int(swappable[rng.integers(n_swappable)])
                 old_zone = int(assignment[idx])
                 new_zone = int(zone_options[rng.integers(n_zone_options)])
@@ -231,16 +242,6 @@ class ZoneSASolver(Solver):
                     if current_obj < best_obj:
                         best_assignment = assignment.copy()
                         best_obj = current_obj
-
-                step_count += 1
-                if step_count >= iters_per_step:
-                    temp *= alpha
-                    step_count = 0
-
-                iter_count += 1
-                if progress is not None and iter_count % 1000 == 0:
-                    progress.iteration = iter_count
-                    progress.best_objective = best_obj
 
             selected = best_assignment > 0
             cost = compute_zone_cost(problem, best_assignment)

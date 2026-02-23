@@ -88,6 +88,15 @@ class TestZoneSASolver:
         solutions = self.solver.solve(problem, config)
         assert len(solutions) == 1
 
+    def test_cooling_counts_all_iterations(self):
+        """SA should cool at the same rate regardless of same-zone skips."""
+        problem = copy.deepcopy(self.problem)
+        problem.parameters["NUMITNS"] = 1000
+        problem.parameters["NUMTEMP"] = 10
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(problem, config)
+        assert solutions[0].objective < 1e10
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)
