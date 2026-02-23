@@ -6,6 +6,7 @@ from pymarxan.zones.objective import (
     check_zone_targets,
     compute_zone_boundary,
     compute_zone_cost,
+    compute_zone_penalty,
     compute_zone_objective,
 )
 from pymarxan.zones.readers import load_zone_project
@@ -87,3 +88,26 @@ class TestComputeZoneObjective:
         obj = compute_zone_objective(self.problem, assignment, blm=0.0)
         # Cost=570, zone boundary=0 (all same zone), blm*boundary=0
         assert obj >= 570.0
+
+
+class TestComputeZonePenalty:
+    """Tests for compute_zone_penalty with unmet and met targets."""
+
+    def setup_method(self):
+        self.problem = load_zone_project(DATA_DIR)
+
+    def test_zone_penalty_with_unmet_targets(self):
+        """All PUs unassigned => all zone targets unmet => positive penalty."""
+        assignment = np.zeros(self.problem.planning_units.shape[0], dtype=int)
+        penalty = compute_zone_penalty(self.problem, assignment)
+        assert penalty > 0.0, "Unmet zone targets should produce positive penalty"
+
+    def test_zone_penalty_zero_when_all_met(self):
+        """Mixed assignment meeting all zone targets => penalty should be zero.
+
+        PU1,PU2 in zone 1 meets Z1 targets (F1: 18>=10, F2: 12>=8).
+        PU3,PU4 in zone 2 meets Z2 targets (F1: 5.5>=5, F2: 3.9>=3).
+        """
+        assignment = np.array([1, 1, 2, 2])
+        penalty = compute_zone_penalty(self.problem, assignment)
+        assert penalty == 0.0
