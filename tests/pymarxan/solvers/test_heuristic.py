@@ -170,6 +170,18 @@ def test_heuristic_includes_self_boundary():
     assert sol.boundary >= 10.0, f"Expected self-boundary >= 10, got {sol.boundary}"
 
 
+def test_heuristic_boundary_accuracy_with_blm(tiny_problem):
+    """Heuristic solution.boundary should match compute_boundary when BLM > 0."""
+    from pymarxan.solvers.utils import compute_boundary
+    tiny_problem.parameters["BLM"] = 1.0
+    solver = HeuristicSolver()
+    solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
+    sol = solutions[0]
+    pu_index = {int(pid): i for i, pid in enumerate(tiny_problem.planning_units["id"])}
+    expected_boundary = compute_boundary(tiny_problem, sol.selected, pu_index)
+    assert sol.boundary == pytest.approx(expected_boundary, abs=1e-6)
+
+
 def test_heuristic_solution_has_penalty(simple_problem):
     """Greedy solution should have a correctly computed penalty field."""
     # Lock out all PUs so targets can't be met — penalty must be > 0
