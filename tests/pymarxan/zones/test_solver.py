@@ -109,6 +109,14 @@ class TestZoneSASolver:
         assert len(solutions) == 1
         assert solutions[0].zone_assignment is not None
 
+    def test_rejects_non_zonal_problem(self):
+        """ZoneSASolver should raise TypeError for plain ConservationProblem."""
+        from pymarxan.io.readers import load_project
+        plain = load_project(Path(__file__).parent.parent.parent / "data" / "simple")
+        config = SolverConfig(num_solutions=1, seed=42)
+        with pytest.raises(TypeError, match="ZonalProblem"):
+            self.solver.solve(plain, config)
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)
