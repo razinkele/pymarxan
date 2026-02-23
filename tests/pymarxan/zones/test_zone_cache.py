@@ -370,3 +370,41 @@ class TestDeltaObjective:
                 cache, zone_problem, assignment.copy(), idx, new_zone, blm
             )
             assignment[idx] = new_zone
+
+
+class TestMissLevel:
+    """Verify MISSLEVEL is applied to zone target matrix."""
+
+    def test_misslevel_scales_targets(self, zone_problem):
+        """With MISSLEVEL=0.5, targets should be halved."""
+        import copy
+        problem = copy.deepcopy(zone_problem)
+        problem.parameters["MISSLEVEL"] = 0.5
+        cache = ZoneProblemCache.from_zone_problem(problem)
+
+        col1 = cache.zone_id_to_col[1]
+        f0 = cache.feat_id_to_col[1]
+        # Original target for zone1/feature1 is 10.0
+        assert cache.zone_target_matrix[col1, f0] == pytest.approx(5.0)
+
+    def test_misslevel_default_no_change(self, zone_problem):
+        """Default MISSLEVEL=1.0 should leave targets unchanged."""
+        cache = ZoneProblemCache.from_zone_problem(zone_problem)
+        col1 = cache.zone_id_to_col[1]
+        f0 = cache.feat_id_to_col[1]
+        assert cache.zone_target_matrix[col1, f0] == pytest.approx(10.0)
+
+    def test_penalty_uses_scaled_targets(self, zone_problem):
+        """Cache penalty should agree with objective.compute_zone_penalty."""
+        import copy
+        problem = copy.deepcopy(zone_problem)
+        problem.parameters["MISSLEVEL"] = 0.5
+        cache = ZoneProblemCache.from_zone_problem(problem)
+
+        assignment = np.array([1, 2, 1, 2], dtype=int)
+        held = cache.compute_held_per_zone(assignment)
+        cached_obj = cache.compute_full_zone_objective(assignment, held, 0.0)
+
+        from pymarxan.zones.objective import compute_zone_objective
+        ref_obj = compute_zone_objective(problem, assignment, 0.0)
+        assert cached_obj == pytest.approx(ref_obj, abs=1e-10)

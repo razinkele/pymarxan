@@ -166,6 +166,10 @@ class ZoneProblemCache:
                 if zcol is not None and fcol is not None:
                     zone_target_matrix[zcol, fcol] = target
 
+        # Apply MISSLEVEL to zone targets (match objective.py behavior)
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+        zone_target_matrix *= misslevel
+
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
         zbc: dict[tuple[int, int], float] = {}
         if problem.zone_boundary_costs is not None:
