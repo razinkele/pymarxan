@@ -111,11 +111,11 @@ class ScenarioSet:
     def run_with_overrides(
         self,
         name: str,
-        problem: "ConservationProblem",  # noqa: F821
-        solver: "Solver",  # noqa: F821
+        problem: ConservationProblem,  # noqa: F821
+        solver: Solver,  # noqa: F821
         overrides: dict[int, dict[str, float]],
         parameter_overrides: dict | None = None,
-        config: "SolverConfig | None" = None,  # noqa: F821
+        config: SolverConfig | None = None,  # noqa: F821
     ) -> Scenario:
         """Create scenario by solving with feature overrides applied.
 
