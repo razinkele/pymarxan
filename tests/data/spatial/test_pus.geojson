@@ -1,0 +1,8 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"pu_id": 1, "pu_cost": 5.0, "lock": 0}, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[1,0],[1,1],[0,1],[0,0]]]}},
+    {"type": "Feature", "properties": {"pu_id": 2, "pu_cost": 3.0, "lock": 2}, "geometry": {"type": "Polygon", "coordinates": [[[1,0],[2,0],[2,1],[1,1],[1,0]]]}},
+    {"type": "Feature", "properties": {"pu_id": 3, "pu_cost": 7.0, "lock": 0}, "geometry": {"type": "Polygon", "coordinates": [[[0,1],[1,1],[1,2],[0,2],[0,1]]]}}
+  ]
+}
