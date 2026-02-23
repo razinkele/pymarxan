@@ -73,8 +73,10 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.spatial.cost_upload import cost_upload_server, cost_upload_ui
 from pymarxan_shiny.modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
 from pymarxan_shiny.modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
+from pymarxan_shiny.modules.spatial.import_wizard import import_wizard_server, import_wizard_ui
 from pymarxan_shiny.modules.spatial.wdpa_overlay import wdpa_overlay_server, wdpa_overlay_ui
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
@@ -83,12 +85,14 @@ app_ui = ui.page_navbar(
         "Data",
         ui.layout_columns(
             upload_ui("upload"),
+            import_wizard_ui("import_wiz"),
             grid_builder_ui("grid_gen"),
             gadm_picker_ui("gadm"),
             wdpa_overlay_ui("wdpa"),
+            cost_upload_ui("cost"),
             feature_table_ui("features"),
             spatial_grid_ui("pu_grid"),
-            col_widths=[12, 12, 12, 12, 12, 12],
+            col_widths=[12, 12, 12, 12, 12, 12, 12, 12],
         ),
     ),
     ui.nav_panel(
@@ -248,6 +252,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     grid_builder_server("grid_gen", problem=problem)
     gadm_picker_server("gadm", boundary=gadm_boundary)
     wdpa_overlay_server("wdpa", problem=problem)
+    import_wizard_server("import_wiz", problem=problem)
+    cost_upload_server("cost", problem=problem)
 
     # Phase 9 modules
     feature_table_server("features", problem=problem)
