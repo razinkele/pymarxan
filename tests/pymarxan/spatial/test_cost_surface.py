@@ -84,6 +84,36 @@ class TestApplyCostFromVector:
         assert len(result) == 2
 
 
+class TestAggregationModes:
+    def test_sum_aggregation(self):
+        pus = gpd.GeoDataFrame(
+            {"id": [1], "cost": [1.0]},
+            geometry=[box(0, 0, 2, 2)],
+            crs="EPSG:4326",
+        )
+        cost_layer = gpd.GeoDataFrame(
+            {"cost_val": [10.0, 20.0]},
+            geometry=[box(0, 0, 1, 2), box(1, 0, 2, 2)],
+            crs="EPSG:4326",
+        )
+        result = apply_cost_from_vector(pus, cost_layer, "cost_val", aggregation="sum")
+        assert result.iloc[0]["cost"] == pytest.approx(30.0)
+
+    def test_max_aggregation(self):
+        pus = gpd.GeoDataFrame(
+            {"id": [1], "cost": [1.0]},
+            geometry=[box(0, 0, 2, 2)],
+            crs="EPSG:4326",
+        )
+        cost_layer = gpd.GeoDataFrame(
+            {"cost_val": [10.0, 20.0]},
+            geometry=[box(0, 0, 1, 2), box(1, 0, 2, 2)],
+            crs="EPSG:4326",
+        )
+        result = apply_cost_from_vector(pus, cost_layer, "cost_val", aggregation="max")
+        assert result.iloc[0]["cost"] == pytest.approx(20.0)
+
+
 class TestCombineCostLayers:
     def test_equal_weight_combination(self):
         pus = _make_pus()
