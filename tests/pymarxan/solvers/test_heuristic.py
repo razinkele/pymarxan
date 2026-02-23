@@ -148,6 +148,28 @@ def test_heuristic_status1_starts_selected():
     assert sol.selected[0], "PU with status=1 should be selected"
 
 
+def test_heuristic_includes_self_boundary():
+    """Heuristic solver must include self-boundary in cost calculation."""
+    import numpy as np
+
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
+    features = pd.DataFrame({"id": [1], "name": ["f1"], "target": [1.0], "spf": [1.0]})
+    puvspr = pd.DataFrame({"species": [1, 1, 1], "pu": [1, 2, 3], "amount": [1.0, 1.0, 1.0]})
+    boundary = pd.DataFrame({
+        "id1": [1, 2, 3, 1, 2],
+        "id2": [1, 2, 3, 2, 3],
+        "boundary": [10.0, 10.0, 10.0, 1.0, 1.0],
+    })
+    problem = ConservationProblem(
+        planning_units=pu, features=features, pu_vs_features=puvspr,
+        boundary=boundary, parameters={"BLM": 1.0},
+    )
+    solver = HeuristicSolver(heurtype=0)
+    sols = solver.solve(problem, SolverConfig(num_solutions=1, seed=42))
+    sol = sols[0]
+    assert sol.boundary >= 10.0, f"Expected self-boundary >= 10, got {sol.boundary}"
+
+
 def test_heuristic_solution_has_penalty(simple_problem):
     """Greedy solution should have a correctly computed penalty field."""
     # Lock out all PUs so targets can't be met — penalty must be > 0

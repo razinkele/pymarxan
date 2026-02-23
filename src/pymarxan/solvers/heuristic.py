@@ -255,11 +255,19 @@ class HeuristicSolver(Solver):
         boundary_val = 0.0
         if problem.boundary is not None and blm > 0:
             for _, row in problem.boundary.iterrows():
-                i = pu_id_to_idx.get(int(row["id1"]))
-                j = pu_id_to_idx.get(int(row["id2"]))
-                if i is not None and j is not None:
-                    if selected[i] != selected[j]:
-                        boundary_val += float(row["boundary"])
+                id1 = int(row["id1"])
+                id2 = int(row["id2"])
+                bval = float(row["boundary"])
+                if id1 == id2:
+                    idx = pu_id_to_idx.get(id1)
+                    if idx is not None and selected[idx]:
+                        boundary_val += bval
+                else:
+                    i = pu_id_to_idx.get(id1)
+                    j = pu_id_to_idx.get(id2)
+                    if i is not None and j is not None:
+                        if selected[i] != selected[j]:
+                            boundary_val += bval
 
         # Check targets
         targets_met: dict[int, bool] = {}
