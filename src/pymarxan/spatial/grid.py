@@ -36,6 +36,9 @@ def generate_planning_grid(
     gpd.GeoDataFrame
         Columns: id (int), cost (float), status (int), geometry (Polygon).
     """
+    if cell_size <= 0:
+        raise ValueError(f"cell_size must be positive, got {cell_size}")
+
     if grid_type == "square":
         cells = _generate_square_cells(bounds, cell_size)
     elif grid_type == "hexagonal":

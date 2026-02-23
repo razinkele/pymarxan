@@ -174,3 +174,10 @@ class TestInvalidInput:
                 cell_size=0.5,
                 grid_type="triangle",
             )
+
+    def test_generate_grid_rejects_non_positive_cell_size(self):
+        """cell_size <= 0 should raise ValueError, not infinite loop."""
+        with pytest.raises(ValueError, match="positive"):
+            generate_planning_grid((0, 0, 10, 10), cell_size=0)
+        with pytest.raises(ValueError, match="positive"):
+            generate_planning_grid((0, 0, 10, 10), cell_size=-1)
