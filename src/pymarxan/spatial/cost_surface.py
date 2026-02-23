@@ -33,7 +33,11 @@ def apply_cost_from_vector(
     result = planning_units.copy()
 
     # Reproject if needed
-    if cost_layer.crs != planning_units.crs and cost_layer.crs is not None:
+    if (
+        cost_layer.crs is not None
+        and planning_units.crs is not None
+        and cost_layer.crs != planning_units.crs
+    ):
         cost_layer = cost_layer.to_crs(planning_units.crs)
 
     overlay = gpd.overlay(

@@ -67,6 +67,23 @@ class TestApplyCostFromVector:
         assert all(pus["cost"] == 1.0)
 
 
+    def test_apply_cost_handles_no_crs_on_pus(self):
+        """Should not crash when planning_units has no CRS."""
+        from shapely.geometry import box as shapely_box
+
+        pus = gpd.GeoDataFrame(
+            {"id": [1, 2], "cost": [1.0, 1.0]},
+            geometry=[shapely_box(0, 0, 1, 1), shapely_box(1, 0, 2, 1)],
+        )  # No CRS
+        cost_layer = gpd.GeoDataFrame(
+            {"cost_val": [10.0]},
+            geometry=[shapely_box(0, 0, 2, 1)],
+            crs="EPSG:4326",
+        )
+        result = apply_cost_from_vector(pus, cost_layer, "cost_val")
+        assert len(result) == 2
+
+
 class TestCombineCostLayers:
     def test_equal_weight_combination(self):
         pus = _make_pus()
