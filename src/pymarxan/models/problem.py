@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import geopandas as gpd
@@ -170,6 +171,14 @@ class ConservationProblem:
 
         return errors
 
+    def clone(self) -> ConservationProblem:
+        """Deep copy all DataFrames, parameters, and geometry.
+
+        Returns an independent copy that can be modified without
+        affecting the original.
+        """
+        return copy.deepcopy(self)
+
     def summary(self) -> str:
         """Return a human-readable multi-line summary of the problem.
 
@@ -201,3 +210,50 @@ def has_geometry(problem: ConservationProblem) -> bool:
         and "geometry" in problem.planning_units.columns
         and not problem.planning_units.geometry.is_empty.all()
     )
+
+
+_OVERRIDABLE_FIELDS = {"target", "spf", "prop"}
+
+
+def apply_feature_overrides(
+    problem: ConservationProblem,
+    overrides: dict[int, dict[str, float]],
+) -> ConservationProblem:
+    """Return a copy of problem with feature targets/SPF overridden.
+
+    Parameters
+    ----------
+    problem : ConservationProblem
+        The original problem (not mutated).
+    overrides : dict
+        Maps feature_id -> {field_name: new_value}.
+        Valid fields: ``"target"``, ``"spf"``, ``"prop"``.
+
+    Returns
+    -------
+    ConservationProblem
+        Deep copy with overridden feature values.
+
+    Raises
+    ------
+    KeyError
+        If a feature ID is not found.
+    ValueError
+        If an invalid field name is used.
+    """
+    result = copy.deepcopy(problem)
+
+    feature_ids = set(result.features["id"])
+    for fid, fields in overrides.items():
+        if fid not in feature_ids:
+            raise KeyError(f"Feature ID {fid} not found in problem")
+        for field_name, value in fields.items():
+            if field_name not in _OVERRIDABLE_FIELDS:
+                raise ValueError(
+                    f"Invalid field '{field_name}'. "
+                    f"Must be one of: {sorted(_OVERRIDABLE_FIELDS)}"
+                )
+            mask = result.features["id"] == fid
+            result.features.loc[mask, field_name] = value
+
+    return result
