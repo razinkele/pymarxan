@@ -118,7 +118,12 @@ def fetch_gadm(
     resp.raise_for_status()
 
     meta = resp.json()
-    geojson_url = meta["gjDownloadURL"]
+    geojson_url = meta.get("gjDownloadURL")
+    if geojson_url is None:
+        raise ValueError(
+            f"geoBoundaries API response missing 'gjDownloadURL' key. "
+            f"Response keys: {list(meta.keys())}"
+        )
 
     geojson_resp = requests.get(geojson_url, timeout=60)
     geojson_resp.raise_for_status()
