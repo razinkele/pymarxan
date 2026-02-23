@@ -18,20 +18,25 @@ def summary_table_server(
         s = solution()
         if p is None or s is None:
             return ui.p("No solution available. Run a solver first.")
-        pu_ids = p.planning_units["id"].tolist()
-        id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
+        pu_ids = p.planning_units["id"].values
+        id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
+
+        # Vectorized: map PU IDs to indices, filter selected, groupby feature
+        pvf = p.pu_vs_features.copy()
+        pvf["_idx"] = pvf["pu"].map(id_to_idx)
+        pvf = pvf.dropna(subset=["_idx"])
+        pvf["_idx"] = pvf["_idx"].astype(int)
+        pvf["_selected"] = pvf["_idx"].map(lambda i: bool(s.selected[i]))
+        achieved_by_feat = (
+            pvf[pvf["_selected"]].groupby("species")["amount"].sum()
+        )
+
         rows = []
         for _, frow in p.features.iterrows():
             fid = int(frow["id"])
             fname = frow.get("name", f"Feature {fid}")
             target = float(frow.get("target", 0.0))
-            mask = p.pu_vs_features["species"] == fid
-            achieved = sum(
-                float(arow["amount"])
-                for _, arow in p.pu_vs_features[mask].iterrows()
-                if int(arow["pu"]) in id_to_idx
-                and s.selected[id_to_idx[int(arow["pu"])]]
-            )
+            achieved = float(achieved_by_feat.get(fid, 0.0))
             met = achieved >= target
             pct = (achieved / target * 100) if target > 0 else 100.0
             rows.append({
