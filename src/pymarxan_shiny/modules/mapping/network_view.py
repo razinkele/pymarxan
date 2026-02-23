@@ -85,7 +85,6 @@ def network_view_server(
     session,
     problem: reactive.Value,
     connectivity_matrix: reactive.Value,
-    connectivity_pu_ids: reactive.Value,
 ):
     if _HAS_IPYLEAFLET:
 

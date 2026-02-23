@@ -31,11 +31,7 @@ class MIPSolver(Solver):
         return False
 
     def available(self) -> bool:
-        try:
-            import importlib.util
-            return importlib.util.find_spec("pulp") is not None
-        except (ImportError, ModuleNotFoundError):
-            return False
+        return True  # pulp is a core dependency
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
