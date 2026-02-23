@@ -37,6 +37,8 @@ def export_summary_csv(
     pu_ids = problem.planning_units["id"].tolist()
     id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
 
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+
     rows = []
     for _, frow in problem.features.iterrows():
         fid = int(frow["id"])
@@ -53,7 +55,7 @@ def export_summary_csv(
             "feature_name": fname,
             "target": target,
             "achieved": achieved,
-            "met": achieved >= target,
+            "met": achieved >= target * misslevel,
         })
     pd.DataFrame(rows).to_csv(path, index=False)
 
