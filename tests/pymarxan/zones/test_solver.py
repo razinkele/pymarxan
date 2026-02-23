@@ -69,6 +69,25 @@ class TestZoneSASolver:
         if not all(zone_targets_met.values()):
             assert sol.penalty > 0.0
 
+    def test_all_locked_in_returns_solution(self):
+        """Zone SA should handle all PUs locked-in without crashing."""
+        problem = copy.deepcopy(self.problem)
+        problem.planning_units["status"] = 2  # All locked-in
+        problem.parameters["NUMITNS"] = 100
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].cost >= 0
+
+    def test_all_locked_out_returns_solution(self):
+        """Zone SA should handle all PUs locked-out without crashing."""
+        problem = copy.deepcopy(self.problem)
+        problem.planning_units["status"] = 3  # All locked-out
+        problem.parameters["NUMITNS"] = 100
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(problem, config)
+        assert len(solutions) == 1
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)

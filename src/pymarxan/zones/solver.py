@@ -80,6 +80,72 @@ class ZoneSASolver(Solver):
         )
         n_swappable = len(swappable)
 
+        if n_swappable == 0:
+            # All PUs locked — build forced-assignment solution
+            blm_val = float(problem.parameters.get("BLM", 0.0))
+            assignment = np.zeros(n_pu, dtype=int)
+            for idx, zid in locked.items():
+                assignment[idx] = zid
+            solutions = []
+            for run_idx in range(config.num_solutions):
+                selected = assignment > 0
+                cost = compute_zone_cost(problem, assignment)
+                std_boundary = compute_standard_boundary(problem, assignment)
+                zone_boundary = compute_zone_boundary(problem, assignment)
+                zone_targets = check_zone_targets(problem, assignment)
+                zone_penalty = compute_zone_penalty(problem, assignment)
+                zone_shortfall = 0.0
+                if problem.zone_targets is not None:
+                    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+                    pu_index = {
+                        int(pid): i
+                        for i, pid in enumerate(
+                            problem.planning_units["id"].tolist()
+                        )
+                    }
+                    for _, trow in problem.zone_targets.iterrows():
+                        zid = int(trow["zone"])
+                        fid = int(trow["feature"])
+                        target = float(trow["target"])
+                        contribution = problem.get_contribution(fid, zid)
+                        feat_data = problem.pu_vs_features[
+                            problem.pu_vs_features["species"] == fid
+                        ]
+                        achieved = 0.0
+                        for _, r in feat_data.iterrows():
+                            pid = int(r["pu"])
+                            idx_val = pu_index.get(pid)
+                            if (
+                                idx_val is not None
+                                and int(assignment[idx_val]) == zid
+                            ):
+                                achieved += float(r["amount"]) * contribution
+                        zone_shortfall += max(0.0, target * misslevel - achieved)
+                obj = cost + blm_val * std_boundary + zone_penalty
+                sol = Solution(
+                    selected=selected,
+                    cost=cost,
+                    boundary=std_boundary,
+                    objective=obj,
+                    targets_met={},
+                    penalty=zone_penalty,
+                    shortfall=zone_shortfall,
+                    zone_assignment=assignment.copy(),
+                    metadata={
+                        "solver": self.name(),
+                        "run": run_idx + 1,
+                        "zone_boundary_cost": round(zone_boundary, 4),
+                        "zone_targets_met": {
+                            f"z{z}_f{f}": v
+                            for (z, f), v in zone_targets.items()
+                        },
+                    },
+                )
+                solutions.append(sol)
+            if progress is not None:
+                progress.status = "done"
+            return solutions
+
         if progress is not None:
             progress.status = "running"
             progress.total_runs = config.num_solutions
