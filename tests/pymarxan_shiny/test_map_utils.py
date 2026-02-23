@@ -1,10 +1,12 @@
 """Tests for shared map helper."""
 from __future__ import annotations
 
+import geopandas as gpd
 import pytest
+from shapely.geometry import box
 
 from pymarxan.models.geometry import generate_grid
-from pymarxan_shiny.modules.mapping.map_utils import create_grid_map
+from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
 
 @pytest.fixture(autouse=True)
@@ -71,3 +73,34 @@ def test_create_grid_map_empty_grid():
         if isinstance(layer, ipyleaflet.Rectangle)
     ]
     assert len(rectangles) == 0
+
+
+class TestCreateGeoMap:
+    """Tests for create_geo_map — renders GeoDataFrame polygons."""
+
+    def test_creates_map_from_geodataframe(self):
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 2, 3]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1), box(0, 1, 1, 2)],
+            crs="EPSG:4326",
+        )
+        colors = ["#ff0000", "#00ff00", "#0000ff"]
+        m = create_geo_map(gdf, colors)
+        import ipyleaflet
+
+        assert isinstance(m, ipyleaflet.Map)
+
+    def test_map_has_correct_number_of_geojson_layers(self):
+        import ipyleaflet
+
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+            crs="EPSG:4326",
+        )
+        colors = ["#ff0000", "#00ff00"]
+        m = create_geo_map(gdf, colors)
+        geo_layers = [
+            l for l in m.layers if isinstance(l, ipyleaflet.GeoJSON)
+        ]
+        assert len(geo_layers) == 2

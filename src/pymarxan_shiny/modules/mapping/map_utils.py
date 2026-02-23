@@ -1,6 +1,11 @@
 """Shared map helper for building ipyleaflet maps from grid data."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+
 try:
     import ipyleaflet
 
@@ -61,5 +66,53 @@ def create_grid_map(
             weight=1,
         )
         m.add(rect)
+
+    return m
+
+
+def create_geo_map(
+    gdf: gpd.GeoDataFrame,
+    colors: list[str],
+    center: tuple[float, float] | None = None,
+    zoom: int = 10,
+) -> ipyleaflet.Map:
+    """Create ipyleaflet Map with GeoJSON layers from a GeoDataFrame.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        Must have a geometry column with Polygon geometries.
+    colors : list[str]
+        One hex color string per row in gdf.
+    center : optional (lat, lon)
+        Map center. Auto-computed from gdf bounds if not provided.
+    zoom : int
+        Initial zoom level.
+    """
+    if not _HAS_IPYLEAFLET:
+        raise ImportError("ipyleaflet is required for create_geo_map")
+
+    if center is None:
+        b = gdf.total_bounds  # [minx, miny, maxx, maxy]
+        center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)
+
+    m = ipyleaflet.Map(center=center, zoom=zoom)
+
+    for idx, (_, row) in enumerate(gdf.iterrows()):
+        color = colors[idx] if idx < len(colors) else "#999999"
+        geo_json = ipyleaflet.GeoJSON(
+            data={
+                "type": "Feature",
+                "geometry": row.geometry.__geo_interface__,
+                "properties": {},
+            },
+            style={
+                "color": color,
+                "fillColor": color,
+                "fillOpacity": 0.7,
+                "weight": 1,
+            },
+        )
+        m.add(geo_json)
 
     return m
