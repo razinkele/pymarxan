@@ -124,7 +124,8 @@ def check_zone_targets(
             if idx is not None and int(zone_assignment[idx]) == zid:
                 achieved += float(r["amount"]) * contribution
 
-        targets_met[(zid, fid)] = achieved >= target
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+        targets_met[(zid, fid)] = achieved >= target * misslevel
 
     return targets_met
 
@@ -162,7 +163,8 @@ def compute_zone_penalty(
             if idx is not None and int(zone_assignment[idx]) == zid:
                 achieved += float(r["amount"]) * contribution
 
-        shortfall = max(0.0, target - achieved)
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+        shortfall = max(0.0, target * misslevel - achieved)
         total += spf_lookup.get(fid, 1.0) * shortfall
 
     return total

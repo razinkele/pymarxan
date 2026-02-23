@@ -111,3 +111,27 @@ class TestComputeZonePenalty:
         assignment = np.array([1, 1, 2, 2])
         penalty = compute_zone_penalty(self.problem, assignment)
         assert penalty == 0.0
+
+
+class TestZonePenaltyMisslevel:
+    """Tests for MISSLEVEL support in zone objective functions."""
+
+    def test_zone_penalty_respects_misslevel(self):
+        """With MISSLEVEL=0.5, targets should be halved - easier to meet."""
+        problem = load_zone_project(DATA_DIR)
+        assignment = np.array([1, 0, 0, 0])  # Only PU 0 in zone 1
+        penalty_strict = compute_zone_penalty(problem, assignment)
+        problem.parameters["MISSLEVEL"] = 0.5
+        penalty_relaxed = compute_zone_penalty(problem, assignment)
+        assert penalty_relaxed < penalty_strict, (
+            "Relaxed MISSLEVEL should produce lower penalty"
+        )
+
+    def test_check_zone_targets_respects_misslevel(self):
+        """With MISSLEVEL, more targets should appear met."""
+        problem = load_zone_project(DATA_DIR)
+        assignment = np.array([1, 0, 0, 0])
+        strict = check_zone_targets(problem, assignment)
+        problem.parameters["MISSLEVEL"] = 0.01
+        relaxed = check_zone_targets(problem, assignment)
+        assert sum(relaxed.values()) >= sum(strict.values())
