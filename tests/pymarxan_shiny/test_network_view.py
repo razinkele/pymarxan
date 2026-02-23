@@ -42,3 +42,9 @@ def test_compute_centroids():
 def test_compute_centroids_empty():
     """Empty grid returns empty list."""
     assert compute_centroids([]) == []
+
+
+def test_network_view_ui_has_output_widget():
+    """UI should contain an output_widget for the map."""
+    html = str(network_view_ui("test_nv"))
+    assert "ipywidget" in html.lower()
