@@ -48,9 +48,12 @@ def apply_cost_from_vector(
     overlay["_intersection_area"] = overlay.geometry.area
 
     new_costs: dict[int, float] = {}
+    pu_area_by_id = dict(zip(
+        planning_units["id"].values,
+        planning_units.geometry.area,
+    ))
     for pu_id, group in overlay.groupby("id"):
-        pu_geom = planning_units.loc[planning_units["id"] == pu_id, "geometry"].iloc[0]
-        pu_area = pu_geom.area
+        pu_area = pu_area_by_id.get(pu_id, 0.0)
         if aggregation == "area_weighted_mean":
             weighted = (group[cost_column] * group["_intersection_area"]).sum()
             total_area = group["_intersection_area"].sum()
