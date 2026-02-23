@@ -64,7 +64,10 @@ class ScenarioSet:
         raise KeyError(f"Scenario '{name}' not found")
 
     def remove(self, name: str) -> None:
+        before = len(self._scenarios)
         self._scenarios = [s for s in self._scenarios if s.name != name]
+        if len(self._scenarios) == before:
+            raise KeyError(f"Scenario '{name}' not found")
 
     def clone_scenario(
         self,

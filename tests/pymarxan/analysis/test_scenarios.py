@@ -71,6 +71,13 @@ def test_scenario_set_remove():
     assert len(ss) == 0
 
 
+def test_remove_nonexistent_raises():
+    from pymarxan.analysis.scenarios import ScenarioSet
+    ss = ScenarioSet()
+    with pytest.raises(KeyError, match="nonexistent"):
+        ss.remove("nonexistent")
+
+
 def test_overlap_matrix_partial():
     """Jaccard index with partially overlapping selections."""
     ss = ScenarioSet()
