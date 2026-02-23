@@ -51,18 +51,21 @@ def spf_explorer_server(
         if p is None:
             ui.notification_show("Load a project first!", type="error")
             return
-        result = calibrate_spf(
-            p,
-            solver(),
-            max_iterations=int(input.max_iterations()),
-            multiplier=float(input.multiplier()),
-            config=SolverConfig(num_solutions=1),
-        )
-        spf_result.set(result)
-        ui.notification_show(
-            f"SPF calibration done in {len(result.history)} iterations",
-            type="message",
-        )
+        try:
+            result = calibrate_spf(
+                p,
+                solver(),
+                max_iterations=int(input.max_iterations()),
+                multiplier=float(input.multiplier()),
+                config=SolverConfig(num_solutions=1),
+            )
+            spf_result.set(result)
+            ui.notification_show(
+                f"SPF calibration done in {len(result.history)} iterations",
+                type="message",
+            )
+        except Exception as e:
+            ui.notification_show(f"SPF calibration error: {e}", type="error")
 
     @render.text
     def spf_status():

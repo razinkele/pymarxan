@@ -40,7 +40,7 @@ def blm_explorer_ui():
 def blm_explorer_server(
     input, output, session,
     problem: reactive.Value,
-    solver: reactive.Value,
+    solver: reactive.Calc,
 ):
     result: reactive.Value[BLMResult | None] = reactive.value(None)
 

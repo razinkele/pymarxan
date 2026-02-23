@@ -4,20 +4,13 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 
+_COLUMN_ORDER = ["id", "name", "target", "spf"]
+
+
 def validate_feature_edit(column: str, value: str) -> float | None:
     """Validate an edit to a feature table cell.
 
-    Parameters
-    ----------
-    column : str
-        Column name being edited.
-    value : str
-        New value as string.
-
-    Returns
-    -------
-    float | None
-        Validated float value, or None if the edit is rejected.
+    Returns validated float, or None if edit is rejected.
     """
     if column not in ("target", "spf"):
         return None
@@ -35,6 +28,9 @@ def feature_table_ui():
     return ui.card(
         ui.card_header("Feature Targets & SPF"),
         ui.output_data_frame("feature_grid"),
+        ui.input_action_button(
+            "save_changes", "Save Changes", class_="btn-warning w-100 mt-2"
+        ),
     )
 
 
@@ -55,9 +51,21 @@ def feature_table_server(
 
     @feature_grid.set_patch_fn
     def _(*, patch):
-        col = patch["column_id"]
+        col_idx = patch["column_index"]
+        col = _COLUMN_ORDER[col_idx] if col_idx < len(_COLUMN_ORDER) else ""
         validated = validate_feature_edit(col, str(patch["value"]))
         if validated is not None:
             return validated
-        # Reject edit by returning original value
-        return patch["prev_value"]
+        return patch["value"]
+
+    @reactive.effect
+    @reactive.event(input.save_changes)
+    def _save():
+        p = problem()
+        if p is None:
+            return
+        df = feature_grid.data_view()
+        p.features["target"] = df["target"].values
+        p.features["spf"] = df["spf"].values
+        problem.set(p)
+        ui.notification_show("Feature targets saved.", type="message")

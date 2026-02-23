@@ -1,6 +1,7 @@
 """Run panel Shiny module — solver execution with progress monitoring."""
 from __future__ import annotations
 
+import copy
 import threading
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
@@ -43,12 +44,11 @@ def run_panel_server(
     all_solutions: reactive.Value,
 ):
     progress = SolverProgress()
-    solver_thread: reactive.Value[threading.Thread | None] = reactive.value(None)
 
     @reactive.effect
     @reactive.event(input.run_solver)
     def _run_solver():
-        p = problem()
+        p = copy.deepcopy(problem())
         if p is None:
             ui.notification_show("Load a project first!", type="error")
             return
@@ -73,11 +73,13 @@ def run_panel_server(
         config = SolverConfig(
             num_solutions=config_dict.get("num_solutions", 10),
             seed=config_dict.get("seed"),
-            verbose=False,
+            verbose=bool(config_dict.get("mip_verbose", False)),
             metadata={"progress": progress},
         )
 
         progress.reset()
+        progress.status = "running"
+        progress.message = f"Starting {active.name()}..."
         ui.notification_show(f"Running {active.name()}...", type="message")
 
         def _run():
@@ -104,7 +106,6 @@ def run_panel_server(
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
-        solver_thread.set(thread)
 
     @render.ui
     def progress_bar():

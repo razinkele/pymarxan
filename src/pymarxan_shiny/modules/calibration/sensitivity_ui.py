@@ -70,7 +70,7 @@ def sensitivity_server(
     output,
     session,
     problem: reactive.Value,
-    solver: reactive.Value,
+    solver: reactive.Calc,
 ):
     result: reactive.Value[SensitivityResult | None] = reactive.value(None)
 
