@@ -8,6 +8,12 @@ import pandas as pd
 
 from pymarxan.models import boundary as boundary_mod
 
+# Planning unit status constants (Marxan spec)
+STATUS_NORMAL = 0
+STATUS_INITIAL_INCLUDE = 1
+STATUS_LOCKED_IN = 2
+STATUS_LOCKED_OUT = 3
+
 
 @dataclass
 class ConservationProblem:
