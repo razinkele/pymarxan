@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import geopandas as gpd
 import pandas as pd
 
 from pymarxan.models import boundary as boundary_mod
@@ -191,3 +192,12 @@ class ConservationProblem:
         if self.parameters:
             lines.append(f"  Parameters: {self.parameters}")
         return "\n".join(lines)
+
+
+def has_geometry(problem: ConservationProblem) -> bool:
+    """Check if planning_units has real spatial geometry."""
+    return (
+        isinstance(problem.planning_units, gpd.GeoDataFrame)
+        and "geometry" in problem.planning_units.columns
+        and not problem.planning_units.geometry.is_empty.all()
+    )

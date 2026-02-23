@@ -1,3 +1,3 @@
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import ConservationProblem, has_geometry
 
-__all__ = ["ConservationProblem"]
+__all__ = ["ConservationProblem", "has_geometry"]
