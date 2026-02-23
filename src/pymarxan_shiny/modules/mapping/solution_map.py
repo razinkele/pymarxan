@@ -52,22 +52,22 @@ def solution_map_server(
             ]
             return create_grid_map(grid, colors)
 
-    @render.text
-    def map_summary():
-        p = problem()
-        s = solution()
-        if p is None or s is None:
-            return "Run a solver to see results here."
+        @render.text
+        def map_summary():
+            p = problem()
+            s = solution()
+            if p is None or s is None:
+                return "Run a solver to see results here."
 
-        n_pu = len(p.planning_units)
-        targets_met = sum(s.targets_met.values())
-        total_targets = len(s.targets_met)
-        return (
-            f"Selected: {s.n_selected} / {n_pu} planning units\n"
-            f"Cost: {s.cost:.2f} | Boundary: {s.boundary:.2f}"
-            f" | Objective: {s.objective:.2f}\n"
-            f"Targets met: {targets_met} / {total_targets}"
-        )
+            n_pu = len(p.planning_units)
+            targets_met = sum(s.targets_met.values())
+            total_targets = len(s.targets_met)
+            return (
+                f"Selected: {s.n_selected} / {n_pu} planning units\n"
+                f"Cost: {s.cost:.2f} | Boundary: {s.boundary:.2f}"
+                f" | Objective: {s.objective:.2f}\n"
+                f"Targets met: {targets_met} / {total_targets}"
+            )
 
     if not _HAS_IPYLEAFLET:
 

@@ -85,7 +85,6 @@ def network_view_server(
     session,
     problem: reactive.Value,
     connectivity_matrix: reactive.Value,
-    connectivity_pu_ids: reactive.Value,
 ):
     if _HAS_IPYLEAFLET:
 
@@ -137,38 +136,38 @@ def network_view_server(
 
             return m
 
-    @render.text
-    def map_summary():
-        p = problem()
-        matrix = connectivity_matrix()
-        if p is None or matrix is None:
-            return "Load a project with connectivity data to see the network."
+        @render.text
+        def map_summary():
+            p = problem()
+            matrix = connectivity_matrix()
+            if p is None or matrix is None:
+                return "Load a project with connectivity data to see the network."
 
-        n_pu = len(p.planning_units)
-        metric_name = input.metric()
+            n_pu = len(p.planning_units)
+            metric_name = input.metric()
 
-        if metric_name == "out_degree":
-            from pymarxan.connectivity.metrics import compute_out_degree
+            if metric_name == "out_degree":
+                from pymarxan.connectivity.metrics import compute_out_degree
 
-            metric_values = compute_out_degree(matrix)
-        else:
-            metric_values = compute_in_degree(matrix)
+                metric_values = compute_out_degree(matrix)
+            else:
+                metric_values = compute_in_degree(matrix)
 
-        max_val = float(metric_values.max()) if len(metric_values) > 0 else 0.0
-        min_val = float(metric_values.min()) if len(metric_values) > 0 else 0.0
+            max_val = float(metric_values.max()) if len(metric_values) > 0 else 0.0
+            min_val = float(metric_values.min()) if len(metric_values) > 0 else 0.0
 
-        threshold = input.edge_threshold()
-        n = min(matrix.shape[0], n_pu)
-        edge_count = sum(
-            1 for i in range(n) for j in range(n)
-            if float(matrix[i, j]) > threshold and i != j
-        )
+            threshold = input.edge_threshold()
+            n = min(matrix.shape[0], n_pu)
+            edge_count = sum(
+                1 for i in range(n) for j in range(n)
+                if float(matrix[i, j]) > threshold and i != j
+            )
 
-        return (
-            f"{n_pu} nodes — colored by {metric_name}\n"
-            f"Metric range: {min_val:.2f} – {max_val:.2f}\n"
-            f"Edges shown: {edge_count} (threshold: {threshold:.2f})"
-        )
+            return (
+                f"{n_pu} nodes — colored by {metric_name}\n"
+                f"Metric range: {min_val:.2f} – {max_val:.2f}\n"
+                f"Edges shown: {edge_count} (threshold: {threshold:.2f})"
+            )
 
     if not _HAS_IPYLEAFLET:
 

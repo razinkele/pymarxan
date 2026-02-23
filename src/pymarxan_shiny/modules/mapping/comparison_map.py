@@ -110,34 +110,34 @@ def comparison_map_server(
             ]
             return create_grid_map(grid, colors)
 
-    @render.text
-    def map_summary():
-        p = problem()
-        sols = all_solutions()
-        if p is None or sols is None or len(sols) < 2:
-            return "Run solver with 2+ solutions to compare."
+        @render.text
+        def map_summary():
+            p = problem()
+            sols = all_solutions()
+            if p is None or sols is None or len(sols) < 2:
+                return "Run solver with 2+ solutions to compare."
 
-        idx_a = int(input.sol_a())
-        idx_b = int(input.sol_b())
-        if idx_a >= len(sols) or idx_b >= len(sols):
-            return "Invalid solution index."
+            idx_a = int(input.sol_a())
+            idx_b = int(input.sol_b())
+            if idx_a >= len(sols) or idx_b >= len(sols):
+                return "Invalid solution index."
 
-        sol_a = sols[idx_a]
-        sol_b = sols[idx_b]
-        n_pu = len(p.planning_units)
-        both = sum(
-            1 for i in range(n_pu)
-            if sol_a.selected[i] and sol_b.selected[i]
-        )
-        a_only = sum(
-            1 for i in range(n_pu)
-            if sol_a.selected[i] and not sol_b.selected[i]
-        )
-        b_only = sum(
-            1 for i in range(n_pu)
-            if not sol_a.selected[i] and sol_b.selected[i]
-        )
-        return f"Both: {both} | A only: {a_only} | B only: {b_only}"
+            sol_a = sols[idx_a]
+            sol_b = sols[idx_b]
+            n_pu = len(p.planning_units)
+            both = sum(
+                1 for i in range(n_pu)
+                if sol_a.selected[i] and sol_b.selected[i]
+            )
+            a_only = sum(
+                1 for i in range(n_pu)
+                if sol_a.selected[i] and not sol_b.selected[i]
+            )
+            b_only = sum(
+                1 for i in range(n_pu)
+                if not sol_a.selected[i] and sol_b.selected[i]
+            )
+            return f"Both: {both} | A only: {a_only} | B only: {b_only}"
 
     if not _HAS_IPYLEAFLET:
 

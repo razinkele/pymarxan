@@ -71,4 +71,14 @@ class TestBuildSolution:
     def test_objective_includes_blm(self):
         selected = np.ones(6, dtype=bool)
         sol = build_solution(self.problem, selected, blm=2.0)
+        # All targets met => penalty == 0 => objective = cost + blm*boundary
         assert abs(sol.objective - (sol.cost + 2.0 * sol.boundary)) < 0.01
+
+    def test_objective_includes_penalty_when_targets_unmet(self):
+        """build_solution must include SPF penalty in objective."""
+        selected = np.zeros(6, dtype=bool)  # Nothing selected => all targets unmet
+        sol = build_solution(self.problem, selected, blm=0.0)
+        # With blm=0 and nothing selected: cost=0, boundary=0
+        # So objective should equal the penalty (which must be > 0)
+        assert sol.cost == 0.0
+        assert sol.objective > 0.0, "Objective must include SPF penalty"

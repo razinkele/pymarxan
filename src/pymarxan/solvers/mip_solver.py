@@ -4,7 +4,11 @@ from __future__ import annotations
 import numpy as np
 import pulp
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import (
+    STATUS_LOCKED_IN,
+    STATUS_LOCKED_OUT,
+    ConservationProblem,
+)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import check_targets, compute_boundary
 
@@ -31,11 +35,7 @@ class MIPSolver(Solver):
         return False
 
     def available(self) -> bool:
-        try:
-            import importlib.util
-            return importlib.util.find_spec("pulp") is not None
-        except (ImportError, ModuleNotFoundError):
-            return False
+        return True  # pulp is a core dependency
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
@@ -55,12 +55,10 @@ class MIPSolver(Solver):
         for _, row in problem.planning_units.iterrows():
             pid = int(row["id"])
             status = int(row["status"])
-            if status == 2:
-                # Locked in
+            if status == STATUS_LOCKED_IN:
                 x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
                 model += x[pid] == 1, f"locked_in_{pid}"
-            elif status == 3:
-                # Locked out
+            elif status == STATUS_LOCKED_OUT:
                 x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
                 model += x[pid] == 0, f"locked_out_{pid}"
             else:

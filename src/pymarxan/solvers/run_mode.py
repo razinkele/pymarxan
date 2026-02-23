@@ -78,6 +78,7 @@ class RunModePipeline(Solver):
                 num_solutions=1,
                 seed=run_seed,
                 verbose=config.verbose,
+                metadata=config.metadata,
             )
 
             sol = self._run_pipeline(

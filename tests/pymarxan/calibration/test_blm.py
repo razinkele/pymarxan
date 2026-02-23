@@ -40,7 +40,7 @@ class TestCalibrateBLM:
             self.problem, self.solver,
             blm_values=[0.0, 10.0, 100.0],
         )
-        assert result.costs[-1] >= result.costs[0] or True
+        assert result.costs[-1] >= result.costs[0]
 
     def test_boundary_decreases_with_blm(self):
         result = calibrate_blm(

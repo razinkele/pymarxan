@@ -34,6 +34,7 @@ shiny = [
     "ipyleaflet>=0.18",
     "plotly>=5.18",
     "matplotlib>=3.8",
+    "networkx>=3.0",
 ]
 dev = [
     "pytest>=7.4",
@@ -41,7 +42,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.8",
     "pandas-stubs",
-    "pdoc>=14.0",
+    "pdoc>=16.0",
 ]
 all = ["pymarxan[shiny,dev]"]
 

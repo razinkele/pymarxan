@@ -63,15 +63,15 @@ def frequency_map_server(
             colors = [frequency_color(sf.frequencies[i]) for i in range(n_pu)]
             return create_grid_map(grid, colors)
 
-    @render.text
-    def map_summary():
-        p = problem()
-        sols = all_solutions()
-        if p is None or sols is None or len(sols) == 0:
-            return "Run solver with multiple solutions to see frequency map."
+        @render.text
+        def map_summary():
+            p = problem()
+            sols = all_solutions()
+            if p is None or sols is None or len(sols) == 0:
+                return "Run solver with multiple solutions to see frequency map."
 
-        sf = compute_selection_frequency(sols)
-        return f"Frequency across {sf.n_solutions} solutions"
+            sf = compute_selection_frequency(sols)
+            return f"Frequency across {sf.n_solutions} solutions"
 
     if not _HAS_IPYLEAFLET:
 

@@ -253,7 +253,6 @@ def server(input: Inputs, output: Outputs, session: Session):
         "network",
         problem=problem,
         connectivity_matrix=connectivity_matrix,
-        connectivity_pu_ids=connectivity_pu_ids,
     )
 
 app = App(app_ui, server)

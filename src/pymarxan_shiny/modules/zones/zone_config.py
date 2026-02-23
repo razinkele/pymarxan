@@ -10,10 +10,7 @@ def zone_config_ui():
         ui.card_header("Zone Configuration"),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_action_button(
-                    "load_zones", "Load Zone Project",
-                    class_="btn-primary w-100",
-                ),
+                ui.p("Zone project data is loaded via the Data tab."),
                 ui.hr(),
                 ui.output_text_verbatim("zone_summary"),
                 width=300,

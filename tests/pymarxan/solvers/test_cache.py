@@ -456,3 +456,24 @@ class TestDeltaWithMisslevel:
                 )
                 expected = obj_after - obj_before
                 assert abs(delta - expected) < 1e-10
+
+    def test_misslevel_reduces_penalty(self, cache_ml):
+        """MISSLEVEL < 1.0 must reduce the penalty compared to MISSLEVEL=1.0."""
+        # Build a separate cache with default MISSLEVEL=1.0
+        problem_full = load_project(DATA_DIR)  # Fresh problem, MISSLEVEL=1.0
+        cache_full = ProblemCache.from_problem(problem_full)
+
+        blm = 0.0  # Isolate penalty from boundary
+        selected = np.zeros(6, dtype=bool)  # Nothing selected => max penalty
+        held_full = cache_full.compute_held(selected)
+        held_ml = cache_ml.compute_held(selected)
+
+        obj_full = cache_full.compute_full_objective(selected, held_full, blm)
+        obj_ml = cache_ml.compute_full_objective(selected, held_ml, blm)
+
+        # cost=0, boundary=0 => objective is pure penalty
+        # MISSLEVEL=0.8 targets are 80% of full => lower penalty
+        assert obj_ml < obj_full, (
+            f"MISSLEVEL=0.8 should produce lower penalty: "
+            f"ml={obj_ml}, full={obj_full}"
+        )

@@ -5,7 +5,11 @@ import math
 
 import numpy as np
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import (
+    STATUS_LOCKED_IN,
+    STATUS_LOCKED_OUT,
+    ConservationProblem,
+)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.utils import build_solution
@@ -65,9 +69,9 @@ class SimulatedAnnealingSolver(Solver):
         swappable: list[int] = []
         for i in range(n_pu):
             s = int(cache.statuses[i])
-            if s == 2:
+            if s == STATUS_LOCKED_IN:
                 locked_in.append(i)
-            elif s == 3:
+            elif s == STATUS_LOCKED_OUT:
                 locked_out.append(i)
             else:
                 swappable.append(i)

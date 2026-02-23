@@ -216,8 +216,9 @@ class ProblemCache:
         # Boundary
         boundary = self._compute_boundary(selected)
 
-        # Penalty: SPF * max(0, target - held) for each feature
-        shortfalls = np.maximum(0.0, self.feat_targets - held)
+        # Penalty: SPF * max(0, target*misslevel - held) for each feature
+        effective_targets = self.feat_targets * self.misslevel
+        shortfalls = np.maximum(0.0, effective_targets - held)
         penalty = float(np.dot(self.feat_spf, shortfalls))
 
         obj = total_cost + blm * boundary + penalty
@@ -292,9 +293,10 @@ class ProblemCache:
         # --- Penalty delta ---
         # Only features present in this PU can change their shortfall
         pu_amounts = self.pu_feat_matrix[idx]
-        old_shortfalls = np.maximum(0.0, self.feat_targets - held)
+        effective_targets = self.feat_targets * self.misslevel
+        old_shortfalls = np.maximum(0.0, effective_targets - held)
         new_held = held + sign * pu_amounts
-        new_shortfalls = np.maximum(0.0, self.feat_targets - new_held)
+        new_shortfalls = np.maximum(0.0, effective_targets - new_held)
         penalty_delta = float(
             np.dot(self.feat_spf, new_shortfalls - old_shortfalls)
         )
