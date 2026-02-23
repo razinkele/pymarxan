@@ -70,3 +70,50 @@ class TestImportPlanningUnits:
             cost_column="pu_cost",
         )
         assert gdf.crs is not None
+
+
+class TestImportFeaturesFromVector:
+    def _make_pus(self):
+        return gpd.GeoDataFrame(
+            {"id": [1, 2, 3]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1), box(0, 1, 1, 2)],
+            crs="EPSG:4326",
+        )
+
+    def test_import_with_area_overlap(self):
+        pus = self._make_pus()
+        df = import_features_from_vector(
+            SPATIAL_DATA / "test_features.geojson",
+            pus,
+            feature_name="forest",
+            feature_id=1,
+        )
+        assert isinstance(df, pd.DataFrame)
+        assert set(df.columns) == {"species", "pu", "amount"}
+        assert all(df["species"] == 1)
+        assert all(df["amount"] > 0)
+
+    def test_import_with_amount_column(self):
+        pus = self._make_pus()
+        df = import_features_from_vector(
+            SPATIAL_DATA / "test_features.geojson",
+            pus,
+            feature_name="forest",
+            feature_id=1,
+            amount_column="area_ha",
+        )
+        assert all(df["amount"] > 0)
+
+    def test_no_overlap_returns_empty(self):
+        pus = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[box(100, 100, 101, 101)],
+            crs="EPSG:4326",
+        )
+        df = import_features_from_vector(
+            SPATIAL_DATA / "test_features.geojson",
+            pus,
+            feature_name="forest",
+            feature_id=1,
+        )
+        assert len(df) == 0

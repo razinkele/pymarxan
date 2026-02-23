@@ -1,0 +1,7 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"habitat": "forest", "area_ha": 50.0}, "geometry": {"type": "Polygon", "coordinates": [[[0,0],[0.8,0],[0.8,0.8],[0,0.8],[0,0]]]}},
+    {"type": "Feature", "properties": {"habitat": "wetland", "area_ha": 30.0}, "geometry": {"type": "Polygon", "coordinates": [[[1.2,0],[2,0],[2,0.8],[1.2,0.8],[1.2,0]]]}}
+  ]
+}
