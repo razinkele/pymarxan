@@ -163,3 +163,17 @@ class TestWriteSum:
         write_sum([sol], path)
         df = pd.read_csv(path)
         assert df.iloc[0]["Penalty"] == pytest.approx(0.0)
+
+    def test_write_sum_shortfall_differs_from_penalty(self, tmp_path):
+        """Shortfall column must be raw shortfall, not SPF-weighted penalty."""
+        sol = Solution(
+            selected=np.array([True, False, True]),
+            cost=40.0, boundary=5.0, objective=95.0,
+            targets_met={1: True, 2: False},
+            penalty=50.0, shortfall=5.0,
+        )
+        path = tmp_path / "sum.csv"
+        write_sum([sol], path)
+        df = pd.read_csv(path)
+        assert df.iloc[0]["Shortfall"] == pytest.approx(5.0)
+        assert df.iloc[0]["Penalty"] == pytest.approx(50.0)

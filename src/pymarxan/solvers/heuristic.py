@@ -284,6 +284,7 @@ class HeuristicSolver(Solver):
                 shortfall = max(remaining.get(fid, 0.0), 0.0)
                 penalty += spf * shortfall
 
+        total_shortfall = sum(max(r, 0.0) for r in remaining.values())
         objective = total_cost + blm * boundary_val + penalty
 
         return Solution(
@@ -293,6 +294,7 @@ class HeuristicSolver(Solver):
             objective=objective,
             targets_met=targets_met,
             penalty=penalty,
+            shortfall=total_shortfall,
             metadata={"solver": "greedy", "heurtype": effective_heurtype},
         )
 

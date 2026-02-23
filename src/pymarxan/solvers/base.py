@@ -19,6 +19,7 @@ class Solution:
     objective: float  # cost + BLM * boundary + penalties
     targets_met: dict[int, bool]  # Feature ID -> target met?
     penalty: float = 0.0  # Total SPF-weighted shortfall penalty
+    shortfall: float = 0.0  # Total raw feature shortfall (sum of max(0, target - achieved))
     metadata: dict = field(default_factory=dict)
     zone_assignment: np.ndarray | None = None
 

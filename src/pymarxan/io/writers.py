@@ -242,7 +242,7 @@ def write_sum(solutions: list[Solution], path: str | Path) -> None:
     rows = []
     for i, sol in enumerate(solutions, start=1):
         penalty = sol.penalty
-        shortfall = penalty  # total shortfall approximated from penalty
+        shortfall = sol.shortfall
         rows.append({
             "Run": i,
             "Score": sol.objective,

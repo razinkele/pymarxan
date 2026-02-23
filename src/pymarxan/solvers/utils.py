@@ -179,6 +179,8 @@ def build_solution(
     total_boundary = compute_boundary(problem, selected, pu_index)
     targets_met = check_targets(problem, selected, pu_index)
     penalty = compute_penalty(problem, selected, pu_index)
+    shortfalls = compute_feature_shortfalls(problem, selected, pu_index)
+    total_shortfall = sum(shortfalls.values())
     objective = total_cost + blm * total_boundary + penalty
 
     cost_thresh = float(problem.parameters.get("COSTTHRESH", 0.0))
@@ -196,5 +198,6 @@ def build_solution(
         objective=objective,
         targets_met=targets_met,
         penalty=penalty,
+        shortfall=total_shortfall,
         metadata=metadata or {},
     )
