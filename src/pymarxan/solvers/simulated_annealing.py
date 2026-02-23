@@ -149,6 +149,8 @@ class SimulatedAnnealingSolver(Solver):
             else:
                 initial_temp = 1.0
 
+            initial_temp = max(initial_temp, 0.001)
+
             # Compute cooling factor
             iters_per_step = max(1, num_iterations // num_temp_steps)
             if initial_temp > 0:
