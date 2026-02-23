@@ -87,7 +87,9 @@ def import_features_from_vector(
     features_gdf = gpd.read_file(path)
 
     # Reproject if CRS differs
-    if features_gdf.crs != planning_units.crs and features_gdf.crs is not None:
+    if (features_gdf.crs is not None
+            and planning_units.crs is not None
+            and features_gdf.crs != planning_units.crs):
         features_gdf = features_gdf.to_crs(planning_units.crs)
 
     overlay = gpd.overlay(

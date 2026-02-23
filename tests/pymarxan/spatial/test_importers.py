@@ -117,3 +117,21 @@ class TestImportFeaturesFromVector:
             feature_id=1,
         )
         assert len(df) == 0
+
+    def test_import_features_handles_no_crs_on_pus(self, tmp_path):
+        """import_features_from_vector must not crash when PU GDF has no CRS."""
+        pu_gdf = gpd.GeoDataFrame(
+            {"id": [1, 2]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        )
+        feat_gdf = gpd.GeoDataFrame(
+            {"value": [10.0]},
+            geometry=[box(0, 0, 1.5, 1)],
+        )
+        feat_path = tmp_path / "test_feat.geojson"
+        feat_gdf.to_file(feat_path, driver="GeoJSON")
+
+        result = import_features_from_vector(
+            feat_path, pu_gdf, feature_name="test", feature_id=1,
+        )
+        assert isinstance(result, pd.DataFrame)
