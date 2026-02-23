@@ -129,6 +129,8 @@ def _flat_top_hex(cx: float, cy: float, size: float) -> Polygon:
 def compute_adjacency(planning_units: gpd.GeoDataFrame) -> pd.DataFrame:
     """Compute boundary DataFrame from shared edges between adjacent PUs.
 
+    Uses a spatial index to avoid O(n^2) pairwise comparison.
+
     Parameters
     ----------
     planning_units : gpd.GeoDataFrame
@@ -142,18 +144,19 @@ def compute_adjacency(planning_units: gpd.GeoDataFrame) -> pd.DataFrame:
     rows: list[dict] = []
     geoms = planning_units.geometry.values
     ids = planning_units["id"].values
+    sindex = planning_units.sindex
 
     for i in range(len(planning_units)):
-        for j in range(i + 1, len(planning_units)):
-            if geoms[i].touches(geoms[j]) or (
-                geoms[i].intersection(geoms[j]).length > 1e-10
-            ):
-                shared = geoms[i].intersection(geoms[j]).length
-                if shared > 1e-10:
-                    rows.append({
-                        "id1": int(ids[i]),
-                        "id2": int(ids[j]),
-                        "boundary": shared,
-                    })
+        candidates = list(sindex.intersection(geoms[i].bounds))
+        for j in candidates:
+            if j <= i:
+                continue
+            shared = geoms[i].intersection(geoms[j]).length
+            if shared > 1e-10:
+                rows.append({
+                    "id1": int(ids[i]),
+                    "id2": int(ids[j]),
+                    "boundary": shared,
+                })
 
     return pd.DataFrame(rows, columns=["id1", "id2", "boundary"])
