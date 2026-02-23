@@ -1,6 +1,8 @@
 """MIP solver using PuLP for exact conservation planning optimization."""
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pulp
 
@@ -139,4 +141,4 @@ class MIPSolver(Solver):
             blm,
             metadata={"solver": self.name(), "status": pulp.LpStatus[model.status]},
         )
-        return [sol] * config.num_solutions
+        return [copy.deepcopy(sol) for _ in range(config.num_solutions)]

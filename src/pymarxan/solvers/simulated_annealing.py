@@ -1,6 +1,7 @@
 """Native Python simulated annealing solver for Marxan conservation planning."""
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -92,7 +93,7 @@ class SimulatedAnnealingSolver(Solver):
                 problem, selected, blm,
                 metadata={"solver": self.name()},
             )
-            return [sol] * config.num_solutions
+            return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
 
         # Convert swappable to numpy array for fast indexing
         swappable_arr = np.array(swappable, dtype=np.intp)
