@@ -108,6 +108,10 @@ def combine_cost_layers(
 
     if weights is None:
         weights = [1.0 / n_layers] * n_layers
+    elif len(weights) != n_layers:
+        raise ValueError(
+            f"len(weights)={len(weights)} != len(layers)={n_layers}"
+        )
 
     combined = np.zeros(len(planning_units), dtype=float)
     for (name, values), w in zip(layers, weights):
