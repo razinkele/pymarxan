@@ -69,3 +69,24 @@ def test_scenario_set_remove():
     ss.add("a", _make_solution(30.0, 5), {})
     ss.remove("a")
     assert len(ss) == 0
+
+
+def test_overlap_matrix_partial():
+    """Jaccard index with partially overlapping selections."""
+    ss = ScenarioSet()
+    # A: PUs 0-4 selected (5 of 10)
+    sol_a = _make_solution(30.0, 5)
+    # B: PUs 0-2 selected, 3-9 not (3 of 10)
+    selected_b = np.zeros(10, dtype=bool)
+    selected_b[:3] = True
+    sol_b = Solution(
+        selected=selected_b, cost=20.0, boundary=5.0,
+        objective=25.0, targets_met={1: True, 2: True},
+    )
+    ss.add("a", sol_a, {})
+    ss.add("b", sol_b, {})
+    matrix = ss.overlap_matrix()
+    # Intersection: 3 PUs (0,1,2), Union: 5 PUs (0,1,2,3,4)
+    expected_jaccard = 3.0 / 5.0
+    assert matrix[0, 1] == pytest.approx(expected_jaccard)
+    assert matrix[1, 0] == pytest.approx(expected_jaccard)

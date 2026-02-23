@@ -41,6 +41,38 @@ class TestIrreplaceability:
         assert result[1] > 0  # PU 1 is critical for species 99
 
 
+def test_irreplaceability_numerical_values():
+    """Verify exact irreplaceability scores for a known problem."""
+    import pytest
+
+    from pymarxan.models.problem import ConservationProblem
+
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
+    features = pd.DataFrame({
+        "id": [1, 2], "name": ["f1", "f2"],
+        "target": [8.0, 6.0], "spf": [1.0, 1.0],
+    })
+    puvspr = pd.DataFrame({
+        "species": [1, 1, 2, 2],
+        "pu": [1, 2, 1, 3],
+        "amount": [5.0, 5.0, 4.0, 4.0],
+    })
+    problem = ConservationProblem(
+        planning_units=pu, features=features, pu_vs_features=puvspr,
+    )
+    scores = compute_irreplaceability(problem)
+    # Feature 1 total=10, target=8. Remove PU1: remaining=5 < 8 => critical
+    # Feature 2 total=8, target=6. Remove PU1: remaining=4 < 6 => critical
+    # PU1 critical for 2/2 features => score = 1.0
+    assert scores[1] == pytest.approx(1.0)
+    # PU2: feature 1 only. Remove PU2: remaining=5 < 8 => critical for f1
+    # PU2 not in feature 2. Score = 1/2 = 0.5
+    assert scores[2] == pytest.approx(0.5)
+    # PU3: feature 2 only. Remove PU3: remaining=4 < 6 => critical for f2
+    # Score = 1/2 = 0.5
+    assert scores[3] == pytest.approx(0.5)
+
+
 def test_irreplaceability_excludes_zero_target_features():
     """Score denominator must only count features with positive targets."""
     from pymarxan.models.problem import ConservationProblem

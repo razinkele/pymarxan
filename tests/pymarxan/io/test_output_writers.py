@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymarxan.io.readers import read_mvbest
 from pymarxan.io.writers import write_mvbest, write_ssoln, write_sum
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution
@@ -177,3 +178,29 @@ class TestWriteSum:
         df = pd.read_csv(path)
         assert df.iloc[0]["Shortfall"] == pytest.approx(5.0)
         assert df.iloc[0]["Penalty"] == pytest.approx(50.0)
+
+
+class TestMvbestRoundtrip:
+    def test_write_then_read_preserves_data(
+        self, tmp_path, simple_problem, solution_all_selected,
+    ):
+        """write_mvbest -> read_mvbest should preserve all columns."""
+        path = tmp_path / "roundtrip_mvbest.csv"
+        write_mvbest(simple_problem, solution_all_selected, path)
+        df = read_mvbest(path)
+        assert len(df) == simple_problem.n_features
+        assert "Feature_ID" in df.columns
+        assert "Target" in df.columns
+        assert "Amount_Held" in df.columns
+
+    def test_roundtrip_values(
+        self, tmp_path, simple_problem, solution_all_selected,
+    ):
+        """Roundtrip preserves numeric values."""
+        path = tmp_path / "roundtrip_mvbest.csv"
+        write_mvbest(simple_problem, solution_all_selected, path)
+        df = read_mvbest(path)
+        # Check that feature IDs match
+        feature_ids = sorted(df["Feature_ID"].tolist())
+        expected_ids = sorted(simple_problem.features["id"].tolist())
+        assert feature_ids == expected_ids
