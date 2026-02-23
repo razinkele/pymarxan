@@ -20,6 +20,8 @@ class SolverProgress:
     best_objective: float = field(default=float("inf"))
     message: str = ""
     error: str | None = None
+    result_solutions: list | None = None
+    result_best: object | None = None
 
     def reset(self) -> None:
         """Reset to idle state."""
@@ -31,6 +33,8 @@ class SolverProgress:
         self.best_objective = float("inf")
         self.message = ""
         self.error = None
+        self.result_solutions = None
+        self.result_best = None
 
     def format_status(self) -> str:
         """Return a human-readable status string."""
