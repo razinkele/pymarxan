@@ -59,6 +59,7 @@ class ZoneSASolver(Solver):
 
         pu_ids = problem.planning_units["id"].tolist()
         n_pu = len(pu_ids)
+        pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
         zone_ids_list = sorted(problem.zone_ids)
         zone_options = np.array([0] + zone_ids_list, dtype=int)
         n_zone_options = len(zone_options)
@@ -67,7 +68,7 @@ class ZoneSASolver(Solver):
         if "status" in problem.planning_units.columns:
             for _, row in problem.planning_units.iterrows():
                 s = int(row["status"])
-                idx = pu_ids.index(int(row["id"]))
+                idx = pu_id_to_idx[int(row["id"])]
                 if s == 2:
                     locked[idx] = zone_ids_list[0]
                 elif s == 3:

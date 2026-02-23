@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-
 _COLUMN_ORDER = ["id", "name", "target", "spf"]
 
 

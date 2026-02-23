@@ -326,3 +326,15 @@ class TestSolveMethod:
         solutions = solver.solve(simple_problem, SolverConfig(num_solutions=1))
         assert len(solutions) == 1
         assert solutions[0].cost >= 0
+
+    def test_iterative_improvement_removal_produces_valid_result(
+        self, simple_problem
+    ):
+        """Verify ITIMPTYPE=1 removal produces valid solution with cache."""
+        simple_problem.parameters["ITIMPTYPE"] = 1
+        solver = IterativeImprovementSolver(itimptype=1)
+        solutions = solver.solve(simple_problem, SolverConfig(num_solutions=1))
+        assert len(solutions) == 1
+        sol = solutions[0]
+        assert sol.cost >= 0
+        assert sol.objective >= sol.cost

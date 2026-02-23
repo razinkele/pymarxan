@@ -34,12 +34,22 @@ class TestSimulatedAnnealingSolver:
 
     def test_solutions_are_different(self):
         """Multiple SA runs should produce some variation."""
+        import copy
+
+        problem = copy.deepcopy(self.problem)
+        # Use very few iterations so SA doesn't fully converge on this
+        # tiny 6-PU problem — preserves randomness across runs.
+        problem.parameters["NUMITNS"] = 50
+        problem.parameters["NUMTEMP"] = 5
         config = SolverConfig(num_solutions=5, seed=None)
-        solutions = self.solver.solve(self.problem, config)
-        # At least some solutions should differ
-        # With 5 runs, allow some to be the same but not all identical
-        # (stochastic, so just check structure)
-        assert all(s.cost >= 0 for s in solutions)
+        solver = SimulatedAnnealingSolver()
+        solutions = solver.solve(problem, config)
+        # With 5 independent runs (no fixed seed), not all should be identical
+        arrays = [s.selected for s in solutions]
+        any_different = any(
+            not np.array_equal(arrays[0], a) for a in arrays[1:]
+        )
+        assert any_different, "All 5 SA solutions were identical"
 
     @pytest.mark.slow
     def test_all_targets_met_on_simple_problem(self):

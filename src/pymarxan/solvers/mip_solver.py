@@ -45,7 +45,6 @@ class MIPSolver(Solver):
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
 
         # Build the LP model
         model = pulp.LpProblem("MarxanMIP", pulp.LpMinimize)
