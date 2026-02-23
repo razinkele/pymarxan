@@ -66,6 +66,7 @@ class ZoneSASolver(Solver):
         n_zone_options = len(zone_options)
 
         locked: dict[int, int] = {}
+        initial_include: set[int] = set()
         if "status" in problem.planning_units.columns:
             for _, row in problem.planning_units.iterrows():
                 s = int(row["status"])
@@ -74,6 +75,8 @@ class ZoneSASolver(Solver):
                     locked[idx] = zone_ids_list[0]
                 elif s == 3:
                     locked[idx] = 0
+                elif s == 1:
+                    initial_include.add(idx)
 
         swappable = np.array(
             [i for i in range(n_pu) if i not in locked], dtype=int
@@ -166,7 +169,10 @@ class ZoneSASolver(Solver):
             for idx, zid in locked.items():
                 assignment[idx] = zid
             for idx in swappable:
-                assignment[idx] = zone_options[rng.integers(n_zone_options)]
+                if idx in initial_include:
+                    assignment[idx] = zone_ids_list[0]
+                else:
+                    assignment[idx] = zone_options[rng.integers(n_zone_options)]
 
             # Compute held_per_zone and initial objective from cache
             held_per_zone = cache.compute_held_per_zone(assignment)

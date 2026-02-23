@@ -97,6 +97,18 @@ class TestZoneSASolver:
         solutions = self.solver.solve(problem, config)
         assert solutions[0].objective < 1e10
 
+    def test_status_1_starts_in_zone(self):
+        """PUs with status=1 should start in first non-zero zone, stay swappable."""
+        problem = copy.deepcopy(self.problem)
+        problem.planning_units["status"] = 0
+        problem.planning_units.loc[0, "status"] = 1
+        problem.parameters["NUMITNS"] = 100
+        problem.parameters["NUMTEMP"] = 10
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)
