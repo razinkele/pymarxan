@@ -79,13 +79,8 @@ class MIPSolver(Solver):
                 bval = float(brow["boundary"])
 
                 if id1 == id2:
-                    # External/diagonal boundary: contributes when PU is NOT selected
-                    # In Marxan, this is the perimeter cost when PU is selected but
-                    # adjacent PU is not. For self-edges, it represents external boundary.
-                    # Actually skip self-edges in the MIP objective since they represent
-                    # the external boundary. We handle them in the actual boundary calculation.
-                    # For the MIP, we only linearize the off-diagonal pairs.
-                    continue
+                    # Self-boundary: external boundary cost when PU is selected
+                    boundary_expr += bval * x[id1]
                 else:
                     # Off-diagonal: linearize |x_i - x_j|
                     key = (min(id1, id2), max(id1, id2))

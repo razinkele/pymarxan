@@ -1,12 +1,15 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from pymarxan.io.readers import load_project
+from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
+
 
 class TestMIPSolver:
     def setup_method(self):
@@ -89,6 +92,55 @@ def test_mip_infeasible_returns_empty(tiny_problem):
     solver = MIPSolver()
     solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
     assert solutions == []
+
+
+def test_mip_includes_self_boundary():
+    """MIP objective must include self-boundary (external boundary) terms.
+
+    Create a problem where two PUs each independently satisfy the target.
+    PU 1 is cheap but has huge self-boundary; PU 2 costs more but has none.
+    With high BLM, a correct MIP must prefer PU 2 because self-boundary
+    makes PU 1 more expensive overall.
+    """
+    pu = pd.DataFrame({
+        "id": [1, 2],
+        "cost": [1.0, 5.0],
+        "status": [0, 0],
+    })
+    feat = pd.DataFrame({
+        "id": [1],
+        "name": ["f1"],
+        "target": [1.0],
+        "spf": [1.0],
+    })
+    puvspr = pd.DataFrame({
+        "species": [1, 1],
+        "pu": [1, 2],
+        "amount": [10.0, 10.0],
+    })
+    # PU 1 has huge self-boundary; PU 2 has none
+    bnd = pd.DataFrame({
+        "id1": [1],
+        "id2": [1],
+        "boundary": [100.0],
+    })
+    problem = ConservationProblem(
+        planning_units=pu, features=feat,
+        pu_vs_features=puvspr, boundary=bnd,
+    )
+    problem.parameters["BLM"] = 1.0
+
+    solver = MIPSolver()
+    sols = solver.solve(problem, SolverConfig(num_solutions=1))
+    assert len(sols) == 1
+    sol = sols[0]
+    # With self-boundary in objective: PU 1 costs 1 + 100 = 101, PU 2 costs 5
+    # Without self-boundary: PU 1 costs 1, PU 2 costs 5 => MIP picks PU 1
+    pu_ids = problem.planning_units["id"].tolist()
+    assert sol.selected[pu_ids.index(2)], (
+        "MIP should prefer PU 2 (cost=5) over PU 1 (cost=1 + boundary=100) "
+        "when self-boundary is included in the objective"
+    )
 
 
 def test_mip_applies_misslevel(tiny_problem):
