@@ -2,8 +2,15 @@ from pathlib import Path
 
 import numpy as np
 
+import pytest
+
 from pymarxan.io.readers import load_project
-from pymarxan.solvers.utils import build_solution, check_targets, compute_boundary
+from pymarxan.solvers.utils import (
+    build_solution,
+    check_targets,
+    compute_boundary,
+    compute_feature_shortfalls,
+)
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 
@@ -82,6 +89,32 @@ class TestBuildSolution:
         # So objective should equal the penalty (which must be > 0)
         assert sol.cost == 0.0
         assert sol.objective > 0.0, "Objective must include SPF penalty"
+
+
+class TestComputeFeatureShortfalls:
+    def test_all_unselected_shortfall_equals_target(self, tiny_problem):
+        """With nothing selected, shortfall equals target for each feature."""
+        pu_index = {
+            int(pid): i
+            for i, pid in enumerate(tiny_problem.planning_units["id"])
+        }
+        selected = np.zeros(tiny_problem.n_planning_units, dtype=bool)
+        shortfalls = compute_feature_shortfalls(tiny_problem, selected, pu_index)
+        for _, frow in tiny_problem.features.iterrows():
+            fid = int(frow["id"])
+            target = float(frow["target"])
+            assert shortfalls[fid] == pytest.approx(target)
+
+    def test_all_selected_shortfall_non_negative(self, tiny_problem):
+        """With all selected, shortfall should be 0 if targets are met."""
+        pu_index = {
+            int(pid): i
+            for i, pid in enumerate(tiny_problem.planning_units["id"])
+        }
+        selected = np.ones(tiny_problem.n_planning_units, dtype=bool)
+        shortfalls = compute_feature_shortfalls(tiny_problem, selected, pu_index)
+        for fid, sf in shortfalls.items():
+            assert sf >= 0.0  # Never negative
 
 
 def test_build_solution_has_penalty_field(tiny_problem):
