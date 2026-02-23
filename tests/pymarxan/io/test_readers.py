@@ -31,6 +31,15 @@ class TestReadPu:
         df = read_pu(DATA_DIR / "input" / "pu.dat")
         assert df["cost"].dtype == "float64"
 
+class TestReadPuDefaults:
+    def test_read_pu_defaults_missing_status(self, tmp_path):
+        """pu.dat without status column should default to 0."""
+        (tmp_path / "pu.dat").write_text("id,cost\n1,10\n2,20\n")
+        df = read_pu(tmp_path / "pu.dat")
+        assert "status" in df.columns
+        assert list(df["status"]) == [0, 0]
+
+
 class TestReadSpec:
     def test_reads_csv(self):
         df = read_spec(DATA_DIR / "input" / "spec.dat")
@@ -42,6 +51,17 @@ class TestReadSpec:
         df = read_spec(DATA_DIR / "input" / "spec.dat")
         assert "target" in df.columns
         assert df["target"].iloc[0] == 30.0
+
+class TestReadSpecDefaults:
+    def test_read_spec_defaults_missing_spf_and_name(self, tmp_path):
+        """spec.dat without spf/name columns should default to 1.0 and auto-name."""
+        (tmp_path / "spec.dat").write_text("id,target\n1,5\n2,10\n")
+        df = read_spec(tmp_path / "spec.dat")
+        assert "spf" in df.columns
+        assert list(df["spf"]) == [1.0, 1.0]
+        assert "name" in df.columns
+        assert list(df["name"]) == ["Feature_1", "Feature_2"]
+
 
 class TestReadPuvspr:
     def test_reads_csv(self):

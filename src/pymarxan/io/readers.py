@@ -55,6 +55,8 @@ def read_pu(path: str | Path) -> pd.DataFrame:
     df["cost"] = df["cost"].astype(float)
     if "status" in df.columns:
         df["status"] = df["status"].astype(int)
+    else:
+        df["status"] = 0
     return df
 
 
@@ -78,6 +80,12 @@ def read_spec(path: str | Path) -> pd.DataFrame:
     for col in ("target", "prop", "spf"):
         if col in df.columns:
             df[col] = df[col].astype(float)
+    if "target" not in df.columns:
+        df["target"] = 0.0
+    if "spf" not in df.columns:
+        df["spf"] = 1.0
+    if "name" not in df.columns:
+        df["name"] = [f"Feature_{fid}" for fid in df["id"]]
     return df
 
 
