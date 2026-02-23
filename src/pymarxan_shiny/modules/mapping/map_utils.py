@@ -1,7 +1,12 @@
 """Shared map helper for building ipyleaflet maps from grid data."""
 from __future__ import annotations
 
-import ipyleaflet
+try:
+    import ipyleaflet
+
+    _HAS_IPYLEAFLET = True
+except ImportError:
+    _HAS_IPYLEAFLET = False
 
 
 def create_grid_map(
@@ -26,7 +31,15 @@ def create_grid_map(
     Returns
     -------
     ipyleaflet.Map with one Rectangle per planning unit.
+
+    Raises
+    ------
+    ImportError
+        If ipyleaflet is not installed.
     """
+    if not _HAS_IPYLEAFLET:
+        raise ImportError("ipyleaflet is required for create_grid_map")
+
     if center is None and grid:
         all_lats = [b[0][0] for b in grid] + [b[1][0] for b in grid]
         all_lons = [b[0][1] for b in grid] + [b[1][1] for b in grid]

@@ -73,11 +73,12 @@ def compute_feature_shortfalls(
     selected: np.ndarray,
     pu_index: dict[int, int],
 ) -> dict[int, float]:
-    """Compute the shortfall for each feature (target - achieved, min 0)."""
+    """Compute the shortfall for each feature (target*misslevel - achieved, min 0)."""
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     shortfalls: dict[int, float] = {}
     for _, feat_row in problem.features.iterrows():
         fid = int(feat_row["id"])
-        target = float(feat_row["target"])
+        target = float(feat_row["target"]) * misslevel
         feat_data = problem.pu_vs_features[
             problem.pu_vs_features["species"] == fid
         ]
@@ -177,7 +178,16 @@ def build_solution(
     total_cost = float(np.sum(costs[selected]))
     total_boundary = compute_boundary(problem, selected, pu_index)
     targets_met = check_targets(problem, selected, pu_index)
-    objective = total_cost + blm * total_boundary
+    penalty = compute_penalty(problem, selected, pu_index)
+    objective = total_cost + blm * total_boundary + penalty
+
+    cost_thresh = float(problem.parameters.get("COSTTHRESH", 0.0))
+    if cost_thresh > 0:
+        thresh_pen1 = float(problem.parameters.get("THRESHPEN1", 0.0))
+        thresh_pen2 = float(problem.parameters.get("THRESHPEN2", 0.0))
+        objective += compute_cost_threshold_penalty(
+            total_cost, cost_thresh, thresh_pen1, thresh_pen2
+        )
 
     return Solution(
         selected=selected.copy(),
