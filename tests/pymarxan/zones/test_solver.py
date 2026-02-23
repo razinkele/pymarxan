@@ -56,6 +56,19 @@ class TestZoneSASolver:
         sol2 = self.solver.solve(self.problem, config)[0]
         np.testing.assert_array_equal(sol1.zone_assignment, sol2.zone_assignment)
 
+    def test_zone_sa_solution_has_penalty_and_shortfall(self):
+        """Zone SA should populate penalty and shortfall fields on Solution."""
+        self.problem.parameters["NUMITNS"] = 100
+        self.problem.parameters["NUMTEMP"] = 10
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = self.solver.solve(self.problem, config)
+        sol = solutions[0]
+        assert hasattr(sol, "penalty")
+        assert hasattr(sol, "shortfall")
+        zone_targets_met = sol.metadata.get("zone_targets_met", {})
+        if not all(zone_targets_met.values()):
+            assert sol.penalty > 0.0
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)

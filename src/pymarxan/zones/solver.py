@@ -14,6 +14,7 @@ from pymarxan.zones.objective import (
     compute_standard_boundary,
     compute_zone_boundary,
     compute_zone_cost,
+    compute_zone_penalty,
 )
 
 
@@ -180,6 +181,38 @@ class ZoneSASolver(Solver):
             std_boundary = compute_standard_boundary(problem, best_assignment)
             zone_boundary = compute_zone_boundary(problem, best_assignment)
             zone_targets = check_zone_targets(problem, best_assignment)
+            zone_penalty = compute_zone_penalty(problem, best_assignment)
+
+            # Compute raw shortfall (unweighted by SPF)
+            zone_shortfall = 0.0
+            if problem.zone_targets is not None:
+                misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+                pu_index = {
+                    int(pid): i
+                    for i, pid in enumerate(
+                        problem.planning_units["id"].tolist()
+                    )
+                }
+                for _, trow in problem.zone_targets.iterrows():
+                    zid = int(trow["zone"])
+                    fid = int(trow["feature"])
+                    target = float(trow["target"])
+                    contribution = problem.get_contribution(fid, zid)
+                    feat_data = problem.pu_vs_features[
+                        problem.pu_vs_features["species"] == fid
+                    ]
+                    achieved = 0.0
+                    for _, r in feat_data.iterrows():
+                        pid = int(r["pu"])
+                        idx = pu_index.get(pid)
+                        if (
+                            idx is not None
+                            and int(best_assignment[idx]) == zid
+                        ):
+                            achieved += float(r["amount"]) * contribution
+                    zone_shortfall += max(
+                        0.0, target * misslevel - achieved
+                    )
 
             sol = Solution(
                 selected=selected,
@@ -187,6 +220,8 @@ class ZoneSASolver(Solver):
                 boundary=std_boundary,
                 objective=best_obj,
                 targets_met={},
+                penalty=zone_penalty,
+                shortfall=zone_shortfall,
                 zone_assignment=best_assignment.copy(),
                 metadata={
                     "solver": self.name(),
