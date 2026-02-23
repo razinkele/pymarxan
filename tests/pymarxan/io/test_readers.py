@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from pymarxan.io.readers import (
     load_project,
@@ -88,3 +89,24 @@ class TestLoadProject:
         problem = load_project(DATA_DIR)
         errors = problem.validate()
         assert errors == [], f"Validation errors: {errors}"
+
+
+def test_load_project_resolves_prop_to_target(tmp_path):
+    """When prop > 0 and target == 0, effective target = prop * total_amount."""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (tmp_path / "input.dat").write_text(
+        "INPUTDIR input\nPUNAME pu.dat\nSPECNAME spec.dat\nPUVSPRNAME puvspr.dat\n"
+    )
+    (input_dir / "pu.dat").write_text("id,cost,status\n1,10,0\n2,20,0\n3,30,0\n")
+    (input_dir / "spec.dat").write_text(
+        "id,target,prop,spf,name\n1,0,0.3,1.0,feat_a\n2,5,0,1.0,feat_b\n"
+    )
+    (input_dir / "puvspr.dat").write_text(
+        "species,pu,amount\n1,1,10\n1,2,8\n2,2,12\n2,3,20\n"
+    )
+    problem = load_project(tmp_path)
+    f1 = problem.features[problem.features["id"] == 1].iloc[0]
+    assert f1["target"] == pytest.approx(5.4)  # 0.3 * (10 + 8) = 5.4
+    f2 = problem.features[problem.features["id"] == 2].iloc[0]
+    assert f2["target"] == pytest.approx(5.0)  # prop=0 so target stays 5.0

@@ -165,6 +165,26 @@ def read_input_dat(path: str | Path) -> dict[str, Any]:
     return params
 
 
+def _resolve_prop_targets(
+    features: pd.DataFrame, pu_vs_features: pd.DataFrame
+) -> pd.DataFrame:
+    """Resolve proportional targets: effective_target = max(target, prop * total_amount)."""
+    if "prop" not in features.columns:
+        return features
+    features = features.copy()
+    if "target" not in features.columns:
+        features["target"] = 0.0
+    for idx, row in features.iterrows():
+        prop = float(row.get("prop", 0.0))
+        if prop > 0:
+            fid = int(row["id"])
+            total = float(
+                pu_vs_features.loc[pu_vs_features["species"] == fid, "amount"].sum()
+            )
+            features.loc[idx, "target"] = max(float(row["target"]), prop * total)
+    return features
+
+
 def load_project(project_dir: str | Path) -> ConservationProblem:
     """Load a full Marxan project from a directory.
 
@@ -200,6 +220,8 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
     bound_path = input_dir / bound_name
     if bound_path.exists():
         boundary = read_bound(bound_path)
+
+    features = _resolve_prop_targets(features, pu_vs_features)
 
     return ConservationProblem(
         planning_units=planning_units,
