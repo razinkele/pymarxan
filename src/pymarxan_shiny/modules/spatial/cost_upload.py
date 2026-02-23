@@ -64,10 +64,17 @@ def cost_upload_server(input, output, session, problem: reactive.Value):
 
         try:
             cost_layer = gpd.read_file(file_info[0]["datapath"])
+            col = input.cost_col()
+            if col not in cost_layer.columns:
+                ui.notification_show(
+                    f"Column '{col}' not found. Available: {list(cost_layer.columns)}",
+                    type="error",
+                )
+                return
             updated = apply_cost_from_vector(
                 p.planning_units,
                 cost_layer,
-                cost_column=input.cost_col(),
+                cost_column=col,
                 aggregation=input.aggregation(),
             )
             new_problem = copy.deepcopy(p)
