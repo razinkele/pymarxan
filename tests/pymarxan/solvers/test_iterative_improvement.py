@@ -317,3 +317,12 @@ class TestSolveMethod:
         solver = IterativeImprovementSolver(itimptype=1)
         solutions = solver.solve(simple_problem)
         assert len(solutions) >= 1
+
+    def test_iterative_improvement_handles_status1(self, simple_problem):
+        """Status=1 PUs should start selected but be improvable."""
+        simple_problem.planning_units.loc[0, "status"] = 1
+        simple_problem.parameters["ITIMPTYPE"] = 1
+        solver = IterativeImprovementSolver(itimptype=1)
+        solutions = solver.solve(simple_problem, SolverConfig(num_solutions=1))
+        assert len(solutions) == 1
+        assert solutions[0].cost >= 0

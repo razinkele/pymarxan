@@ -127,17 +127,20 @@ class IterativeImprovementSolver(Solver):
     @staticmethod
     def _locked_sets(
         problem: ConservationProblem,
-    ) -> tuple[set[int], set[int]]:
-        """Return (locked_in_indices, locked_out_indices)."""
+    ) -> tuple[set[int], set[int], set[int]]:
+        """Return (locked_in_indices, locked_out_indices, initial_include_indices)."""
         locked_in: set[int] = set()
         locked_out: set[int] = set()
+        initial_include: set[int] = set()
         statuses = problem.planning_units["status"].values.astype(int)
         for i, s in enumerate(statuses):
             if s == 2:
                 locked_in.add(i)
             elif s == 3:
                 locked_out.add(i)
-        return locked_in, locked_out
+            elif s == 1:
+                initial_include.add(i)
+        return locked_in, locked_out, initial_include
 
     # ------------------------------------------------------------------
     # ITIMPTYPE 1 -- removal pass (repeat until stable)
@@ -166,7 +169,7 @@ class IterativeImprovementSolver(Solver):
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
         pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        locked_in, _ = self._locked_sets(problem)
+        locked_in, _, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
         current_obj = compute_objective(problem, selected, pu_index, blm)
@@ -218,7 +221,7 @@ class IterativeImprovementSolver(Solver):
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
         pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        _, locked_out = self._locked_sets(problem)
+        _, locked_out, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
         current_obj = compute_objective(problem, selected, pu_index, blm)
@@ -260,7 +263,7 @@ class IterativeImprovementSolver(Solver):
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
         pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        locked_in, locked_out = self._locked_sets(problem)
+        locked_in, locked_out, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
         current_obj = compute_objective(problem, selected, pu_index, blm)

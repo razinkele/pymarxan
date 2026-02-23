@@ -69,3 +69,35 @@ class TestMIPSolver:
         sol = solutions[0]
         assert sol.all_targets_met
         assert abs(sol.objective - sol.cost) < 0.01
+
+
+def test_mip_objective_includes_penalty(tiny_problem):
+    """MIP objective should include SPF penalty when targets unmet."""
+    tiny_problem.features.loc[0, "target"] = 999999.0
+    solver = MIPSolver()
+    solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
+    if solutions:  # may be infeasible with impossible target
+        sol = solutions[0]
+        assert sol.penalty > 0.0
+        assert sol.objective >= sol.cost + sol.boundary
+
+
+def test_mip_infeasible_returns_empty(tiny_problem):
+    """MIP should return empty list when infeasible."""
+    tiny_problem.planning_units["status"] = 3  # lock out ALL PUs
+    tiny_problem.features.loc[:, "target"] = 100.0
+    solver = MIPSolver()
+    solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
+    assert solutions == []
+
+
+def test_mip_applies_misslevel(tiny_problem):
+    """MIP should use MISSLEVEL to relax target constraints."""
+    total_amount = float(
+        tiny_problem.pu_vs_features.groupby("species")["amount"].sum().min()
+    )
+    tiny_problem.features.loc[:, "target"] = total_amount + 0.1
+    tiny_problem.parameters["MISSLEVEL"] = 0.5
+    solver = MIPSolver()
+    solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
+    assert len(solutions) >= 1

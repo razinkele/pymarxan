@@ -50,3 +50,52 @@ class TestSaveProject:
         assert reloaded.n_features == original.n_features
         assert len(reloaded.pu_vs_features) == len(original.pu_vs_features)
         assert reloaded.parameters["BLM"] == original.parameters["BLM"]
+
+
+def test_write_mvbest_applies_misslevel(tmp_path):
+    """write_mvbest should use MISSLEVEL for Target_Met column."""
+    import numpy as np
+
+    from pymarxan.io.writers import write_mvbest
+    from pymarxan.solvers.utils import build_solution
+
+    problem = load_project(DATA_DIR)
+    # MISSLEVEL=0.0 means all targets are effectively 0 -> all met
+    problem.parameters["MISSLEVEL"] = 0.0
+    selected = np.zeros(problem.n_planning_units, dtype=bool)
+    sol = build_solution(problem, selected, blm=0.0)
+
+    path = tmp_path / "mvbest.csv"
+    write_mvbest(problem, sol, path)
+    df = pd.read_csv(path)
+    assert all(df["Target_Met"]), "With MISSLEVEL=0.0, all targets should be met"
+
+
+def test_write_sum_uses_penalty_field(tmp_path):
+    """write_sum should use sol.penalty directly."""
+    import numpy as np
+
+    from pymarxan.io.writers import write_sum
+    from pymarxan.solvers.base import Solution
+
+    sol = Solution(
+        selected=np.array([True, False]),
+        cost=10.0,
+        boundary=5.0,
+        objective=25.0,  # 10 + 2*5 + 5 (penalty=5)
+        targets_met={1: False},
+        penalty=5.0,
+    )
+    path = tmp_path / "sum.csv"
+    write_sum([sol], path)
+    df = pd.read_csv(path)
+    assert df["Penalty"].iloc[0] == 5.0
+
+
+def test_io_exports_writers():
+    """io module should export write_mvbest, write_ssoln, write_sum."""
+    from pymarxan import io
+
+    assert hasattr(io, "write_mvbest")
+    assert hasattr(io, "write_ssoln")
+    assert hasattr(io, "write_sum")

@@ -153,6 +153,7 @@ def write_mvbest(
 
     pu_ids = problem.planning_units["id"].tolist()
     pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     shortfalls = compute_feature_shortfalls(problem, solution.selected, pu_index)
 
     rows = []
@@ -173,7 +174,7 @@ def write_mvbest(
                 amount_held += float(r["amount"])
 
         shortfall = shortfalls.get(fid, 0.0)
-        target_met = amount_held >= target
+        target_met = amount_held >= target * misslevel
 
         rows.append({
             "Feature_ID": fid,
@@ -240,7 +241,7 @@ def write_sum(solutions: list[Solution], path: str | Path) -> None:
     """
     rows = []
     for i, sol in enumerate(solutions, start=1):
-        penalty = max(0.0, sol.objective - sol.cost - sol.boundary)
+        penalty = sol.penalty
         shortfall = penalty  # total shortfall approximated from penalty
         rows.append({
             "Run": i,

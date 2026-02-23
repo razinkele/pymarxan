@@ -195,5 +195,6 @@ def build_solution(
         boundary=total_boundary,
         objective=objective,
         targets_met=targets_met,
+        penalty=penalty,
         metadata=metadata or {},
     )

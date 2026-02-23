@@ -82,3 +82,17 @@ class TestBuildSolution:
         # So objective should equal the penalty (which must be > 0)
         assert sol.cost == 0.0
         assert sol.objective > 0.0, "Objective must include SPF penalty"
+
+
+def test_build_solution_has_penalty_field(tiny_problem):
+    """build_solution should populate a penalty field on the Solution."""
+    # Select no PUs — targets are unmet, so penalty > 0
+    selected = np.zeros(tiny_problem.n_planning_units, dtype=bool)
+    sol = build_solution(tiny_problem, selected, blm=0.0)
+    assert hasattr(sol, "penalty")
+    assert sol.penalty > 0.0
+
+    # Select all PUs — targets should be met, penalty == 0
+    all_selected = np.ones(tiny_problem.n_planning_units, dtype=bool)
+    sol2 = build_solution(tiny_problem, all_selected, blm=0.0)
+    assert sol2.penalty == 0.0

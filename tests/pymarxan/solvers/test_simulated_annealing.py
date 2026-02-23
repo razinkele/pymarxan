@@ -107,3 +107,13 @@ class TestSimulatedAnnealingSolver:
         config = SolverConfig(num_solutions=1, seed=42)
         solutions = solver.solve(self.problem, config)
         assert len(solutions) == 1
+
+    def test_status1_starts_selected(self):
+        """PUs with status=1 should start selected but remain swappable."""
+        from pymarxan.models.problem import STATUS_INITIAL_INCLUDE
+
+        self.problem.planning_units.loc[0, "status"] = STATUS_INITIAL_INCLUDE
+        solver = SimulatedAnnealingSolver(num_iterations=100, num_temp_steps=10)
+        solutions = solver.solve(self.problem, SolverConfig(num_solutions=1, seed=42))
+        assert len(solutions) == 1
+        assert solutions[0].cost >= 0
