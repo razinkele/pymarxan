@@ -44,16 +44,26 @@ def fetch_wdpa(
         params["country"] = country_iso3
 
     url = f"{_WDPA_API}/protected_areas/search"
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
 
-    data = resp.json()
-    pa_list = data.get("protected_areas", [])
+    all_pa: list[dict] = []
+    page = 1
+    while True:
+        params["page"] = page
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        pa_list = data.get("protected_areas", [])
+        if not pa_list:
+            break
+        all_pa.extend(pa_list)
+        page += 1
+        if page > 100:  # Safety limit
+            break
 
     bounds_box = shapely_box(*bounds)
     rows = []
     geometries = []
-    for pa in pa_list:
+    for pa in all_pa:
         geojson = pa.get("geojson")
         if geojson is None:
             continue

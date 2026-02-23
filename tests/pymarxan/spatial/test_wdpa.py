@@ -140,10 +140,15 @@ class TestApplyWdpaStatus:
 class TestFetchWdpa:
     @patch("pymarxan.spatial.wdpa.requests.get")
     def test_fetch_returns_geodataframe(self, mock_get):
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = _SAMPLE_WDPA_RESPONSE
-        mock_get.return_value = resp
+        resp_page1 = MagicMock()
+        resp_page1.status_code = 200
+        resp_page1.json.return_value = _SAMPLE_WDPA_RESPONSE
+
+        resp_page2 = MagicMock()
+        resp_page2.status_code = 200
+        resp_page2.json.return_value = {"protected_areas": []}
+
+        mock_get.side_effect = [resp_page1, resp_page2]
 
         gdf = fetch_wdpa(bounds=(0, 0, 1, 1), api_token="test-token")
         assert isinstance(gdf, gpd.GeoDataFrame)
@@ -159,3 +164,39 @@ class TestFetchWdpa:
 
         with pytest.raises(Exception):
             fetch_wdpa(bounds=(0, 0, 1, 1))
+
+    @patch("pymarxan.spatial.wdpa.requests.get")
+    def test_fetch_paginates_multiple_pages(self, mock_get):
+        """fetch_wdpa should paginate through all API result pages."""
+        pa_page1 = {
+            "protected_areas": [{
+                "id": 1, "name": "Reserve A", "designation": "NP",
+                "iucn_category": "II",
+                "geojson": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [0.3, 0], [0.3, 0.3], [0, 0.3], [0, 0]]],
+                },
+            }]
+        }
+        pa_page2 = {
+            "protected_areas": [{
+                "id": 2, "name": "Reserve B", "designation": "NP",
+                "iucn_category": "III",
+                "geojson": {
+                    "type": "Polygon",
+                    "coordinates": [[[0.5, 0.5], [0.8, 0.5], [0.8, 0.8], [0.5, 0.8], [0.5, 0.5]]],
+                },
+            }]
+        }
+        pa_page3 = {"protected_areas": []}
+
+        resp1 = MagicMock(); resp1.json.return_value = pa_page1
+        resp2 = MagicMock(); resp2.json.return_value = pa_page2
+        resp3 = MagicMock(); resp3.json.return_value = pa_page3
+        mock_get.side_effect = [resp1, resp2, resp3]
+
+        gdf = fetch_wdpa(bounds=(0, 0, 1, 1), api_token="tok")
+        assert len(gdf) == 2
+        assert set(gdf["name"]) == {"Reserve A", "Reserve B"}
+        # Should have made 3 API calls (pages 1, 2, 3=empty)
+        assert mock_get.call_count == 3
