@@ -93,6 +93,28 @@ class TestWriteMvbest:
         assert feat_b["Amount_Held"] == pytest.approx(12.0)
         assert feat_b["Shortfall"] == pytest.approx(13.0)
 
+    def test_write_mvbest_respects_misslevel(self, tmp_path, simple_problem, solution_partial):
+        """With MISSLEVEL=0.4, Target_Met should reflect relaxed targets.
+
+        solution_partial selects PU 1+2: feat_a held=18, feat_b held=12.
+        Default MISSLEVEL=1.0: feat_b target=25, 12<25 => NOT met.
+        With MISSLEVEL=0.4: feat_b effective_target=10, 12>=10 => met.
+        """
+        # First write with default MISSLEVEL (1.0) — feat_b should NOT be met
+        path_default = tmp_path / "mvbest_default.csv"
+        write_mvbest(simple_problem, solution_partial, path_default)
+        df_default = read_mvbest(path_default)
+        feat_b_default = df_default[df_default["Feature_ID"] == 2].iloc[0]
+        assert feat_b_default["Target_Met"] is False or feat_b_default["Target_Met"] == 0
+
+        # Now write with MISSLEVEL=0.4 — feat_b should be met
+        simple_problem.parameters["MISSLEVEL"] = 0.4
+        path_relaxed = tmp_path / "mvbest_misslevel.csv"
+        write_mvbest(simple_problem, solution_partial, path_relaxed)
+        df_relaxed = read_mvbest(path_relaxed)
+        feat_b_relaxed = df_relaxed[df_relaxed["Feature_ID"] == 2].iloc[0]
+        assert feat_b_relaxed["Target_Met"] is True or feat_b_relaxed["Target_Met"] == 1
+
 
 class TestWriteSsoln:
     def test_correct_columns(self, tmp_path, simple_problem, solution_all_selected):
