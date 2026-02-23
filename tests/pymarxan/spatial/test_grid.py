@@ -78,6 +78,25 @@ class TestHexGrid:
             # Hexagons have 6 vertices (+ closing vertex = 7 coords)
             assert len(geom.exterior.coords) == 7
 
+    def test_hex_grid_tessellates(self):
+        """Hex cells must share edges with neighbors (no gaps)."""
+        grid = generate_planning_grid(
+            bounds=(0, 0, 10, 10), cell_size=2.0, grid_type="hexagonal",
+        )
+        assert len(grid) > 4, "Need enough hexes to test tessellation"
+
+        geoms = grid.geometry.values
+        found_shared_edge = False
+        for i in range(len(geoms)):
+            for j in range(i + 1, len(geoms)):
+                intersection = geoms[i].intersection(geoms[j])
+                if intersection.length > 1e-10:
+                    found_shared_edge = True
+                    break
+            if found_shared_edge:
+                break
+        assert found_shared_edge, "No hex pair shares an edge — tessellation is broken"
+
     def test_hex_grid_no_large_overlaps(self):
         gdf = generate_planning_grid(
             bounds=(0.0, 0.0, 1.0, 1.0),

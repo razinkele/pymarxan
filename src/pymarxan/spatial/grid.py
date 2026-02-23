@@ -93,17 +93,19 @@ def _generate_hex_cells(
     # Flat-top hexagon: width = cell_size, height = cell_size * sqrt(3)/2
     w = cell_size
     h = cell_size * math.sqrt(3) / 2
+    # Flat-top hex grids tessellate in columns, not rows
+    col_step = 3 * w / 4  # horizontal distance between column centers
     cells: list[Polygon] = []
-    row = 0
-    y = miny
-    while y < maxy - 1e-10:
-        x_offset = (w / 2) if row % 2 == 1 else 0.0
-        x = minx + x_offset
-        while x < maxx - 1e-10:
+    col = 0
+    x = minx
+    while x < maxx - 1e-10:
+        y_offset = (h / 2) if col % 2 == 1 else 0.0
+        y = miny + y_offset
+        while y < maxy - 1e-10:
             cells.append(_flat_top_hex(x, y, cell_size))
-            x += w
-        y += h
-        row += 1
+            y += h
+        x += col_step
+        col += 1
     return cells
 
 
