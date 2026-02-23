@@ -477,3 +477,40 @@ class TestDeltaWithMisslevel:
             f"MISSLEVEL=0.8 should produce lower penalty: "
             f"ml={obj_ml}, full={obj_full}"
         )
+
+
+# ------------------------------------------------------------------
+# 7. Delta vs full objective verification using tiny_problem fixture
+# ------------------------------------------------------------------
+
+
+def test_delta_matches_full_objective_for_removal(tiny_problem):
+    """Delta computation must match difference of full objective for removal."""
+    cache = ProblemCache.from_problem(tiny_problem)
+    selected = np.ones(tiny_problem.n_planning_units, dtype=bool)
+    held = cache.compute_held(selected)
+    total_cost = float(np.sum(cache.costs[selected]))
+    blm = 1.0
+    full_before = cache.compute_full_objective(selected, held, blm)
+    delta = cache.compute_delta_objective(0, selected, held, total_cost, blm)
+    selected_after = selected.copy()
+    selected_after[0] = False
+    new_held = cache.compute_held(selected_after)
+    full_after = cache.compute_full_objective(selected_after, new_held, blm)
+    assert delta == pytest.approx(full_after - full_before, abs=1e-6)
+
+
+def test_delta_matches_full_objective_for_addition(tiny_problem):
+    """Delta computation must match difference of full objective for addition."""
+    cache = ProblemCache.from_problem(tiny_problem)
+    selected = np.zeros(tiny_problem.n_planning_units, dtype=bool)
+    held = cache.compute_held(selected)
+    total_cost = 0.0
+    blm = 1.0
+    full_before = cache.compute_full_objective(selected, held, blm)
+    delta = cache.compute_delta_objective(0, selected, held, total_cost, blm)
+    selected_after = selected.copy()
+    selected_after[0] = True
+    new_held = cache.compute_held(selected_after)
+    full_after = cache.compute_full_objective(selected_after, new_held, blm)
+    assert delta == pytest.approx(full_after - full_before, abs=1e-6)
