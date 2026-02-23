@@ -156,6 +156,8 @@ class ScenarioSet:
                 modified.parameters[k] = v
 
         solutions = solver.solve(modified, config)
+        if not solutions:
+            raise RuntimeError(f"Solver returned no solutions for scenario '{name}'")
         best = min(solutions, key=lambda s: s.objective)
 
         params = dict(modified.parameters)

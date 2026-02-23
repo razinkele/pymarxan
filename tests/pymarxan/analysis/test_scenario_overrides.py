@@ -120,6 +120,20 @@ def _make_problem():
     )
 
 
+class TestRunWithOverridesInfeasible:
+    def test_run_with_overrides_handles_infeasible(self, tiny_problem):
+        """Should raise RuntimeError when solver returns empty solutions."""
+        from unittest.mock import MagicMock
+
+        ss = ScenarioSet()
+        mock_solver = MagicMock()
+        mock_solver.solve.return_value = []
+        with pytest.raises(RuntimeError, match="no solutions"):
+            ss.run_with_overrides(
+                "test", tiny_problem, mock_solver, overrides={}
+            )
+
+
 class TestRunWithOverrides:
     def test_run_creates_scenario(self):
         ss = ScenarioSet()
