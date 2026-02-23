@@ -70,6 +70,17 @@ def run_panel_server(
             )
             p.parameters["NUMTEMP"] = config_dict.get("num_temp", 10000)
 
+        # Sync solver-specific params (was in app.py _sync_solver_params)
+        if solver_type == "mip":
+            p.parameters["MIP_TIME_LIMIT"] = str(config_dict.get("mip_time_limit", 300))
+            p.parameters["MIP_GAP"] = str(config_dict.get("mip_gap", 0.0))
+        elif solver_type == "greedy":
+            p.parameters["HEURTYPE"] = str(config_dict.get("heurtype", 2))
+        elif solver_type == "iterative_improvement":
+            p.parameters["ITIMPTYPE"] = str(config_dict.get("itimptype", 0))
+        elif solver_type == "pipeline":
+            p.parameters["RUNMODE"] = str(config_dict.get("runmode", 0))
+
         config = SolverConfig(
             num_solutions=config_dict.get("num_solutions", 10),
             seed=config_dict.get("seed"),
@@ -87,9 +98,8 @@ def run_panel_server(
                 solutions = active.solve(p, config)
                 if solutions:
                     best = min(solutions, key=lambda s: s.objective)
-                    current_solution.set(best)
-                    all_solutions.set(solutions)
-                    progress.status = "done"
+                    progress.result_best = best
+                    progress.result_solutions = solutions
                     progress.best_objective = best.objective
                     met = sum(best.targets_met.values())
                     total = len(best.targets_met)
@@ -97,6 +107,7 @@ def run_panel_server(
                         f"Done! Cost: {best.cost:.2f}, "
                         f"Targets met: {met}/{total}"
                     )
+                    progress.status = "done"
                 else:
                     progress.status = "done"
                     progress.message = "Solver returned no solutions."
@@ -125,6 +136,18 @@ def run_panel_server(
             ),
             ui.p(progress.format_status(), class_="mt-2 text-muted small"),
         )
+
+    @reactive.effect
+    def _check_results():
+        """Transfer solver results from progress to reactive values on main thread."""
+        if progress.status in ("running", "idle"):
+            reactive.invalidate_later(0.5)
+            return
+        if progress.status == "done" and progress.result_best is not None:
+            current_solution.set(progress.result_best)
+            all_solutions.set(progress.result_solutions)
+            progress.result_best = None
+            progress.result_solutions = None
 
     @render.text
     def run_status():

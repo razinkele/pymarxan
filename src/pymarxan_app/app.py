@@ -185,37 +185,6 @@ def server(input: Inputs, output: Outputs, session: Session):
             return RunModePipeline()
         return MIPSolver()
 
-    @reactive.effect
-    def _sync_solver_params():
-        """Sync UI solver config values into problem.parameters."""
-        p = problem()
-        cfg = solver_config()
-        if p is None:
-            return
-        import copy
-        updated = copy.deepcopy(p)
-        st = cfg.get("solver_type", "mip")
-        if st == "mip":
-            updated.parameters["MIP_TIME_LIMIT"] = str(
-                cfg.get("mip_time_limit", 300)
-            )
-            updated.parameters["MIP_GAP"] = str(
-                cfg.get("mip_gap", 0.0)
-            )
-        elif st == "greedy":
-            updated.parameters["HEURTYPE"] = str(
-                cfg.get("heurtype", 2)
-            )
-        elif st == "iterative_improvement":
-            updated.parameters["ITIMPTYPE"] = str(
-                cfg.get("itimptype", 0)
-            )
-        elif st == "pipeline":
-            updated.parameters["RUNMODE"] = str(
-                cfg.get("runmode", 0)
-            )
-        problem.set(updated)
-
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,
     )
