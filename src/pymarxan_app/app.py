@@ -73,7 +73,9 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
 from pymarxan_shiny.modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
+from pymarxan_shiny.modules.spatial.wdpa_overlay import wdpa_overlay_server, wdpa_overlay_ui
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 app_ui = ui.page_navbar(
@@ -82,9 +84,11 @@ app_ui = ui.page_navbar(
         ui.layout_columns(
             upload_ui("upload"),
             grid_builder_ui("grid_gen"),
+            gadm_picker_ui("gadm"),
+            wdpa_overlay_ui("wdpa"),
             feature_table_ui("features"),
             spatial_grid_ui("pu_grid"),
-            col_widths=[12, 12, 12, 12],
+            col_widths=[12, 12, 12, 12, 12, 12],
         ),
     ),
     ui.nav_panel(
@@ -146,6 +150,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     zone_problem: reactive.Value = reactive.value(None)
     connectivity_matrix: reactive.Value = reactive.value(None)
     connectivity_pu_ids: reactive.Value = reactive.value(None)
+    gadm_boundary: reactive.Value = reactive.value(None)
 
     upload_server("upload", problem=problem)
     solver_picker_server("solver", solver_config=solver_config)
@@ -239,8 +244,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     # Convergence plot
     convergence_server("convergence", all_solutions=all_solutions)
 
-    # Grid builder
+    # Spatial modules
     grid_builder_server("grid_gen", problem=problem)
+    gadm_picker_server("gadm", boundary=gadm_boundary)
+    wdpa_overlay_server("wdpa", problem=problem)
 
     # Phase 9 modules
     feature_table_server("features", problem=problem)
