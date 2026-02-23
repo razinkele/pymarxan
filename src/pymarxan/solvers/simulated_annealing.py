@@ -6,6 +6,7 @@ import math
 import numpy as np
 
 from pymarxan.models.problem import (
+    STATUS_INITIAL_INCLUDE,
     STATUS_LOCKED_IN,
     STATUS_LOCKED_OUT,
     ConservationProblem,
@@ -66,6 +67,7 @@ class SimulatedAnnealingSolver(Solver):
         # Identify locked and swappable PUs from cached statuses
         locked_in: list[int] = []
         locked_out: list[int] = []
+        initial_include: list[int] = []
         swappable: list[int] = []
         for i in range(n_pu):
             s = int(cache.statuses[i])
@@ -73,6 +75,9 @@ class SimulatedAnnealingSolver(Solver):
                 locked_in.append(i)
             elif s == STATUS_LOCKED_OUT:
                 locked_out.append(i)
+            elif s == STATUS_INITIAL_INCLUDE:
+                initial_include.append(i)
+                swappable.append(i)  # swappable!
             else:
                 swappable.append(i)
 
@@ -113,9 +118,11 @@ class SimulatedAnnealingSolver(Solver):
             selected = np.zeros(n_pu, dtype=bool)
             for idx in locked_in:
                 selected[idx] = True
+            for idx in initial_include:
+                selected[idx] = True
             # Randomly select ~initial_prop of swappable PUs
             for idx in swappable:
-                if rng.random() < initial_prop:
+                if idx not in initial_include and rng.random() < initial_prop:
                     selected[idx] = True
 
             # Initialize incremental state

@@ -10,7 +10,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import check_targets, compute_boundary
+from pymarxan.solvers.utils import build_solution
 
 
 class MIPSolver(Solver):
@@ -45,7 +45,6 @@ class MIPSolver(Solver):
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
 
         # Build the LP model
         model = pulp.LpProblem("MarxanMIP", pulp.LpMinimize)
@@ -108,9 +107,10 @@ class MIPSolver(Solver):
         model += cost_expr + blm * boundary_expr, "objective"
 
         # Constraints: feature targets
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
         for _, feat_row in problem.features.iterrows():
             fid = int(feat_row["id"])
-            target = float(feat_row["target"])
+            target = float(feat_row["target"]) * misslevel
             feat_data = problem.pu_vs_features[
                 problem.pu_vs_features["species"] == fid
             ]
@@ -129,31 +129,19 @@ class MIPSolver(Solver):
         )
         model.solve(solver)
 
+        if model.status != pulp.constants.LpStatusOptimal:
+            return []
+
         # Extract solution
         selected = np.array(
-            [bool(round(pulp.value(x[pid]))) for pid in pu_ids], dtype=bool
+            [bool(round(pulp.value(x[pid]) or 0.0)) for pid in pu_ids],
+            dtype=bool,
         )
 
-        # Compute actual cost
-        costs = np.asarray(problem.planning_units["cost"].values)
-        total_cost = float(np.sum(costs[selected]))
-
-        # Compute actual boundary
-        total_boundary = compute_boundary(problem, selected, pu_index)
-
-        # Check which targets are met
-        targets_met = check_targets(problem, selected, pu_index)
-
-        # Compute objective value
-        objective = total_cost + blm * total_boundary
-
-        sol = Solution(
-            selected=selected,
-            cost=total_cost,
-            boundary=total_boundary,
-            objective=objective,
-            targets_met=targets_met,
+        sol = build_solution(
+            problem,
+            selected,
+            blm,
             metadata={"solver": self.name(), "status": pulp.LpStatus[model.status]},
         )
-
         return [sol] * config.num_solutions

@@ -15,9 +15,12 @@ from pymarxan.io.writers import (
     save_project,
     write_bound,
     write_input_dat,
+    write_mvbest,
     write_pu,
     write_puvspr,
     write_spec,
+    write_ssoln,
+    write_sum,
 )
 
 __all__ = [
@@ -33,7 +36,10 @@ __all__ = [
     "save_project",
     "write_bound",
     "write_input_dat",
+    "write_mvbest",
     "write_pu",
     "write_puvspr",
     "write_spec",
+    "write_ssoln",
+    "write_sum",
 ]

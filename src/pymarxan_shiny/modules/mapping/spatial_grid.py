@@ -91,15 +91,15 @@ def spatial_grid_server(
 
             return create_grid_map(grid, colors)
 
-    @render.text
-    def map_summary():
-        p = problem()
-        if p is None:
-            return "Load a project to see the planning unit map."
+        @render.text
+        def map_summary():
+            p = problem()
+            if p is None:
+                return "Load a project to see the planning unit map."
 
-        n_pu = len(p.planning_units)
-        color_mode = input.color_by()
-        return f"{n_pu} planning units — colored by {color_mode}"
+            n_pu = len(p.planning_units)
+            color_mode = input.color_by()
+            return f"{n_pu} planning units — colored by {color_mode}"
 
     if not _HAS_IPYLEAFLET:
 

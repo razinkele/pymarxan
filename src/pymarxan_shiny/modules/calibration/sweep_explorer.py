@@ -51,22 +51,25 @@ def sweep_explorer_server(
         if p is None:
             ui.notification_show("Load a project first!", type="error")
             return
-        param_name = input.sweep_param()
-        min_val = input.sweep_min()
-        max_val = input.sweep_max()
-        steps = int(input.sweep_steps())
+        try:
+            param_name = input.sweep_param()
+            min_val = input.sweep_min()
+            max_val = input.sweep_max()
+            steps = int(input.sweep_steps())
 
-        import numpy as np
+            import numpy as np
 
-        values = np.linspace(min_val, max_val, steps).tolist()
-        config = SweepConfig(
-            param_dicts=[{param_name: v} for v in values],
-        )
-        result = run_sweep(p, solver(), config)
-        sweep_result.set(result)
-        ui.notification_show(
-            f"Sweep complete: {len(result.solutions)} points", type="message"
-        )
+            values = np.linspace(min_val, max_val, steps).tolist()
+            config = SweepConfig(
+                param_dicts=[{param_name: v} for v in values],
+            )
+            result = run_sweep(p, solver(), config)
+            sweep_result.set(result)
+            ui.notification_show(
+                f"Sweep complete: {len(result.solutions)} points", type="message"
+            )
+        except Exception as e:
+            ui.notification_show(f"Sweep error: {e}", type="error")
 
     @render.data_frame
     def sweep_results_table():

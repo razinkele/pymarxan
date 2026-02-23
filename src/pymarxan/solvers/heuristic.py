@@ -172,6 +172,10 @@ class HeuristicSolver(Solver):
         locked_out = statuses == 3
         selected[locked_in] = True
 
+        # Status 1: initial include — start selected but swappable
+        initial_include = statuses == 1
+        selected[initial_include] = True
+
         # Build feature contribution lookup: pu_index -> {fid: amount}
         pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
         contributions: dict[int, dict[int, float]] = {}
@@ -189,15 +193,22 @@ class HeuristicSolver(Solver):
             for fid, amt in amt_val.items():
                 total_available[fid] = total_available.get(fid, 0.0) + amt
 
-        # Track remaining need per feature
+        # Track remaining need per feature (with MISSLEVEL)
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
         remaining: dict[int, float] = {}
         for _, row in problem.features.iterrows():
             fid = int(row["id"])
-            target = float(row["target"])
+            target = float(row["target"]) * misslevel
             remaining[fid] = target
 
         # Subtract locked-in contributions
-        for idx in np.where(selected)[0]:
+        for idx in np.where(locked_in)[0]:
+            for fid, amount in contributions.get(int(idx), {}).items():
+                if fid in remaining:
+                    remaining[fid] -= amount
+
+        # Subtract initial-include contributions
+        for idx in np.where(initial_include & ~locked_in)[0]:
             for fid, amount in contributions.get(int(idx), {}).items():
                 if fid in remaining:
                     remaining[fid] -= amount
@@ -273,6 +284,7 @@ class HeuristicSolver(Solver):
             boundary=boundary_val,
             objective=objective,
             targets_met=targets_met,
+            penalty=penalty,
             metadata={"solver": "greedy", "heurtype": effective_heurtype},
         )
 

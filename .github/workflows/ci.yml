@@ -38,5 +38,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[all]" networkx
-      - run: pytest tests/ -v --cov --cov-report=term-missing
+      - run: pip install -e ".[all]"
+      - run: pytest tests/ -v --cov --cov-report=term-missing --cov-fail-under=75

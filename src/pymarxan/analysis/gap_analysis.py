@@ -25,13 +25,14 @@ class GapResult:
     target_met: dict[int, bool]
 
     def to_dataframe(self) -> pd.DataFrame:
+        fid_to_name = dict(zip(self.feature_ids, self.feature_names))
         rows = []
         for fid in self.feature_ids:
             total = self.total_amount[fid]
             protected = self.protected_amount[fid]
             rows.append({
                 "feature_id": fid,
-                "feature_name": self.feature_names[self.feature_ids.index(fid)],
+                "feature_name": fid_to_name[fid],
                 "target": self.targets[fid],
                 "total_amount": total,
                 "protected_amount": protected,

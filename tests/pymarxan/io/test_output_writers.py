@@ -40,6 +40,7 @@ def solution_all_selected():
         boundary=5.0,
         objective=70.0,
         targets_met={1: True, 2: True},
+        penalty=5.0,
     )
 
 

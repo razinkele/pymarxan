@@ -19,7 +19,8 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import build_solution, compute_objective
+from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.utils import build_solution
 
 _VALID_ITIMPTYPES = frozenset(range(4))
 
@@ -109,12 +110,16 @@ class IterativeImprovementSolver(Solver):
 
         if itimptype == 0:
             return solution
+
+        cache = ProblemCache.from_problem(problem)
+        blm = float(problem.parameters.get("BLM", 0.0))
+
         if itimptype == 1:
-            return self._removal_pass_loop(problem, solution)
+            return self._removal_pass_loop(problem, cache, blm, solution)
         if itimptype == 2:
-            return self._two_step(problem, solution)
+            return self._two_step(problem, cache, blm, solution)
         if itimptype == 3:
-            return self._swap_pass_loop(problem, solution)
+            return self._swap_pass_loop(problem, cache, blm, solution)
 
         raise ValueError(  # pragma: no cover
             f"Invalid itimptype {itimptype!r}"
@@ -127,17 +132,20 @@ class IterativeImprovementSolver(Solver):
     @staticmethod
     def _locked_sets(
         problem: ConservationProblem,
-    ) -> tuple[set[int], set[int]]:
-        """Return (locked_in_indices, locked_out_indices)."""
+    ) -> tuple[set[int], set[int], set[int]]:
+        """Return (locked_in_indices, locked_out_indices, initial_include_indices)."""
         locked_in: set[int] = set()
         locked_out: set[int] = set()
+        initial_include: set[int] = set()
         statuses = problem.planning_units["status"].values.astype(int)
         for i, s in enumerate(statuses):
             if s == 2:
                 locked_in.add(i)
             elif s == 3:
                 locked_out.add(i)
-        return locked_in, locked_out
+            elif s == 1:
+                initial_include.add(i)
+        return locked_in, locked_out, initial_include
 
     # ------------------------------------------------------------------
     # ITIMPTYPE 1 -- removal pass (repeat until stable)
@@ -146,12 +154,14 @@ class IterativeImprovementSolver(Solver):
     def _removal_pass_loop(
         self,
         problem: ConservationProblem,
+        cache: ProblemCache,
+        blm: float,
         solution: Solution,
     ) -> Solution:
         """Repeatedly run removal passes until no improvement found."""
         current = solution
         while True:
-            improved = self._removal_pass(problem, current)
+            improved = self._removal_pass(problem, cache, blm, current)
             if improved.objective >= current.objective:
                 break
             current = improved
@@ -160,36 +170,36 @@ class IterativeImprovementSolver(Solver):
     def _removal_pass(
         self,
         problem: ConservationProblem,
+        cache: ProblemCache,
+        blm: float,
         solution: Solution,
     ) -> Solution:
-        """Single removal pass: try removing each selected PU."""
-        blm = float(problem.parameters.get("BLM", 0.0))
-        pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        locked_in, _ = self._locked_sets(problem)
+        """Single removal pass: try removing each selected PU.
+
+        Uses O(degree) delta computation instead of O(n) full recomputation.
+        """
+        locked_in, _, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
-        current_obj = compute_objective(problem, selected, pu_index, blm)
+        held = cache.compute_held(selected)
+        total_cost = float(np.sum(cache.costs[selected]))
 
         improved = True
         while improved:
             improved = False
             for i in range(len(selected)):
-                if not selected[i]:
-                    continue
-                if i in locked_in:
+                if not selected[i] or i in locked_in:
                     continue
 
-                # Try removing this PU
-                selected[i] = False
-                new_obj = compute_objective(
-                    problem, selected, pu_index, blm
+                delta = cache.compute_delta_objective(
+                    i, selected, held, total_cost, blm
                 )
-                if new_obj < current_obj:
-                    current_obj = new_obj
+                if delta < 0:
+                    # Removing this PU improves the objective
+                    selected[i] = False
+                    held -= cache.pu_feat_matrix[i]
+                    total_cost -= cache.costs[i]
                     improved = True
-                else:
-                    selected[i] = True  # revert
 
         return build_solution(
             problem, selected, blm, metadata={"solver": self.name()}
@@ -202,46 +212,48 @@ class IterativeImprovementSolver(Solver):
     def _two_step(
         self,
         problem: ConservationProblem,
+        cache: ProblemCache,
+        blm: float,
         solution: Solution,
     ) -> Solution:
         """Removal pass followed by addition pass."""
-        after_removal = self._removal_pass(problem, solution)
-        after_addition = self._addition_pass(problem, after_removal)
+        after_removal = self._removal_pass(problem, cache, blm, solution)
+        after_addition = self._addition_pass(problem, cache, blm, after_removal)
         return after_addition
 
     def _addition_pass(
         self,
         problem: ConservationProblem,
+        cache: ProblemCache,
+        blm: float,
         solution: Solution,
     ) -> Solution:
-        """Try adding each unselected PU; accept if objective decreases."""
-        blm = float(problem.parameters.get("BLM", 0.0))
-        pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        _, locked_out = self._locked_sets(problem)
+        """Try adding each unselected PU; accept if objective decreases.
+
+        Uses O(degree) delta computation instead of O(n) full recomputation.
+        """
+        _, locked_out, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
-        current_obj = compute_objective(problem, selected, pu_index, blm)
+        held = cache.compute_held(selected)
+        total_cost = float(np.sum(cache.costs[selected]))
 
         improved = True
         while improved:
             improved = False
             for i in range(len(selected)):
-                if selected[i]:
-                    continue
-                if i in locked_out:
+                if selected[i] or i in locked_out:
                     continue
 
-                # Try adding this PU
-                selected[i] = True
-                new_obj = compute_objective(
-                    problem, selected, pu_index, blm
+                delta = cache.compute_delta_objective(
+                    i, selected, held, total_cost, blm
                 )
-                if new_obj < current_obj:
-                    current_obj = new_obj
+                if delta < 0:
+                    # Adding this PU improves the objective
+                    selected[i] = True
+                    held += cache.pu_feat_matrix[i]
+                    total_cost += cache.costs[i]
                     improved = True
-                else:
-                    selected[i] = False  # revert
 
         return build_solution(
             problem, selected, blm, metadata={"solver": self.name()}
@@ -254,21 +266,25 @@ class IterativeImprovementSolver(Solver):
     def _swap_pass_loop(
         self,
         problem: ConservationProblem,
+        cache: ProblemCache,
+        blm: float,
         solution: Solution,
     ) -> Solution:
-        """Try pairwise swaps until no improvement found."""
-        blm = float(problem.parameters.get("BLM", 0.0))
-        pu_ids = problem.planning_units["id"].tolist()
-        pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-        locked_in, locked_out = self._locked_sets(problem)
+        """Try pairwise swaps until no improvement found.
+
+        Uses compute_full_objective from cache (two PUs change at once,
+        so delta computation is not directly applicable).
+        """
+        locked_in, locked_out, _ = self._locked_sets(problem)
 
         selected = solution.selected.copy()
-        current_obj = compute_objective(problem, selected, pu_index, blm)
+        held = cache.compute_held(selected)
+        total_cost = float(np.sum(cache.costs[selected]))
+        current_obj = cache.compute_full_objective(selected, held, blm)
 
         improved = True
         while improved:
             improved = False
-            # Indices of selected (removable) and unselected (addable) PUs
             removable = [
                 i for i in range(len(selected))
                 if selected[i] and i not in locked_in
@@ -280,13 +296,16 @@ class IterativeImprovementSolver(Solver):
 
             for r in removable:
                 for a in addable:
-                    # Try swapping: remove r, add a
+                    # Try swap: remove r, add a
                     selected[r] = False
                     selected[a] = True
-                    new_obj = compute_objective(
-                        problem, selected, pu_index, blm
-                    )
+                    new_held = held - cache.pu_feat_matrix[r] + cache.pu_feat_matrix[a]
+                    new_cost = total_cost - cache.costs[r] + cache.costs[a]
+                    new_obj = cache.compute_full_objective(selected, new_held, blm)
+
                     if new_obj < current_obj:
+                        held = new_held
+                        total_cost = new_cost
                         current_obj = new_obj
                         improved = True
                         break  # restart scan with new selection

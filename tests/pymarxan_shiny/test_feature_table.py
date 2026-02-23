@@ -47,3 +47,18 @@ def test_validate_readonly_column():
     """Edits to id or name columns are rejected."""
     assert validate_feature_edit("id", "999") is None
     assert validate_feature_edit("name", "new_name") is None
+
+
+def test_validate_feature_edit_accepts_valid():
+    """Comprehensive validation: valid values accepted, invalid rejected."""
+    assert validate_feature_edit("target", "5.0") == 5.0
+    assert validate_feature_edit("spf", "2.5") == 2.5
+    assert validate_feature_edit("id", "5.0") is None
+    assert validate_feature_edit("target", "-1") is None
+    assert validate_feature_edit("target", "abc") is None
+
+
+def test_feature_table_module_is_callable():
+    """Both UI and server functions are importable and callable."""
+    assert callable(feature_table_server)
+    assert callable(feature_table_ui)
