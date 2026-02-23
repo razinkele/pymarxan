@@ -1,6 +1,8 @@
 """Feature table editor Shiny module — editable target and SPF values."""
 from __future__ import annotations
 
+import copy
+
 from shiny import module, reactive, render, ui
 
 _COLUMN_ORDER = ["id", "name", "target", "spf"]
@@ -64,7 +66,8 @@ def feature_table_server(
         if p is None:
             return
         df = feature_grid.data_view()
-        p.features["target"] = df["target"].values
-        p.features["spf"] = df["spf"].values
-        problem.set(p)
+        updated = copy.deepcopy(p)
+        updated.features["target"] = df["target"].values
+        updated.features["spf"] = df["spf"].values
+        problem.set(updated)
         ui.notification_show("Feature targets saved.", type="message")
