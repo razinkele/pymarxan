@@ -10,3 +10,4 @@ docs/api/
 htmlcov/
 .coverage
 .claude/
+.worktrees/
