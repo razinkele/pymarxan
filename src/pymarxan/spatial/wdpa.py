@@ -105,6 +105,10 @@ def apply_wdpa_status(
     result = copy.deepcopy(problem)
     pu_gdf = result.planning_units
 
+    # Reproject WDPA to PU CRS if they differ
+    if wdpa.crs is not None and pu_gdf.crs is not None and wdpa.crs != pu_gdf.crs:
+        wdpa = wdpa.to_crs(pu_gdf.crs)
+
     wdpa_union = wdpa.geometry.union_all()
 
     new_statuses = pu_gdf["status"].values.copy()

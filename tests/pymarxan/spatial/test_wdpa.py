@@ -100,6 +100,43 @@ class TestApplyWdpaStatus:
         assert all(result.planning_units["status"] == STATUS_INITIAL_INCLUDE)
 
 
+    def test_apply_wdpa_status_reprojects_crs(self):
+        """apply_wdpa_status must reproject WDPA to PU CRS before intersection."""
+        # PUs in a projected CRS (EPSG:32610 — UTM zone 10N)
+        pu_gdf = gpd.GeoDataFrame(
+            {"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]},
+            geometry=[
+                box(500000, 5000000, 501000, 5001000),
+                box(501000, 5000000, 502000, 5001000),
+            ],
+            crs="EPSG:32610",
+        )
+        problem = ConservationProblem(
+            planning_units=pu_gdf,
+            features=pd.DataFrame(
+                {"id": [1], "name": ["f"], "target": [1.0], "spf": [1.0]}
+            ),
+            pu_vs_features=pd.DataFrame(
+                {"species": [1], "pu": [1], "amount": [1.0]}
+            ),
+        )
+
+        # WDPA polygon covering PU 1, but in EPSG:4326
+        pu1_4326 = gpd.GeoDataFrame(
+            geometry=[box(500000, 5000000, 501000, 5001000)],
+            crs="EPSG:32610",
+        ).to_crs("EPSG:4326")
+        wdpa = gpd.GeoDataFrame(
+            {"name": ["PA1"], "desig": ["NP"], "iucn_cat": ["II"]},
+            geometry=pu1_4326.geometry.values,
+            crs="EPSG:4326",
+        )
+
+        result = apply_wdpa_status(problem, wdpa, overlap_threshold=0.5)
+        assert result.planning_units.iloc[0]["status"] == 2
+        assert result.planning_units.iloc[1]["status"] == 0
+
+
 class TestFetchWdpa:
     @patch("pymarxan.spatial.wdpa.requests.get")
     def test_fetch_returns_geodataframe(self, mock_get):
