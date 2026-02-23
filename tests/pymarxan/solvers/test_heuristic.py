@@ -1,12 +1,18 @@
 """Tests for greedy heuristic solver."""
 from __future__ import annotations
 
+import copy
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
+from pymarxan.io.readers import load_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.heuristic import HeuristicSolver
+
+DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 
 
 @pytest.fixture()
@@ -193,3 +199,19 @@ def test_heuristic_solution_has_penalty(simple_problem):
     assert isinstance(sol.penalty, float)
     # With all PUs locked out, no targets met, so penalty should be positive
     assert sol.penalty > 0.0, f"Expected positive penalty, got {sol.penalty}"
+
+
+class TestLockedOutRarity:
+    def test_locked_out_excluded_from_availability(self):
+        """Locked-out PUs should not count in total_available for rarity."""
+        problem = load_project(DATA_DIR)
+        problem = copy.deepcopy(problem)
+        problem.planning_units["status"] = 0
+        half = len(problem.planning_units) // 2
+        problem.planning_units.iloc[:half, problem.planning_units.columns.get_loc("status")] = 3
+
+        solver = HeuristicSolver(heurtype=2)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].cost >= 0

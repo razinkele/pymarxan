@@ -188,8 +188,11 @@ class HeuristicSolver(Solver):
                 contributions.setdefault(idx, {})[fid] = amount
 
         # Total available amount per feature (for rarity / irreplaceability)
+        # Exclude locked-out PUs from availability calculation
         total_available: dict[int, float] = {}
-        for fid_val, amt_val in contributions.items():
+        for idx_val, amt_val in contributions.items():
+            if locked_out[idx_val]:
+                continue
             for fid, amt in amt_val.items():
                 total_available[fid] = total_available.get(fid, 0.0) + amt
 
