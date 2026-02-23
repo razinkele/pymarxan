@@ -62,7 +62,7 @@ class ZoneSASolver(Solver):
         n_pu = len(pu_ids)
         pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
         zone_ids_list = sorted(problem.zone_ids)
-        zone_options = np.array([0] + zone_ids_list, dtype=int)
+        zone_options = np.array(zone_ids_list, dtype=int)
         n_zone_options = len(zone_options)
 
         locked: dict[int, int] = {}
