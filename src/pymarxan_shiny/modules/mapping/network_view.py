@@ -17,6 +17,8 @@ try:
 except ImportError:
     _HAS_IPYLEAFLET = False
 
+MAX_EDGES = 5000
+
 
 def metric_color(normalized: float) -> str:
     """Map a 0-1 normalized metric to a yellow-to-purple hex color.
@@ -129,12 +131,15 @@ def network_view_server(
                 m = create_grid_map(grid, colors)
                 centroids = compute_centroids(grid)
 
-            # Add polyline edges
+            # Add polyline edges (capped to prevent browser freeze)
             n = min(matrix.shape[0], n_pu)
+            edge_count = 0
             for i in range(n):
                 for j in range(n):
                     weight = float(matrix[i, j])
                     if weight > threshold and i != j:
+                        if edge_count >= MAX_EDGES:
+                            break
                         line = ipyleaflet.Polyline(
                             locations=[centroids[i], centroids[j]],
                             color="#3498db",
@@ -142,6 +147,9 @@ def network_view_server(
                             weight=2,
                         )
                         m.add(line)
+                        edge_count += 1
+                if edge_count >= MAX_EDGES:
+                    break
 
             return m
 
