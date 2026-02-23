@@ -142,22 +142,23 @@ class ConservationProblem:
                 f"pu_vs_features missing columns: {sorted(missing_puvspr)}"
             )
 
-        # --- Cross-reference IDs ---
-        puvspr_pu_ids = set(self.pu_vs_features["pu"])
-        unknown_pus = puvspr_pu_ids - self.pu_ids
-        if unknown_pus:
-            errors.append(
-                f"pu_vs_features references planning unit IDs not in "
-                f"planning_units: {sorted(unknown_pus)}"
-            )
+        # --- Cross-reference IDs (only if columns exist) ---
+        if not missing_puvspr:
+            puvspr_pu_ids = set(self.pu_vs_features["pu"])
+            unknown_pus = puvspr_pu_ids - self.pu_ids
+            if unknown_pus:
+                errors.append(
+                    f"pu_vs_features references planning unit IDs not in "
+                    f"planning_units: {sorted(unknown_pus)}"
+                )
 
-        puvspr_species_ids = set(self.pu_vs_features["species"])
-        unknown_features = puvspr_species_ids - self.feature_ids
-        if unknown_features:
-            errors.append(
-                f"pu_vs_features references feature IDs not in "
-                f"features: {sorted(unknown_features)}"
-            )
+            puvspr_species_ids = set(self.pu_vs_features["species"])
+            unknown_features = puvspr_species_ids - self.feature_ids
+            if unknown_features:
+                errors.append(
+                    f"pu_vs_features references feature IDs not in "
+                    f"features: {sorted(unknown_features)}"
+                )
 
         # --- Boundary columns ---
         if self.boundary is not None:
