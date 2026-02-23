@@ -115,13 +115,15 @@ class RunModePipeline(Solver):
         if runmode == 2:
             # SA then iterative improvement
             sa_sol = sa_cls().solve(problem, config)[0]
-            improved: Solution = ii_cls().improve(problem, sa_sol)
+            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
+            improved: Solution = ii_cls(itimptype=itimptype).improve(problem, sa_sol)
             return improved
 
         if runmode == 3:
             # Heuristic then iterative improvement
             heur_sol = heuristic_cls().solve(problem, config)[0]
-            improved = ii_cls().improve(problem, heur_sol)
+            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
+            improved = ii_cls(itimptype=itimptype).improve(problem, heur_sol)
             return improved
 
         if runmode == 4:
@@ -140,10 +142,12 @@ class RunModePipeline(Solver):
                 if heur_sol.objective <= sa_sol.objective
                 else sa_sol
             )
-            improved = ii_cls().improve(problem, best)
+            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
+            improved = ii_cls(itimptype=itimptype).improve(problem, best)
             return improved
 
         # runmode == 6
         # Iterative improvement only (from all-selected)
-        ii_sols: list[Solution] = ii_cls().solve(problem, config)
+        itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
+        ii_sols: list[Solution] = ii_cls(itimptype=itimptype).solve(problem, config)
         return ii_sols[0]
