@@ -27,7 +27,9 @@ def compute_irreplaceability(
         amount = float(row["amount"])
         pu_contributions[pid][fid] = amount
 
-    n_features = problem.n_features
+    n_positive_target = sum(
+        1 for _, r in problem.features.iterrows() if float(r.get("target", 0.0)) > 0
+    )
     scores: dict[int, float] = {}
 
     for pid in pu_ids:
@@ -47,6 +49,6 @@ def compute_irreplaceability(
             if remaining < target:
                 critical_count += 1
 
-        scores[pid] = critical_count / n_features if n_features > 0 else 0.0
+        scores[pid] = critical_count / n_positive_target if n_positive_target > 0 else 0.0
 
     return scores
