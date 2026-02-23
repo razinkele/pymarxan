@@ -35,3 +35,9 @@ def test_comparison_color_b_only():
 def test_comparison_color_neither():
     """Neither -> gray."""
     assert comparison_color(False, False) == "#bdc3c7"
+
+
+def test_comparison_map_ui_has_output_widget():
+    """UI should contain an output_widget for the map."""
+    html = str(comparison_map_ui("test_cm"))
+    assert "ipywidget" in html.lower()

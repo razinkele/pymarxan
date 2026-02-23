@@ -33,3 +33,9 @@ def test_status_color_mapping():
     assert status_color(3) != status_color(0)  # locked-out vs available
     # Unknown status should not crash
     assert isinstance(status_color(99), str)
+
+
+def test_spatial_grid_ui_has_output_widget():
+    """UI should contain an output_widget for the map."""
+    html = str(spatial_grid_ui("test_sg"))
+    assert "ipywidget" in html.lower()

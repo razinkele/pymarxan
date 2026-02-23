@@ -30,3 +30,9 @@ def test_frequency_color_midpoint():
     """Midpoint value produces intermediate color."""
     mid = frequency_color(0.5)
     assert isinstance(mid, str) and mid.startswith("#")
+
+
+def test_frequency_map_ui_has_output_widget():
+    """UI should contain an output_widget for the map."""
+    html = str(frequency_map_ui("test_fm"))
+    assert "ipywidget" in html.lower()
