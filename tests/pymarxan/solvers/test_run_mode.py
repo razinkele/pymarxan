@@ -43,7 +43,7 @@ class TestSolverInterface:
 
     def test_supports_zones(self):
         solver = RunModePipeline(runmode=0)
-        assert solver.supports_zones() is False
+        assert solver.supports_zones() is True
 
 
 # ---------------------------------------------------------------------------
@@ -231,3 +231,72 @@ class TestRunmode4:
         config = SolverConfig(num_solutions=3, seed=42)
         solutions = solver.solve(problem, config)
         assert len(solutions) == 3
+
+
+# ---------------------------------------------------------------------------
+# Zone Pipeline Tests
+# ---------------------------------------------------------------------------
+
+ZONE_DATA_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
+
+
+@pytest.fixture()
+def zone_problem():
+    """Load the zone test problem with fast SA settings."""
+    from pymarxan.zones.readers import load_zone_project
+
+    prob = load_zone_project(ZONE_DATA_DIR)
+    prob.parameters["NUMITNS"] = 1_000
+    prob.parameters["NUMTEMP"] = 50
+    prob.parameters.pop("RUNMODE", None)
+    return prob
+
+
+class TestZoneRunModePipeline:
+    """Test RunModePipeline dispatches to zone solvers for ZonalProblem."""
+
+    def test_runmode_0_zone_sa(self, zone_problem):
+        solver = RunModePipeline(runmode=0)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(zone_problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
+    def test_runmode_1_zone_heuristic(self, zone_problem):
+        solver = RunModePipeline(runmode=1)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(zone_problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
+    def test_runmode_2_zone_sa_then_ii(self, zone_problem):
+        zone_problem.parameters["ITIMPTYPE"] = 1
+        solver = RunModePipeline(runmode=2)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(zone_problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
+    def test_runmode_3_zone_heuristic_then_ii(self, zone_problem):
+        zone_problem.parameters["ITIMPTYPE"] = 1
+        solver = RunModePipeline(runmode=3)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(zone_problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
+    def test_runmode_6_zone_ii_only(self, zone_problem):
+        zone_problem.parameters["ITIMPTYPE"] = 1
+        solver = RunModePipeline(runmode=6)
+        config = SolverConfig(num_solutions=1, seed=42)
+        solutions = solver.solve(zone_problem, config)
+        assert len(solutions) == 1
+        assert solutions[0].zone_assignment is not None
+
+    def test_zone_values_valid(self, zone_problem):
+        solver = RunModePipeline(runmode=0)
+        config = SolverConfig(num_solutions=1, seed=42)
+        sol = solver.solve(zone_problem, config)[0]
+        valid_zones = {0} | zone_problem.zone_ids
+        for z in sol.zone_assignment:
+            assert int(z) in valid_zones
