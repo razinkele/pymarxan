@@ -199,7 +199,7 @@ def apply_cost_from_raster(
             pu_id = int(pus["id"].iloc[idx])
             try:
                 out_image, _ = rasterio_mask(
-                    src, [geom], crop=True, filled=True, band_indexes=[band]
+                    src, [geom], crop=True, filled=True, indexes=[band]
                 )
             except ValueError:
                 # Geometry doesn't overlap raster

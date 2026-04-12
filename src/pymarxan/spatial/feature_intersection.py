@@ -133,7 +133,7 @@ def intersect_raster_features(
                 pu_id = int(pus["id"].iloc[idx])
                 try:
                     out_image, _ = rasterio_mask(
-                        src, [geom], crop=True, filled=True, band_indexes=[1]
+                        src, [geom], crop=True, filled=True, indexes=[1]
                     )
                 except ValueError:
                     continue
