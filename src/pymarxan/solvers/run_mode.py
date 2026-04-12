@@ -40,7 +40,7 @@ class RunModePipeline(Solver):
         return "run_mode_pipeline"
 
     def supports_zones(self) -> bool:
-        return False
+        return True
 
     def solve(
         self,
@@ -67,6 +67,23 @@ class RunModePipeline(Solver):
             msg = f"runmode must be 0-6, got {effective_runmode}"
             raise ValueError(msg)
 
+        # Select solver classes based on problem type
+        from pymarxan.zones.model import ZonalProblem
+
+        is_zonal = isinstance(problem, ZonalProblem)
+        if is_zonal:
+            from pymarxan.zones.heuristic import ZoneHeuristicSolver
+            from pymarxan.zones.iterative_improvement import ZoneIISolver
+            from pymarxan.zones.solver import ZoneSASolver
+
+            heuristic_cls: type[Solver] = ZoneHeuristicSolver
+            sa_cls: type[Solver] = ZoneSASolver
+            ii_cls: Any = ZoneIISolver
+        else:
+            heuristic_cls = HeuristicSolver
+            sa_cls = SimulatedAnnealingSolver
+            ii_cls = IterativeImprovementSolver
+
         solutions: list[Solution] = []
 
         for run_idx in range(config.num_solutions):
@@ -85,9 +102,9 @@ class RunModePipeline(Solver):
                 problem=problem,
                 runmode=effective_runmode,
                 config=single_config,
-                heuristic_cls=HeuristicSolver,
-                sa_cls=SimulatedAnnealingSolver,
-                ii_cls=IterativeImprovementSolver,
+                heuristic_cls=heuristic_cls,
+                sa_cls=sa_cls,
+                ii_cls=ii_cls,
             )
             solutions.append(sol)
 
@@ -103,6 +120,15 @@ class RunModePipeline(Solver):
         ii_cls: Any,
     ) -> Solution:
         """Execute the appropriate pipeline for the given RUNMODE."""
+        from pymarxan.zones.model import ZonalProblem
+
+        is_zonal = isinstance(problem, ZonalProblem)
+
+        def _make_ii():
+            if is_zonal:
+                return ii_cls()
+            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
+            return ii_cls(itimptype=itimptype)
 
         if runmode == 0:
             # SA only
@@ -115,16 +141,12 @@ class RunModePipeline(Solver):
         if runmode == 2:
             # SA then iterative improvement
             sa_sol = sa_cls().solve(problem, config)[0]
-            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
-            improved: Solution = ii_cls(itimptype=itimptype).improve(problem, sa_sol)
-            return improved
+            return _make_ii().improve(problem, sa_sol)
 
         if runmode == 3:
             # Heuristic then iterative improvement
             heur_sol = heuristic_cls().solve(problem, config)[0]
-            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
-            improved = ii_cls(itimptype=itimptype).improve(problem, heur_sol)
-            return improved
+            return _make_ii().improve(problem, heur_sol)
 
         if runmode == 4:
             # Heuristic then SA -- pick best (minimum objective)
@@ -134,7 +156,6 @@ class RunModePipeline(Solver):
 
         if runmode == 5:
             # Heuristic then SA then iterative improvement
-            # Pick best of heuristic and SA, then apply improvement
             heur_sol = heuristic_cls().solve(problem, config)[0]
             sa_sol = sa_cls().solve(problem, config)[0]
             best = (
@@ -142,12 +163,9 @@ class RunModePipeline(Solver):
                 if heur_sol.objective <= sa_sol.objective
                 else sa_sol
             )
-            itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
-            improved = ii_cls(itimptype=itimptype).improve(problem, best)
-            return improved
+            return _make_ii().improve(problem, best)
 
         # runmode == 6
         # Iterative improvement only (from all-selected)
-        itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
-        ii_sols: list[Solution] = ii_cls(itimptype=itimptype).solve(problem, config)
-        return ii_sols[0]
+        ii_solver = _make_ii()
+        return ii_solver.solve(problem, config)[0]
