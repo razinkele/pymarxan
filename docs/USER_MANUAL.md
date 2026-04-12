@@ -271,17 +271,20 @@ These metrics help identify critical planning units for maintaining ecological c
 
 ### Solver Selection
 
-pyMarxan supports seven solver algorithms:
+pyMarxan supports ten solver algorithms:
 
-| Solver | Type | Description |
-|--------|------|-------------|
-| **MIP (PuLP/CBC)** | Exact | Mixed Integer Linear Programming. Guaranteed optimal solution. Equivalent to `prioritizr` in R. Best for small–medium problems. |
-| **Simulated Annealing (Python)** | Heuristic | Native Python SA implementation. No external binary needed. Supports multiple independent runs with adaptive cooling. |
-| **Marxan C++ Binary** | Heuristic | Wraps the original Marxan executable. Well-tested. Requires the binary to be installed. |
-| **Zone SA** | Heuristic | Simulated annealing for multi-zone problems. Each PU is assigned to a zone. |
-| **Greedy Heuristic** | Heuristic | Selects PUs one-by-one based on a scoring strategy. Very fast baseline. |
-| **Iterative Improvement** | Heuristic | Refines an existing solution by trying removals, additions, or swaps. |
-| **Pipeline** | Hybrid | Chains heuristic, SA, and iterative improvement in Marxan RUNMODE sequences. |
+| Solver | Type | Zones | Description |
+|--------|------|-------|-------------|
+| **MIP (PuLP/CBC)** | Exact | ✗ | Mixed Integer Linear Programming. Guaranteed optimal solution. Best for small–medium problems. |
+| **Zone MIP** | Exact | ✓ | Multi-zone MIP with zone costs, contributions, and targets. |
+| **Simulated Annealing (Python)** | Heuristic | ✗ | Native Python SA with 4 cooling schedules (adaptive, geometric, linear, logarithmic). |
+| **Zone SA** | Heuristic | ✓ | Simulated annealing for multi-zone problems. Each PU is assigned to a zone. |
+| **Greedy Heuristic** | Heuristic | ✗ | Selects PUs one-by-one based on a scoring strategy. Very fast baseline. |
+| **Zone Heuristic** | Heuristic | ✓ | Greedy zone assignment minimizing zone objective. |
+| **Iterative Improvement** | Heuristic | ✗ | Refines an existing solution by trying removals, additions, or swaps. |
+| **Zone II** | Heuristic | ✓ | Zone-aware iterative improvement with all 4 ITIMPTYPE modes. |
+| **Marxan C++ Binary** | Heuristic | ✗ | Wraps the original Marxan executable. Requires the binary to be installed. |
+| **Pipeline** | Hybrid | ✓ | Chains heuristic, SA, and iterative improvement in RUNMODE sequences (auto-selects zone solvers). |
 
 ### Solver Parameters
 
@@ -535,8 +538,17 @@ Download results as CSV files:
 | **RUNMODE** | Pipeline combination of heuristic, SA, and improvement algorithms (0–6) |
 | **Selection Frequency** | How often a PU appears in the solution across multiple runs (0–100%) |
 | **Irreplaceability** | How critical a PU is for meeting targets — PUs selected in nearly all solutions are highly irreplaceable |
+| **Connectivity** | Spatial connections between PUs — encourages selecting linked PUs to maintain ecological corridors |
+| **Probability** | Per-PU persistence probability — accounts for habitat loss risk in reserve design |
+| **PROBMODE** | Probability mode: 1 = risk premium on cost, 2 = persistence-adjusted feature amounts |
+| **Zone** | A management category (e.g. no-take, buffer, sustainable use) in multi-zone planning |
+| **Zone Contribution** | How much a PU in a given zone contributes to a feature's target (0–1 multiplier) |
+| **Zone Boundary Cost** | Penalty for adjacent PUs being in different zone types |
+| **Constraint** | An additional rule beyond targets — contiguity, minimum neighbors, budget caps, etc. |
+| **Objective** | The objective function type: MinSet (default), MaxCoverage, MaxUtility, MinShortfall |
 | **puvspr.dat** | Planning Unit vs. Species file — maps features to PUs with amounts |
 | **bound.dat** | Boundary definition file — pairwise boundary lengths between adjacent PUs |
+| **prob.dat** | Probability file — per-PU habitat persistence probabilities |
 
 ---
 

@@ -3,8 +3,8 @@
 ## Build, Test, and Lint
 
 ```bash
-make test            # Full suite (489 tests) with coverage
-make test-fast       # Skip slow SA tests (~479 tests, ~15s)
+make test            # Full suite (1060 tests) with coverage
+make test-fast       # Skip slow SA tests (~15s)
 make lint            # Ruff linter
 make types           # mypy type checker
 make check           # All of the above
@@ -26,9 +26,24 @@ Coverage threshold is 75% (`pyproject.toml`). The `src/pymarxan_app/` package is
 
 pymarxan is a three-layer monorepo:
 
-- **`src/pymarxan/`** — Pure Python core library (no UI dependencies). Models, solvers, I/O, calibration, analysis, spatial, connectivity, zones.
-- **`src/pymarxan_shiny/`** — Reusable Shiny for Python UI modules (~22 modules across 9 groups).
-- **`src/pymarxan_app/`** — Assembled 8-tab Shiny web application that wires the modules together.
+- **`src/pymarxan/`** — Pure Python core library (no UI dependencies). Models, solvers, I/O, calibration, analysis, spatial, connectivity, constraints, objectives, zones.
+- **`src/pymarxan_shiny/`** — Reusable Shiny for Python UI modules (~26 modules across 11 groups).
+- **`src/pymarxan_app/`** — Assembled Shiny web application that wires the modules together.
+
+### Subpackages
+
+| Package | Purpose |
+|---------|---------|
+| `models/` | `ConservationProblem`, `Solution`, `SolverConfig` dataclasses |
+| `solvers/` | SA, MIP, heuristic, iterative improvement, run-mode pipeline, cooling schedules |
+| `zones/` | `ZonalProblem`, zone SA/heuristic/II/MIP solvers, zone I/O |
+| `connectivity/` | Distance decay functions, connectivity penalties |
+| `constraints/` | ABCs + contiguity, feature contiguity, neighbor, linear, budget constraints |
+| `objectives/` | ABCs + MinSet, MaxCoverage, MaxUtility, MinShortfall objectives |
+| `spatial/` | Grid generation, feature intersection, boundary generation, GeoPackage export |
+| `io/` | Marxan file readers/writers (binary & zone formats), output controller |
+| `calibration/` | BLM calibration & sensitivity analysis |
+| `analysis/` | Selection frequency, portfolio analysis |
 
 ### Data flow
 
@@ -42,14 +57,18 @@ File (*.dat) → load_project() → ConservationProblem → Solver.solve(problem
 
 `ConservationProblem` is a dataclass with these DataFrames:
 
-| Field | Required columns |
-|-------|-----------------|
-| `planning_units` | `id`, `cost`, `status` |
-| `features` | `id`, `name`, `target`, `spf` |
-| `pu_vs_features` | `species`, `pu`, `amount` |
-| `boundary` (optional) | `id1`, `id2`, `boundary` |
+| Field | Required columns | Notes |
+|-------|-----------------|-------|
+| `planning_units` | `id`, `cost`, `status` | |
+| `features` | `id`, `name`, `target`, `spf` | |
+| `pu_vs_features` | `species`, `pu`, `amount` | |
+| `boundary` (optional) | `id1`, `id2`, `boundary` | |
+| `probability` (optional, kw_only) | `pu`, `probability` | Risk/persistence per PU |
+| `connectivity` (optional, kw_only) | `id1`, `id2`, `value` | Connectivity matrix |
 
 Plus a `parameters: dict` for Marxan settings (e.g., `{"BLM": 1.0}`).
+
+New optional fields MUST be `kw_only=True` with defaults to preserve backward compatibility. Use `copy_with(**overrides)` to create modified copies (preserves subclass type via `dataclasses.replace()`).
 
 Planning unit status values: `0` = normal, `1` = initial include, `2` = locked in, `3` = locked out.
 
@@ -94,7 +113,7 @@ Conventions: file named `{module_name}.py`, functions named `{module_name}_ui()`
 
 ## Key Conventions
 
-- **Python 3.11+** with `from __future__ import annotations` in all files.
+- **Python 3.12+** with `from __future__ import annotations` in all files.
 - **Ruff** for linting (rules: E, F, I, UP; line length 99).
 - **mypy** with `warn_return_any = true`.
 - **Full type hints** throughout — maintain this when adding code.
