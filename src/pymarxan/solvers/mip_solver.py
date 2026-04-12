@@ -104,7 +104,54 @@ class MIPSolver(Solver):
                         )
                     boundary_expr += bval * y[key]
 
-        model += cost_expr + blm * boundary_expr, "objective"
+        # Connectivity component with auxiliary variables
+        conn_expr = 0
+        conn_weight = float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0))
+        asymmetric = bool(
+            int(problem.parameters.get("ASYMMETRIC_CONNECTIVITY", 0))
+        )
+        if conn_weight > 0 and problem.connectivity is not None:
+            conn = problem.connectivity
+            c_id1 = conn["id1"].values
+            c_id2 = conn["id2"].values
+            c_val = conn["value"].values.astype(float)
+
+            if asymmetric:
+                # Penalize selecting source i without sink j:
+                #   z_ij >= x_i - x_j, z_ij >= 0
+                #   objective: +conn_weight * c_ij * z_ij
+                for ck in range(len(c_id1)):
+                    i = int(c_id1[ck])
+                    j = int(c_id2[ck])
+                    cval = float(c_val[ck])
+                    z = pulp.LpVariable(
+                        f"zc_{i}_{j}", lowBound=0, cat="Continuous",
+                    )
+                    model += z >= x[i] - x[j], f"conn_asym_{i}_{j}"
+                    conn_expr += conn_weight * cval * z
+            else:
+                # Reward both selected via binary-AND linearization:
+                #   z_ij <= x_i, z_ij <= x_j, z_ij >= x_i + x_j - 1
+                #   objective: -conn_weight * c_ij * z_ij
+                seen: set[tuple[int, int]] = set()
+                for ck in range(len(c_id1)):
+                    i = int(c_id1[ck])
+                    j = int(c_id2[ck])
+                    key = (min(i, j), max(i, j))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    cval = float(c_val[ck])
+                    z = pulp.LpVariable(f"zc_{key[0]}_{key[1]}", cat="Binary")
+                    model += z <= x[key[0]], f"conn_and1_{key[0]}_{key[1]}"
+                    model += z <= x[key[1]], f"conn_and2_{key[0]}_{key[1]}"
+                    model += (
+                        z >= x[key[0]] + x[key[1]] - 1,
+                        f"conn_and3_{key[0]}_{key[1]}",
+                    )
+                    conn_expr += -conn_weight * cval * z
+
+        model += cost_expr + blm * boundary_expr + conn_expr, "objective"
 
         # Constraints: feature targets
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
