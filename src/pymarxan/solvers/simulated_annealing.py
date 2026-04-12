@@ -14,6 +14,7 @@ from pymarxan.models.problem import (
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.solvers.utils import build_solution
 
 HISTORY_SAMPLE_INTERVAL = 1000
@@ -58,6 +59,10 @@ class SimulatedAnnealingSolver(Solver):
         initial_prop = float(
             problem.parameters.get("PROP", self._initial_prop)
         )
+        cooling_name = str(
+            problem.parameters.get("COOLING", "geometric")
+        ).lower()
+        start_temp_param = problem.parameters.get("STARTTEMP")
 
         progress = config.metadata.get("progress") if config.metadata else None
 
@@ -131,39 +136,53 @@ class SimulatedAnnealingSolver(Solver):
             total_cost = float(np.sum(cache.costs[selected]))
             current_obj = cache.compute_full_objective(selected, held, blm)
 
-            # Estimate initial temperature via sampling (using delta approach)
-            deltas: list[float] = []
-            n_samples = min(1000, num_iterations // 10)
-            for _ in range(n_samples):
-                idx = int(swappable_arr[rng.integers(n_swappable)])
-                delta = cache.compute_delta_objective(
-                    idx, selected, held, total_cost, blm
-                )
-                if delta > 0:
-                    deltas.append(delta)
-
-            if deltas:
-                # Set T so ~50% of worsening moves are accepted
-                avg_delta = sum(deltas) / len(deltas)
-                initial_temp = -avg_delta / math.log(0.5)
+            # Determine initial temperature
+            if start_temp_param is not None:
+                initial_temp = max(float(start_temp_param), 0.001)
             else:
-                initial_temp = 1.0
+                # Estimate initial temperature via sampling (using delta approach)
+                deltas: list[float] = []
+                n_samples = min(1000, num_iterations // 10)
+                for _ in range(n_samples):
+                    idx = int(swappable_arr[rng.integers(n_swappable)])
+                    delta = cache.compute_delta_objective(
+                        idx, selected, held, total_cost, blm
+                    )
+                    if delta > 0:
+                        deltas.append(delta)
 
-            initial_temp = max(initial_temp, 0.001)
+                if deltas:
+                    # Set T so ~50% of worsening moves are accepted
+                    avg_delta = sum(deltas) / len(deltas)
+                    initial_temp = -avg_delta / math.log(0.5)
+                else:
+                    initial_temp = 1.0
 
-            # Compute cooling factor
-            iters_per_step = max(1, num_iterations // num_temp_steps)
-            if initial_temp > 0:
-                alpha = (0.001 / initial_temp) ** (
-                    1.0 / max(1, num_temp_steps)
-                )
-            else:
-                alpha = 0.99
+                initial_temp = max(initial_temp, 0.001)
+
+            # Build cooling schedule
+            schedule_factory = {
+                "geometric": CoolingSchedule.geometric,
+                "exponential": CoolingSchedule.exponential,
+                "linear": CoolingSchedule.linear,
+                "lundy_mees": CoolingSchedule.lundy_mees,
+            }
+            factory = schedule_factory.get(cooling_name)
+            if factory is None:
+                msg = f"Unknown COOLING schedule: {cooling_name}"
+                raise ValueError(msg)
+            schedule = factory(
+                initial_temp=initial_temp,
+                final_temp=0.001,
+                num_steps=num_temp_steps,
+            )
 
             # Main SA loop
+            iters_per_step = max(1, num_iterations // num_temp_steps)
             temp = initial_temp
             best_selected = selected.copy()
             best_obj = current_obj
+            temp_step = 0
             step_count = 0
 
             # History recording for convergence plot
@@ -203,7 +222,8 @@ class SimulatedAnnealingSolver(Solver):
                 # Cool
                 step_count += 1
                 if step_count >= iters_per_step:
-                    temp *= alpha
+                    temp_step += 1
+                    temp = schedule.temperature(temp_step)
                     step_count = 0
 
                 # Sample history
