@@ -241,16 +241,57 @@ def compute_zone_shortfall(
     return total
 
 
+def compute_zone_connectivity(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+) -> float:
+    """Compute connectivity penalty for zone assignments.
+
+    For each edge (i, j) with connectivity value v, if both PUs are
+    assigned to the same non-zero zone the value is a bonus (negative).
+    Formula: -CONNECTIVITY_WEIGHT * Σ c_ij * [assignment[i] == assignment[j] && > 0]
+
+    Returns 0.0 if no connectivity data or weight is zero.
+    """
+    if problem.connectivity is None:
+        return 0.0
+
+    conn_weight = float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0))
+    if conn_weight == 0.0:
+        return 0.0
+
+    pu_ids = problem.planning_units["id"].values
+    pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
+
+    conn = problem.connectivity
+    id1_col = conn["id1"].values
+    id2_col = conn["id2"].values
+    val_col = conn["value"].values.astype(np.float64)
+
+    total = 0.0
+    for k in range(len(id1_col)):
+        idx1 = pu_index.get(int(id1_col[k]))
+        idx2 = pu_index.get(int(id2_col[k]))
+        if idx1 is None or idx2 is None:
+            continue
+        z1 = int(zone_assignment[idx1])
+        z2 = int(zone_assignment[idx2])
+        if z1 > 0 and z1 == z2:
+            total -= float(val_col[k])  # bonus for same-zone connection
+    return conn_weight * total
+
+
 def compute_zone_objective(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
     blm: float,
 ) -> float:
     """Compute the full MarZone objective.
-    Objective = zone_cost + BLM * standard_boundary + zone_boundary + penalty
+    Objective = zone_cost + BLM * standard_boundary + zone_boundary + penalty + connectivity
     """
     cost = compute_zone_cost(problem, zone_assignment)
     std_boundary = compute_standard_boundary(problem, zone_assignment)
     zone_boundary = compute_zone_boundary(problem, zone_assignment)
     penalty = compute_zone_penalty(problem, zone_assignment)
-    return cost + blm * std_boundary + zone_boundary + penalty
+    connectivity = compute_zone_connectivity(problem, zone_assignment)
+    return cost + blm * std_boundary + zone_boundary + penalty + connectivity

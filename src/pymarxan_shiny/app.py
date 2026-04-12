@@ -34,6 +34,10 @@ from modules.data.feature_table import feature_table_ui, feature_table_server
 from modules.connectivity.matrix_input import matrix_input_ui, matrix_input_server
 from modules.connectivity.metrics_viz import metrics_viz_ui, metrics_viz_server
 from modules.solver_config.solver_picker import solver_picker_ui, solver_picker_server
+from modules.solver_config.objective_selector import objective_selector_ui, objective_selector_server
+from modules.probability.probability_config import probability_config_ui, probability_config_server
+from modules.connectivity.connectivity_config import connectivity_config_ui, connectivity_config_server
+from modules.spatial_export.spatial_export import spatial_export_ui, spatial_export_server
 from modules.zones.zone_config import zone_config_ui, zone_config_server
 from modules.calibration.blm_explorer import blm_explorer_ui, blm_explorer_server
 from modules.calibration.sensitivity_ui import sensitivity_ui, sensitivity_server
@@ -90,9 +94,14 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel("Features", feature_table_ui("feature_table")),
     ui.nav_panel(
+        "Probability",
+        probability_config_ui("probability_config"),
+    ),
+    ui.nav_panel(
         "Connectivity",
         ui.navset_tab(
             ui.nav_panel("Matrix Input", matrix_input_ui("matrix_input")),
+            ui.nav_panel("Configuration", connectivity_config_ui("connectivity_config")),
             ui.nav_panel("Metrics", metrics_viz_ui("metrics_viz")),
         ),
     ),
@@ -100,6 +109,7 @@ app_ui = ui.page_navbar(
         "Configure",
         ui.navset_tab(
             ui.nav_panel("Solver", solver_picker_ui("solver_picker")),
+            ui.nav_panel("Objective", objective_selector_ui("objective_selector")),
             ui.nav_panel("Zones", zone_config_ui("zone_config")),
         ),
     ),
@@ -131,6 +141,7 @@ app_ui = ui.page_navbar(
             ui.nav_panel("Convergence", convergence_ui("convergence")),
             ui.nav_panel("Scenarios", scenario_compare_ui("scenario_compare")),
             ui.nav_panel("Export", export_ui("export")),
+            ui.nav_panel("Spatial Export", spatial_export_ui("spatial_export")),
         ),
     ),
     ui.nav_spacer(),
@@ -243,14 +254,24 @@ def server(input: Inputs, output: Outputs, session: Session):
         connectivity_matrix=connectivity_matrix,
         connectivity_pu_ids=connectivity_pu_ids,
     )
+    connectivity_config_server(
+        "connectivity_config",
+        problem=problem,
+        connectivity_matrix=connectivity_matrix,
+        connectivity_pu_ids=connectivity_pu_ids,
+    )
     metrics_viz_server(
         "metrics_viz",
         connectivity_matrix=connectivity_matrix,
         pu_ids=connectivity_pu_ids,
     )
 
+    # --- Probability ---
+    probability_config_server("probability_config", problem=problem)
+
     # --- Configure ---
     solver_picker_server("solver_picker", solver_config=solver_config)
+    objective_selector_server("objective_selector", solver_config=solver_config)
     zone_config_server("zone_config", zone_problem=zone_problem)
 
     # --- Calibrate ---
@@ -286,6 +307,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     convergence_server("convergence", all_solutions=all_solutions)
     scenario_compare_server("scenario_compare", solution=current_solution, solver_config=solver_config)
     export_server("export", problem=problem, solution=current_solution)
+    spatial_export_server(
+        "spatial_export",
+        problem=problem,
+        solution=current_solution,
+        all_solutions=all_solutions,
+    )
 
 
 app = App(app_ui, server)

@@ -73,6 +73,22 @@ from pymarxan_shiny.modules.solver_config.solver_picker import (
     solver_picker_server,
     solver_picker_ui,
 )
+from pymarxan_shiny.modules.solver_config.objective_selector import (
+    objective_selector_server,
+    objective_selector_ui,
+)
+from pymarxan_shiny.modules.probability.probability_config import (
+    probability_config_server,
+    probability_config_ui,
+)
+from pymarxan_shiny.modules.connectivity.connectivity_config import (
+    connectivity_config_server,
+    connectivity_config_ui,
+)
+from pymarxan_shiny.modules.spatial_export.spatial_export import (
+    spatial_export_server,
+    spatial_export_ui,
+)
 from pymarxan_shiny.modules.spatial.cost_upload import cost_upload_server, cost_upload_ui
 from pymarxan_shiny.modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
 from pymarxan_shiny.modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
@@ -97,7 +113,15 @@ app_ui = ui.page_navbar(
     ),
     ui.nav_panel(
         "Configure",
-        ui.layout_columns(solver_picker_ui("solver"), col_widths=12),
+        ui.layout_columns(
+            solver_picker_ui("solver"),
+            objective_selector_ui("objective"),
+            col_widths=[12, 12],
+        ),
+    ),
+    ui.nav_panel(
+        "Probability",
+        ui.layout_columns(probability_config_ui("probability"), col_widths=12),
     ),
     ui.nav_panel(
         "Calibrate",
@@ -116,9 +140,10 @@ app_ui = ui.page_navbar(
         "Connectivity",
         ui.layout_columns(
             matrix_input_ui("matrix_upload"),
+            connectivity_config_ui("conn_config"),
             metrics_viz_ui("connectivity"),
             network_view_ui("network"),
-            col_widths=[12, 12, 12],
+            col_widths=[12, 12, 12, 12],
         ),
     ),
     ui.nav_panel(
@@ -138,6 +163,7 @@ app_ui = ui.page_navbar(
         convergence_ui("convergence"),
         scenario_compare_ui("scenarios"),
         export_ui("export"),
+        spatial_export_ui("spatial_export"),
         col_widths=[6, 6, 6, 6, 12, 12, 12, 12],
     )),
     title="pymarxan",
@@ -158,6 +184,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     upload_server("upload", problem=problem)
     solver_picker_server("solver", solver_config=solver_config)
+    objective_selector_server("objective", solver_config=solver_config)
+    probability_config_server("probability", problem=problem)
     solution_map_server("solution_map", problem=problem, solution=current_solution)
     summary_table_server("summary", problem=problem, solution=current_solution)
     zone_config_server("zone_config", zone_problem=zone_problem)
@@ -196,6 +224,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         connectivity_matrix=connectivity_matrix,
         connectivity_pu_ids=connectivity_pu_ids,
     )
+    connectivity_config_server(
+        "conn_config",
+        problem=problem,
+        connectivity_matrix=connectivity_matrix,
+        connectivity_pu_ids=connectivity_pu_ids,
+    )
     metrics_viz_server(
         "connectivity",
         connectivity_matrix=connectivity_matrix,
@@ -206,6 +240,12 @@ def server(input: Inputs, output: Outputs, session: Session):
         "scenarios", solution=current_solution, solver_config=solver_config,
     )
     export_server("export", problem=problem, solution=current_solution)
+    spatial_export_server(
+        "spatial_export",
+        problem=problem,
+        solution=current_solution,
+        all_solutions=all_solutions,
+    )
 
     # Run panel with progress monitoring
     run_panel_server(

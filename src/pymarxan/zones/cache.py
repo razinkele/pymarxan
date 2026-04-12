@@ -70,6 +70,8 @@ class ZoneProblemCache:
     zone_boundary_costs: dict[tuple[int, int], float]
     neighbors: list[list[tuple[int, float]]]
     self_boundary: np.ndarray
+    conn_neighbors: list[list[tuple[int, float]]]
+    conn_weight: float
 
     @classmethod
     def from_zone_problem(cls, problem: ZonalProblem) -> ZoneProblemCache:
@@ -175,6 +177,21 @@ class ZoneProblemCache:
                     zbc[(zcol1, zcol2)] = float(zb_ct[k])
                     zbc[(zcol2, zcol1)] = float(zb_ct[k])
 
+        # --- Connectivity: adjacency list ---
+        conn_neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
+        conn_weight = float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0))
+
+        if problem.connectivity is not None and conn_weight != 0.0:
+            c_id1 = problem.connectivity["id1"].values
+            c_id2 = problem.connectivity["id2"].values
+            c_val = problem.connectivity["value"].values
+            for k in range(len(c_id1)):
+                idx1 = pu_id_to_idx.get(int(c_id1[k]))
+                idx2 = pu_id_to_idx.get(int(c_id2[k]))
+                if idx1 is not None and idx2 is not None:
+                    conn_neighbors[idx1].append((idx2, float(c_val[k])))
+                    conn_neighbors[idx2].append((idx1, float(c_val[k])))
+
         # --- Boundary: adjacency list + self-boundary ---
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
         self_boundary = np.zeros(n_pu, dtype=np.float64)
@@ -214,6 +231,8 @@ class ZoneProblemCache:
             zone_boundary_costs=zbc,
             neighbors=neighbors,
             self_boundary=self_boundary,
+            conn_neighbors=conn_neighbors,
+            conn_weight=conn_weight,
         )
 
     # ------------------------------------------------------------------
@@ -332,7 +351,10 @@ class ZoneProblemCache:
         # --- Zone penalty ---
         zone_penalty = self._compute_zone_penalty(held_per_zone)
 
-        return zone_cost + blm * std_boundary + zone_boundary + zone_penalty
+        # --- Connectivity ---
+        connectivity = self._compute_zone_connectivity(assignment)
+
+        return zone_cost + blm * std_boundary + zone_boundary + zone_penalty + connectivity
 
     # ------------------------------------------------------------------
     # Delta objective computation
@@ -406,7 +428,10 @@ class ZoneProblemCache:
             idx, old_col, new_col, held_per_zone
         )
 
-        return float(cost_delta + blm * std_boundary_delta + zone_boundary_delta + penalty_delta)
+        # --- Connectivity delta ---
+        connectivity_delta = self._connectivity_delta(idx, old_zone, new_zone, assignment)
+
+        return float(cost_delta + blm * std_boundary_delta + zone_boundary_delta + penalty_delta + connectivity_delta)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -549,3 +574,54 @@ class ZoneProblemCache:
             delta += float(np.dot(self.feat_spf, new_shortfall - old_shortfall))
 
         return delta
+
+    def _compute_zone_connectivity(self, assignment: np.ndarray) -> float:
+        """Compute connectivity bonus for PUs in the same non-zero zone.
+
+        For each edge (i, j) with value v where both are in the same
+        non-zero zone, subtract v (bonus). Weighted by conn_weight.
+        """
+        if self.conn_weight == 0.0:
+            return 0.0
+
+        total = 0.0
+        for i in range(self.n_pu):
+            zid_i = int(assignment[i])
+            if zid_i == 0:
+                continue
+            for j, v in self.conn_neighbors[i]:
+                if j <= i:
+                    continue  # count each edge once
+                zid_j = int(assignment[j])
+                if zid_i == zid_j:
+                    total -= v
+        return self.conn_weight * total
+
+    def _connectivity_delta(
+        self,
+        idx: int,
+        old_zone: int,
+        new_zone: int,
+        assignment: np.ndarray,
+    ) -> float:
+        """Compute connectivity delta for changing PU idx's zone.
+
+        For each connectivity neighbor j of idx:
+        - If j was in old_zone (same zone), we lose a bonus: +v
+        - If j is in new_zone (will be same zone), we gain a bonus: -v
+        """
+        if self.conn_weight == 0.0:
+            return 0.0
+
+        delta = 0.0
+        for j, v in self.conn_neighbors[idx]:
+            zid_j = int(assignment[j])
+            if zid_j == 0:
+                continue
+            # Lose bonus from old same-zone connections
+            if old_zone != 0 and zid_j == old_zone:
+                delta += v
+            # Gain bonus from new same-zone connections
+            if new_zone != 0 and zid_j == new_zone:
+                delta -= v
+        return self.conn_weight * delta

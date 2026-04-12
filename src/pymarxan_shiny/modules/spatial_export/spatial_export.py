@@ -1,0 +1,140 @@
+"""Spatial export Shiny module — download solutions as GeoPackage or Shapefile."""
+from __future__ import annotations
+
+import tempfile
+
+from shiny import module, reactive, render, ui
+
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
+
+FORMAT_CHOICES = {
+    "GPKG": "GeoPackage (.gpkg)",
+    "ESRI Shapefile": "Shapefile (.shp)",
+}
+
+FORMAT_EXTENSIONS = {
+    "GPKG": ".gpkg",
+    "ESRI Shapefile": ".shp",
+}
+
+
+@module.ui
+def spatial_export_ui():
+    return ui.card(
+        help_card_header("Spatial Export"),
+        ui.p(
+            "Download the current solution or selection frequency map as a "
+            "spatial file for use in GIS software. The output joins solver "
+            "results to planning unit geometries. Requires that planning "
+            "units have spatial geometry loaded.",
+            class_="text-muted small mb-3",
+        ),
+        ui.tooltip(
+            ui.input_select(
+                "export_format",
+                "Output Format",
+                choices=FORMAT_CHOICES,
+                selected="GPKG",
+            ),
+            "GeoPackage: modern, single-file format recommended for most "
+            "workflows. Shapefile: legacy format compatible with all GIS "
+            "software (creates multiple sidecar files).",
+        ),
+        ui.div(
+            ui.tooltip(
+                ui.download_button("download_solution_spatial", "Download Solution"),
+                "Download the best solution joined to planning unit geometries. "
+                "Includes a 'selected' column (1 = selected, 0 = not selected).",
+            ),
+            class_="mb-2",
+        ),
+        ui.div(
+            ui.tooltip(
+                ui.download_button("download_frequency_spatial", "Download Frequency Map"),
+                "Download selection frequency across all runs joined to planning "
+                "unit geometries. Includes 'count' and 'frequency' columns.",
+            ),
+            class_="mb-2",
+        ),
+        ui.output_ui("spatial_export_status"),
+    )
+
+
+@module.server
+def spatial_export_server(
+    input,
+    output,
+    session,
+    problem: reactive.Value,
+    solution: reactive.Value,
+    all_solutions: reactive.Value,
+):
+    help_server_setup(input, "spatial_export")
+
+    @reactive.calc
+    def _has_geometry():
+        p = problem()
+        if p is None:
+            return False
+        pu = p.planning_units
+        return pu is not None and "geometry" in pu.columns
+
+    @render.download(filename=lambda: f"pymarxan_solution{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}")
+    def download_solution_spatial():
+        p = problem()
+        s = solution()
+        if p is None or s is None or not _has_geometry():
+            return
+        from pymarxan.io.spatial_export import export_solution_spatial
+
+        driver = input.export_format()
+        ext = FORMAT_EXTENSIONS.get(driver, ".gpkg")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=ext, delete=False,
+        )
+        tmp.close()
+        export_solution_spatial(p.planning_units, s, tmp.name, driver=driver)
+        return tmp.name
+
+    @render.download(filename=lambda: f"pymarxan_frequency{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}")
+    def download_frequency_spatial():
+        p = problem()
+        sols = all_solutions()
+        if p is None or sols is None or not _has_geometry():
+            return
+        from pymarxan.io.spatial_export import export_frequency_spatial
+
+        driver = input.export_format()
+        ext = FORMAT_EXTENSIONS.get(driver, ".gpkg")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=ext, delete=False,
+        )
+        tmp.close()
+        export_frequency_spatial(p.planning_units, sols, tmp.name, driver=driver)
+        return tmp.name
+
+    @render.ui
+    def spatial_export_status():
+        p = problem()
+        s = solution()
+        if p is None:
+            return ui.p(
+                "⚠ No project loaded.",
+                class_="text-warning mt-2",
+            )
+        if not _has_geometry():
+            return ui.p(
+                "⚠ Planning units have no geometry. Load spatial data first.",
+                class_="text-warning mt-2",
+            )
+        if s is None:
+            return ui.p(
+                "⚠ No solution available. Run a solver first.",
+                class_="text-warning mt-2",
+            )
+        return ui.p(
+            f"✅ Ready — {s.n_selected} selected PUs, "
+            f"format: {input.export_format()}",
+            class_="text-success mt-2",
+        )
