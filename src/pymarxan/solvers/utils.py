@@ -180,6 +180,48 @@ def compute_cost_threshold_penalty(
     return thresh_pen1 + thresh_pen2 * (total_cost - cost_thresh)
 
 
+def compute_probability_penalty(
+    problem: ConservationProblem,
+    selected: np.ndarray,
+    pu_index: dict[int, int],
+) -> float:
+    """Compute probability risk premium: PROBABILITYWEIGHTING * Σ(prob_i * cost_i * x_i).
+
+    Mode 1 only — Mode 2 modifies the pu_feat_matrix in the cache
+    and does not add an explicit penalty term.
+
+    Returns 0.0 if no probability data or PROBMODE != 1.
+    """
+    if problem.probability is None:
+        return 0.0
+
+    prob_mode = int(problem.parameters.get("PROBMODE", 1))
+    if prob_mode != 1:
+        return 0.0
+
+    prob_weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
+    if prob_weight == 0.0:
+        return 0.0
+
+    # Build PU ID → probability mapping
+    prob_pu = problem.probability["pu"].values
+    prob_val = problem.probability["probability"].values
+    prob_map: dict[int, float] = {}
+    for k in range(len(prob_pu)):
+        prob_map[int(prob_pu[k])] = float(prob_val[k])
+
+    costs = problem.planning_units["cost"].values
+    pu_ids = problem.planning_units["id"].values
+
+    total = 0.0
+    for i in range(len(pu_ids)):
+        if selected[i]:
+            pid = int(pu_ids[i])
+            prob = prob_map.get(pid, 0.0)
+            total += prob * float(costs[i])
+    return prob_weight * total
+
+
 def compute_objective_terms(
     problem: ConservationProblem,
     selected: np.ndarray,
@@ -190,11 +232,12 @@ def compute_objective_terms(
 ) -> dict[str, float]:
     """Compute all objective terms and return as a dict.
 
-    The current implementation uses MinSet semantics (base = cost).
-    Future phases add terms here:
-      - Phase 3: ``"probability"`` (risk premium)
-      - Phase 4: ``"connectivity"`` (penalty/bonus)
-      - Phase 5: ``"soft_constraints"``
+    Terms included:
+      - ``"base"``: total cost (MinSet semantics)
+      - ``"boundary"``: BLM * total boundary length
+      - ``"penalty"``: SPF * shortfall per feature
+      - ``"cost_threshold"``: penalty for exceeding cost threshold
+      - ``"probability"``: Mode 1 risk premium (PROBABILITYWEIGHTING)
 
     All terms use lower-is-better convention.  The ``"objective"`` key
     holds the sum of all terms.
@@ -203,7 +246,7 @@ def compute_objective_terms(
     -------
     dict[str, float]
         Keys include ``"base"``, ``"boundary"``, ``"penalty"``,
-        ``"cost_threshold"``, and ``"objective"``.
+        ``"cost_threshold"``, ``"probability"``, and ``"objective"``.
     """
     costs = np.asarray(problem.planning_units["cost"].values)
     total_cost = float(np.sum(costs[selected]))
@@ -228,6 +271,11 @@ def compute_objective_terms(
         )
     else:
         terms["cost_threshold"] = 0.0
+
+    # Probability risk premium (Mode 1 only)
+    terms["probability"] = compute_probability_penalty(
+        problem, selected, pu_index,
+    )
 
     terms["objective"] = sum(terms.values())
     return terms

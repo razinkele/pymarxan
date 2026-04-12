@@ -44,6 +44,7 @@ class ConservationProblem:
     parameters: dict = field(default_factory=dict)
     # --- Keyword-only fields (new capabilities) ---
     probability: pd.DataFrame | None = field(default=None, kw_only=True)
+    connectivity: pd.DataFrame | None = field(default=None, kw_only=True)
 
     def __post_init__(self):
         """Validate critical data integrity constraints."""
@@ -242,6 +243,26 @@ class ConservationProblem:
                 if (prob_vals < 0.0).any() or (prob_vals > 1.0).any():
                     errors.append(
                         "probability values must be in range [0, 1]"
+                    )
+
+        # --- Connectivity validation ---
+        if self.connectivity is not None:
+            conn_required = {"id1", "id2", "value"}
+            missing_conn = conn_required - set(self.connectivity.columns)
+            if missing_conn:
+                errors.append(
+                    f"connectivity missing columns: {sorted(missing_conn)}"
+                )
+            else:
+                conn_pu_ids = (
+                    set(self.connectivity["id1"])
+                    | set(self.connectivity["id2"])
+                )
+                unknown_conn_pus = conn_pu_ids - self.pu_ids
+                if unknown_conn_pus:
+                    errors.append(
+                        f"connectivity references planning unit IDs not "
+                        f"in planning_units: {sorted(unknown_conn_pus)}"
                     )
 
         return errors

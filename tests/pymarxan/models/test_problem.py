@@ -166,3 +166,47 @@ class TestConservationProblem:
         )
         copied = problem.copy_with(parameters={"BLM": 2.0})
         assert copied.probability is problem.probability
+
+    def test_connectivity_field_default_none(self):
+        problem = _make_simple_problem()
+        assert problem.connectivity is None
+
+    def test_validate_connectivity_valid(self):
+        conn_df = pd.DataFrame({
+            "id1": [1, 2],
+            "id2": [2, 3],
+            "value": [0.8, 0.5],
+        })
+        problem = _make_simple_problem()
+        problem_with_conn = problem.copy_with(connectivity=conn_df)
+        errors = problem_with_conn.validate()
+        assert errors == []
+
+    def test_validate_connectivity_missing_columns(self):
+        conn_df = pd.DataFrame({"id1": [1], "id2": [2], "weight": [0.5]})
+        problem = _make_simple_problem()
+        problem_with_conn = problem.copy_with(connectivity=conn_df)
+        errors = problem_with_conn.validate()
+        assert any("connectivity missing columns" in e for e in errors)
+
+    def test_validate_connectivity_unknown_pus(self):
+        conn_df = pd.DataFrame({
+            "id1": [1, 99],
+            "id2": [2, 3],
+            "value": [0.8, 0.5],
+        })
+        problem = _make_simple_problem()
+        problem_with_conn = problem.copy_with(connectivity=conn_df)
+        errors = problem_with_conn.validate()
+        assert any("planning unit IDs not" in e for e in errors)
+
+    def test_copy_with_preserves_connectivity(self):
+        conn_df = pd.DataFrame({
+            "id1": [1, 2],
+            "id2": [2, 3],
+            "value": [0.8, 0.5],
+        })
+        problem = _make_simple_problem()
+        problem_with_conn = problem.copy_with(connectivity=conn_df)
+        copied = problem_with_conn.copy_with(parameters={"BLM": 2.0})
+        assert copied.connectivity is problem_with_conn.connectivity

@@ -156,6 +156,7 @@ class TestComputeObjectiveTerms:
         assert "boundary" in terms
         assert "penalty" in terms
         assert "cost_threshold" in terms
+        assert "probability" in terms
         assert "objective" in terms
 
     def test_cost_threshold_term(self):
@@ -169,3 +170,100 @@ class TestComputeObjectiveTerms:
         assert terms["objective"] == pytest.approx(
             terms["base"] + terms["boundary"] + terms["penalty"] + terms["cost_threshold"]
         )
+
+
+class TestProbabilityObjectiveTerm:
+    """Test probability risk premium in objective."""
+
+    def setup_method(self):
+        import pandas as pd
+
+        self.pu = pd.DataFrame({
+            "id": [1, 2, 3],
+            "cost": [10.0, 20.0, 30.0],
+            "status": [0, 0, 0],
+        })
+        self.features = pd.DataFrame({
+            "id": [1],
+            "name": ["sp_a"],
+            "target": [10.0],
+            "spf": [1.0],
+        })
+        self.puvspr = pd.DataFrame({
+            "species": [1, 1, 1],
+            "pu": [1, 2, 3],
+            "amount": [5.0, 5.0, 5.0],
+        })
+        self.prob = pd.DataFrame({
+            "pu": [1, 2, 3],
+            "probability": [0.1, 0.5, 0.9],
+        })
+
+    def _make_problem(self, **kw):
+        from pymarxan.models.problem import ConservationProblem
+
+        return ConservationProblem(
+            planning_units=self.pu,
+            features=self.features,
+            pu_vs_features=self.puvspr,
+            parameters=kw.pop("parameters", {"BLM": 0.0}),
+            **kw,
+        )
+
+    def test_no_probability_data(self):
+        problem = self._make_problem()
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, True, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["probability"] == 0.0
+
+    def test_mode1_risk_premium(self):
+        problem = self._make_problem(
+            probability=self.prob,
+            parameters={"BLM": 0.0, "PROBMODE": 1, "PROBABILITYWEIGHTING": 2.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, True, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        # Risk premium = 2.0 * (0.1*10 + 0.5*20) = 2.0 * 11.0 = 22.0
+        assert terms["probability"] == pytest.approx(22.0)
+
+    def test_mode2_no_penalty_term(self):
+        """Mode 2 modifies pu_feat_matrix, not an explicit penalty."""
+        problem = self._make_problem(
+            probability=self.prob,
+            parameters={"BLM": 0.0, "PROBMODE": 2},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, True, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["probability"] == 0.0
+
+    def test_zero_weight_no_penalty(self):
+        problem = self._make_problem(
+            probability=self.prob,
+            parameters={"BLM": 0.0, "PROBABILITYWEIGHTING": 0.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, True, True])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["probability"] == 0.0
+
+    def test_probability_included_in_objective(self):
+        problem = self._make_problem(
+            probability=self.prob,
+            parameters={"BLM": 0.0, "PROBABILITYWEIGHTING": 1.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, True, True])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        non_obj = sum(v for k, v in terms.items() if k != "objective")
+        assert terms["objective"] == pytest.approx(non_obj)
+        assert terms["probability"] > 0.0
+
+    def test_terms_has_probability_key(self):
+        problem = self._make_problem()
+        pu_index = {1: 0, 2: 1, 3: 2}
+        selected = np.array([True, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert "probability" in terms
