@@ -51,11 +51,7 @@ def calibrate_blm(
     feasible_blm_values = []
 
     for blm in blm_values:
-        modified = ConservationProblem(
-            planning_units=problem.planning_units,
-            features=problem.features,
-            pu_vs_features=problem.pu_vs_features,
-            boundary=problem.boundary,
+        modified = problem.copy_with(
             parameters={**problem.parameters, "BLM": blm},
         )
         sols = solver.solve(modified, config)

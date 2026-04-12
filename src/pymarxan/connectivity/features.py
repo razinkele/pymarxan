@@ -66,3 +66,6 @@ def add_connectivity_features(
         boundary=problem.boundary,
         parameters=problem.parameters,
     )
+    # NOTE: connectivity_as_features creates a structurally different problem
+    # (new features/amounts), so copy_with() is not appropriate here —
+    # the new features/pu_vs_features replace the originals entirely.

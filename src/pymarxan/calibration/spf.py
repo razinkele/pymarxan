@@ -30,26 +30,19 @@ def calibrate_spf(
     if config is None:
         config = SolverConfig(num_solutions=1)
 
-    spf_values = {}
-    for _, row in problem.features.iterrows():
-        fid = int(row["id"])
-        spf_values[fid] = float(row.get("spf", 1.0))
+    feat_ids = problem.features["id"].values
+    feat_spf = problem.features["spf"].values.astype(float) if "spf" in problem.features.columns else [1.0] * len(feat_ids)
+    spf_values = {int(feat_ids[k]): float(feat_spf[k]) for k in range(len(feat_ids))}
 
     history = []
     best_solution = None
 
     for iteration in range(max_iterations):
         features_df = problem.features.copy()
-        for fid, spf in spf_values.items():
-            features_df.loc[features_df["id"] == fid, "spf"] = spf
+        # Vectorized SPF update: map fid -> new spf value for full column
+        features_df["spf"] = features_df["id"].map(spf_values).fillna(1.0)
 
-        modified = ConservationProblem(
-            planning_units=problem.planning_units,
-            features=features_df,
-            pu_vs_features=problem.pu_vs_features,
-            boundary=problem.boundary,
-            parameters=problem.parameters,
-        )
+        modified = problem.copy_with(features=features_df)
 
         sols = solver.solve(modified, config)
         if not sols:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 from pymarxan.models import boundary as boundary_mod
@@ -41,6 +43,13 @@ class ConservationProblem:
     boundary: pd.DataFrame | None = None
     parameters: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        """Validate critical data integrity constraints."""
+        if "id" in self.planning_units.columns and not self.planning_units["id"].is_unique:
+            raise ValueError("planning_units['id'] contains duplicate values")
+        if "id" in self.features.columns and not self.features["id"].is_unique:
+            raise ValueError("features['id'] contains duplicate values")
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -56,18 +65,57 @@ class ConservationProblem:
         return len(self.features)
 
     @property
-    def pu_ids(self) -> set:
+    def pu_ids(self) -> set[int]:
         """Set of planning unit IDs."""
         return set(self.planning_units["id"])
 
     @property
-    def feature_ids(self) -> set:
+    def feature_ids(self) -> set[int]:
         """Set of feature IDs."""
         return set(self.features["id"])
+
+    @property
+    def pu_id_to_index(self) -> dict[int, int]:
+        """Mapping from planning unit ID to positional index.
+
+        Cached on first access for O(1) repeated lookups.
+        """
+        # Use object __dict__ to cache on frozen-ish dataclass
+        cache = self.__dict__.get("_pu_id_to_index")
+        if cache is not None:
+            return cache
+        mapping = {int(pid): i for i, pid in enumerate(self.planning_units["id"].values)}
+        object.__setattr__(self, "_pu_id_to_index", mapping)
+        return mapping
 
     # ------------------------------------------------------------------
     # Methods
     # ------------------------------------------------------------------
+
+    def build_pu_feature_matrix(self) -> np.ndarray:
+        """Build a dense (n_pu, n_feat) matrix of feature amounts per PU.
+
+        Returns
+        -------
+        np.ndarray
+            Shape ``(n_planning_units, n_features)``, dtype float64.
+        """
+        n_pu = self.n_planning_units
+        n_feat = self.n_features
+        pu_id_to_idx = self.pu_id_to_index
+        feat_ids = self.features["id"].values
+        feat_id_to_col = {int(fid): j for j, fid in enumerate(feat_ids)}
+
+        matrix = np.zeros((n_pu, n_feat), dtype=np.float64)
+        pv_pu = self.pu_vs_features["pu"].values
+        pv_sp = self.pu_vs_features["species"].values
+        pv_am = self.pu_vs_features["amount"].values
+        for k in range(len(pv_pu)):
+            ri = pu_id_to_idx.get(int(pv_pu[k]))
+            ci = feat_id_to_col.get(int(pv_sp[k]))
+            if ri is not None and ci is not None:
+                matrix[ri, ci] = float(pv_am[k])
+        return matrix
 
     def feature_amounts(self) -> dict[int, float]:
         """Total amount of each feature across all planning units.
@@ -91,14 +139,14 @@ class ConservationProblem:
         bool
             ``True`` if every feature's target is achievable.
         """
-        amounts = self.feature_amounts()
-        for _, row in self.features.iterrows():
-            fid = row["id"]
-            target = row["target"]
-            available = amounts.get(fid, 0.0)
-            if available < target:
-                return False
-        return True
+        # Vectorized implementation
+        totals = self.pu_vs_features.groupby("species")["amount"].sum()
+        
+        # Map totals to features aligned by id
+        available = self.features["id"].map(totals).fillna(0.0)
+        
+        # Check if any target exceeds available amount
+        return (available >= self.features["target"]).all()
 
     def validate(self) -> list[str]:
         """Validate the problem data and return a list of error messages.
@@ -179,6 +227,26 @@ class ConservationProblem:
         affecting the original.
         """
         return copy.deepcopy(self)
+
+    def copy_with(self, **overrides) -> ConservationProblem:
+        """Return a shallow copy with selected fields replaced.
+
+        Uses ``dataclasses.fields`` to forward all current fields,
+        so subclasses and future fields are preserved automatically.
+
+        Parameters
+        ----------
+        **overrides
+            Field names and their replacement values.
+
+        Returns
+        -------
+        ConservationProblem
+            A new instance with the overridden fields.
+        """
+        current = {f.name: getattr(self, f.name) for f in dataclass_fields(self)}
+        current.update(overrides)
+        return type(self)(**current)
 
     def summary(self) -> str:
         """Return a human-readable multi-line summary of the problem.

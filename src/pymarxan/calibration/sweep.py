@@ -85,11 +85,7 @@ def run_sweep(
     feasible_param_dicts: list[dict] = []
 
     for params in param_dicts:
-        modified = ConservationProblem(
-            planning_units=problem.planning_units,
-            features=problem.features,
-            pu_vs_features=problem.pu_vs_features,
-            boundary=problem.boundary,
+        modified = problem.copy_with(
             parameters={**problem.parameters, **params},
         )
         sols = solver.solve(modified, solver_config)

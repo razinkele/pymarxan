@@ -48,24 +48,22 @@ def run_sensitivity(
     else:
         feature_ids = problem.features["id"].tolist()
 
+    # Pre-build target lookup for O(1) access
+    target_lookup = dict(zip(
+        problem.features["id"].values.astype(int),
+        problem.features["target"].values.astype(float),
+    ))
+
     runs: list[dict] = []
 
     for fid in feature_ids:
-        original_target = float(
-            problem.features.loc[problem.features["id"] == fid, "target"].iloc[0]
-        )
+        original_target = target_lookup[int(fid)]
         for mult in config.multipliers:
             features_df = problem.features.copy()
             features_df.loc[features_df["id"] == fid, "target"] = (
                 original_target * mult
             )
-            modified = ConservationProblem(
-                planning_units=problem.planning_units,
-                features=features_df,
-                pu_vs_features=problem.pu_vs_features,
-                boundary=problem.boundary,
-                parameters=problem.parameters,
-            )
+            modified = problem.copy_with(features=features_df)
             sols = solver.solve(modified, solver_config)
             if not sols:
                 continue

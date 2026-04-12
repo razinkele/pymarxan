@@ -85,3 +85,30 @@ class TestConservationProblem:
         problem.boundary = None
         errors = problem.validate()
         assert errors == []
+
+    def test_copy_with_preserves_fields(self):
+        problem = _make_simple_problem()
+        copied = problem.copy_with(parameters={"BLM": 2.0})
+        assert copied.parameters == {"BLM": 2.0}
+        # Original unchanged
+        assert problem.parameters == {"BLM": 1.0}
+        # Other fields are shared (shallow copy)
+        assert copied.planning_units is problem.planning_units
+        assert copied.features is problem.features
+        assert copied.pu_vs_features is problem.pu_vs_features
+        assert copied.boundary is problem.boundary
+
+    def test_copy_with_replace_dataframe(self):
+        problem = _make_simple_problem()
+        new_features = problem.features.copy()
+        new_features.loc[new_features["id"] == 1, "target"] = 999.0
+        copied = problem.copy_with(features=new_features)
+        assert copied.features.loc[copied.features["id"] == 1, "target"].iloc[0] == 999.0
+        # Original unchanged
+        assert problem.features.loc[problem.features["id"] == 1, "target"].iloc[0] == 20.0
+
+    def test_copy_with_no_overrides(self):
+        problem = _make_simple_problem()
+        copied = problem.copy_with()
+        assert copied.n_planning_units == problem.n_planning_units
+        assert copied is not problem

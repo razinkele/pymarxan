@@ -53,21 +53,22 @@ class MarxanBinarySolver(Solver):
             tmp_path = Path(tmp_dir)
 
             # Override parameters for this run
-            problem_copy = ConservationProblem(
+            run_params = dict(problem.parameters)
+            run_params["NUMREPS"] = config.num_solutions
+            if config.seed is not None:
+                run_params["RANDSEED"] = config.seed
+            run_params["VERBOSITY"] = 0 if not config.verbose else 2
+            run_params["SAVERUN"] = 3  # CSV output
+            run_params["SAVEBEST"] = 3
+            run_params["OUTPUTDIR"] = "output"
+            run_params["SCENNAME"] = "output"
+            problem_copy = problem.copy_with(
                 planning_units=problem.planning_units.copy(),
                 features=problem.features.copy(),
                 pu_vs_features=problem.pu_vs_features.copy(),
                 boundary=problem.boundary.copy() if problem.boundary is not None else None,
-                parameters=dict(problem.parameters),
+                parameters=run_params,
             )
-            problem_copy.parameters["NUMREPS"] = config.num_solutions
-            if config.seed is not None:
-                problem_copy.parameters["RANDSEED"] = config.seed
-            problem_copy.parameters["VERBOSITY"] = 0 if not config.verbose else 2
-            problem_copy.parameters["SAVERUN"] = 3  # CSV output
-            problem_copy.parameters["SAVEBEST"] = 3
-            problem_copy.parameters["OUTPUTDIR"] = "output"
-            problem_copy.parameters["SCENNAME"] = "output"
 
             # Write project files
             save_project(problem_copy, tmp_path)
