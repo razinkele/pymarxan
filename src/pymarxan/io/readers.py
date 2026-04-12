@@ -173,23 +173,49 @@ def read_input_dat(path: str | Path) -> dict[str, Any]:
     return params
 
 
+def read_probability(path: str | Path) -> pd.DataFrame:
+    """Read a probability (prob.dat) file.
+
+    Casts ``pu`` to int, ``probability`` to float.
+
+    Parameters
+    ----------
+    path : str | Path
+        Path to prob.dat.
+
+    Returns
+    -------
+    pd.DataFrame
+        Probability data with columns ``pu``, ``probability``.
+    """
+    df = _read_dat(path)
+    df["pu"] = df["pu"].astype(int)
+    df["probability"] = df["probability"].astype(float)
+    return df
+
+
 def _resolve_prop_targets(
     features: pd.DataFrame, pu_vs_features: pd.DataFrame
 ) -> pd.DataFrame:
     """Resolve proportional targets: effective_target = max(target, prop * total_amount)."""
     if "prop" not in features.columns:
         return features
+
     features = features.copy()
     if "target" not in features.columns:
         features["target"] = 0.0
-    for idx, row in features.iterrows():
-        prop = float(row.get("prop", 0.0))
-        if prop > 0:
-            fid = int(row["id"])
-            total = float(
-                pu_vs_features.loc[pu_vs_features["species"] == fid, "amount"].sum()
-            )
-            features.loc[idx, "target"] = max(float(row["target"]), prop * total)
+
+    # 1. Compute total amount available for each species
+    totals = pu_vs_features.groupby("species")["amount"].sum()
+
+    # 2. Map totals to the features DataFrame based on 'id'
+    #    (fillna(0.0) handles species present in features but absent in pu_vs_features)
+    feature_totals = features["id"].map(totals).fillna(0.0)
+
+    # 3. Vectorized update: target = max(target, prop * total)
+    prop_targets = features["prop"].fillna(0.0) * feature_totals
+    features["target"] = features["target"].clip(lower=prop_targets)
+
     return features
 
 
@@ -229,6 +255,13 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
     if bound_path.exists():
         boundary = read_bound(bound_path)
 
+    # Probability data (optional)
+    prob_name = params.get("PROBNAME", "prob.dat")
+    probability = None
+    prob_path = input_dir / prob_name
+    if prob_path.exists():
+        probability = read_probability(prob_path)
+
     features = _resolve_prop_targets(features, pu_vs_features)
 
     return ConservationProblem(
@@ -237,6 +270,7 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
         pu_vs_features=pu_vs_features,
         boundary=boundary,
         parameters=params,
+        probability=probability,
     )
 
 

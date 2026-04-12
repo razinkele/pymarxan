@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
@@ -65,6 +66,19 @@ def write_bound(df: pd.DataFrame, path: str | Path) -> None:
     df.to_csv(path, index=False)
 
 
+def write_probability(df: pd.DataFrame, path: str | Path) -> None:
+    """Write a probability DataFrame to a CSV file.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Probability data with columns ``pu``, ``probability``.
+    path : str | Path
+        Output file path.
+    """
+    df.to_csv(path, index=False)
+
+
 def write_input_dat(params: dict[str, Any], path: str | Path) -> None:
     """Write Marxan parameters as a KEY VALUE file.
 
@@ -115,6 +129,7 @@ def save_project(problem: ConservationProblem, project_dir: str | Path) -> None:
     params.setdefault("SPECNAME", "spec.dat")
     params.setdefault("PUVSPRNAME", "puvspr.dat")
     params.setdefault("BOUNDNAME", "bound.dat")
+    params.setdefault("PROBNAME", "prob.dat")
 
     input_dir = project_dir / params["INPUTDIR"]
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +140,9 @@ def save_project(problem: ConservationProblem, project_dir: str | Path) -> None:
 
     if problem.boundary is not None:
         write_bound(problem.boundary, input_dir / params["BOUNDNAME"])
+
+    if problem.probability is not None:
+        write_probability(problem.probability, input_dir / params["PROBNAME"])
 
     write_input_dat(params, project_dir / "input.dat")
 
@@ -156,29 +174,30 @@ def write_mvbest(
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     shortfalls = compute_feature_shortfalls(problem, solution.selected, pu_index)
 
+    # Precompute achieved amount per feature for selected PUs in one pass
+    sel_set = {pid for pid, i in pu_index.items() if solution.selected[i]}
+    sel_mask = problem.pu_vs_features["pu"].isin(sel_set)
+    achieved_map = (
+        problem.pu_vs_features.loc[sel_mask]
+        .groupby("species")["amount"]
+        .sum()
+        .to_dict()
+    )
+
+    feat_ids = problem.features["id"].values
+    feat_names = problem.features["name"].values
+    feat_targets = problem.features["target"].values.astype(float)
+
     rows = []
-    for _, feat_row in problem.features.iterrows():
-        fid = int(feat_row["id"])
-        target = float(feat_row["target"])
-        name = feat_row["name"]
-
-        # Compute amount held by summing amounts of selected PUs
-        feat_data = problem.pu_vs_features[
-            problem.pu_vs_features["species"] == fid
-        ]
-        amount_held = 0.0
-        for _, r in feat_data.iterrows():
-            pu_id = int(r["pu"])
-            idx = pu_index.get(pu_id)
-            if idx is not None and solution.selected[idx]:
-                amount_held += float(r["amount"])
-
+    for k in range(len(feat_ids)):
+        fid = int(feat_ids[k])
+        target = float(feat_targets[k])
+        amount_held = achieved_map.get(fid, 0.0)
         shortfall = shortfalls.get(fid, 0.0)
         target_met = amount_held >= target * misslevel
-
         rows.append({
             "Feature_ID": fid,
-            "Feature_Name": name,
+            "Feature_Name": feat_names[k],
             "Target": target,
             "Amount_Held": amount_held,
             "Target_Met": target_met,
@@ -210,15 +229,13 @@ def write_ssoln(
         Output file path.
     """
     pu_ids = problem.planning_units["id"].tolist()
-    counts = [0] * len(pu_ids)
+    counts = np.zeros(len(pu_ids), dtype=int)
 
     for sol in solutions:
-        for i, selected in enumerate(sol.selected):
-            if selected:
-                counts[i] += 1
+        counts += sol.selected.astype(int)
 
     rows = [
-        {"Planning_Unit": pu_id, "Number": count}
+        {"Planning_Unit": pu_id, "Number": int(count)}
         for pu_id, count in zip(pu_ids, counts)
     ]
     pd.DataFrame(rows).to_csv(path, index=False)
