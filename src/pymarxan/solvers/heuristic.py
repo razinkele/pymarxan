@@ -183,10 +183,27 @@ class HeuristicSolver(Solver):
         pv_pu = problem.pu_vs_features["pu"].values
         pv_sp = problem.pu_vs_features["species"].values
         pv_am = problem.pu_vs_features["amount"].values
+
+        # Probability support
+        prob_mode = int(problem.parameters.get("PROBMODE", 1))
+        prob_weight = float(
+            problem.parameters.get("PROBABILITYWEIGHTING", 1.0)
+        )
+        prob_map: dict[int, float] = {}
+        if problem.probability is not None:
+            p_pu = problem.probability["pu"].values
+            p_val = problem.probability["probability"].values
+            for pk in range(len(p_pu)):
+                prob_map[int(p_pu[pk])] = float(p_val[pk])
+
         for k in range(len(pv_pu)):
             idx = pu_id_to_idx.get(int(pv_pu[k]))
             if idx is not None:
-                contributions.setdefault(idx, {})[int(pv_sp[k])] = float(pv_am[k])
+                raw_amt = float(pv_am[k])
+                if prob_map and prob_mode == 2:
+                    pid = int(pv_pu[k])
+                    raw_amt *= 1.0 - prob_map.get(pid, 0.0)
+                contributions.setdefault(idx, {})[int(pv_sp[k])] = raw_amt
 
         # Total available amount per feature (for rarity / irreplaceability)
         # Exclude locked-out PUs from availability calculation
@@ -224,6 +241,13 @@ class HeuristicSolver(Solver):
         # it does not override meaningful tiebreakers like cost).
         noise = rng.uniform(0.0, 1e-8, size=n)
 
+        # Mode 1: inflate effective costs by probability risk premium
+        effective_costs = costs.copy()
+        if prob_map and prob_mode == 1 and prob_weight > 0:
+            for i, pid in enumerate(pu_ids):
+                prob = prob_map.get(int(pid), 0.0)
+                effective_costs[i] += prob_weight * prob * costs[i]
+
         while any(r > 0 for r in remaining.values()) and len(available) > 0:
             best_idx = -1
             best_score: float | None = None
@@ -232,7 +256,7 @@ class HeuristicSolver(Solver):
                 score = self._score_pu(
                     idx=idx,
                     heurtype=effective_heurtype,
-                    costs=costs,
+                    costs=effective_costs,
                     contributions=contributions,
                     remaining=remaining,
                     total_available=total_available,

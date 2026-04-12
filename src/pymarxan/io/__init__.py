@@ -11,6 +11,7 @@ from pymarxan.io.readers import (
     read_ssoln,
     read_sum,
 )
+from pymarxan.io.spatial_export import export_frequency_spatial, export_solution_spatial
 from pymarxan.io.writers import (
     save_project,
     write_bound,
@@ -24,6 +25,8 @@ from pymarxan.io.writers import (
 )
 
 __all__ = [
+    "export_frequency_spatial",
+    "export_solution_spatial",
     "load_project",
     "read_bound",
     "read_input_dat",

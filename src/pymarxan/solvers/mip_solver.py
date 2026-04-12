@@ -151,11 +151,46 @@ class MIPSolver(Solver):
                     )
                     conn_expr += -conn_weight * cval * z
 
-        model += cost_expr + blm * boundary_expr + conn_expr, "objective"
+        # Probability risk premium (Mode 1)
+        prob_expr = 0
+        prob_mode = int(problem.parameters.get("PROBMODE", 1))
+        if problem.probability is not None and prob_mode == 1:
+            prob_weight = float(
+                problem.parameters.get("PROBABILITYWEIGHTING", 1.0)
+            )
+            if prob_weight > 0:
+                prob_pu = problem.probability["pu"].values
+                prob_val = problem.probability["probability"].values
+                prob_map: dict[int, float] = {}
+                for pk in range(len(prob_pu)):
+                    prob_map[int(prob_pu[pk])] = float(prob_val[pk])
+                prob_expr = pulp.lpSum(
+                    prob_weight
+                    * prob_map.get(int(pu_id_arr[k]), 0.0)
+                    * float(pu_cost_arr[k])
+                    * x[int(pu_id_arr[k])]
+                    for k in range(len(pu_id_arr))
+                )
+
+        model += (
+            cost_expr + blm * boundary_expr + conn_expr + prob_expr,
+            "objective",
+        )
 
         # Constraints: feature targets
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-        
+
+        # Build probability map for Mode 2 (persistence-adjusted amounts)
+        prob_map_m2: dict[int, float] = {}
+        if (
+            problem.probability is not None
+            and prob_mode == 2
+        ):
+            p_pu = problem.probability["pu"].values
+            p_val = problem.probability["probability"].values
+            for pk in range(len(p_pu)):
+                prob_map_m2[int(p_pu[pk])] = float(p_val[pk])
+
         # Pre-group feature data for O(1) lookup instead of O(R) filtering
         feat_groups = problem.pu_vs_features.groupby("species")
         
@@ -171,10 +206,18 @@ class MIPSolver(Solver):
                 pus = feat_data["pu"].values
                 amounts = feat_data["amount"].values
                 
-                amount_expr = pulp.lpSum(
-                    float(amt) * x[int(pu)]
-                    for pu, amt in zip(pus, amounts)
-                )
+                if prob_map_m2:
+                    # Mode 2: effective_amount = amount * (1 - probability)
+                    amount_expr = pulp.lpSum(
+                        float(amt) * (1.0 - prob_map_m2.get(int(pu), 0.0))
+                        * x[int(pu)]
+                        for pu, amt in zip(pus, amounts)
+                    )
+                else:
+                    amount_expr = pulp.lpSum(
+                        float(amt) * x[int(pu)]
+                        for pu, amt in zip(pus, amounts)
+                    )
                 model += amount_expr >= target, f"target_{fid}"
 
         # Solve
