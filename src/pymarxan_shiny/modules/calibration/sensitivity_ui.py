@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.calibration.sensitivity import (
     SensitivityConfig,
     SensitivityResult,
@@ -31,28 +32,48 @@ def build_sensitivity_config(
 @module.ui
 def sensitivity_ui():
     return ui.card(
-        ui.card_header("Target Sensitivity Analysis"),
+        help_card_header("Target Sensitivity Analysis"),
+        ui.p(
+            "Test how sensitive the reserve design is to changes in conservation "
+            "targets. Each feature's target is scaled by a range of multipliers "
+            "(e.g. 0.8\u20131.2 = 80\u2013120% of original target). This reveals "
+            "which features drive the solution and how robust the design is to "
+            "target uncertainty.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_slider(
-                    "mult_range",
-                    "Multiplier Range",
-                    min=0.5,
-                    max=2.0,
-                    value=[0.8, 1.2],
-                    step=0.1,
+                ui.tooltip(
+                    ui.input_slider(
+                        "mult_range",
+                        "Multiplier Range",
+                        min=0.5,
+                        max=2.0,
+                        value=[0.8, 1.2],
+                        step=0.1,
+                    ),
+                    "Scales each feature's conservation target. "
+                    "E.g. 0.8 = 80% of target, 1.2 = 120% of target.",
                 ),
-                ui.input_numeric(
-                    "mult_steps",
-                    "Steps",
-                    value=5,
-                    min=3,
-                    max=20,
+                ui.tooltip(
+                    ui.input_numeric(
+                        "mult_steps",
+                        "Steps",
+                        value=5,
+                        min=3,
+                        max=20,
+                    ),
+                    "Number of evenly-spaced multiplier values between the min "
+                    "and max of the range. More steps = finer resolution.",
                 ),
-                ui.input_action_button(
-                    "run_sensitivity",
-                    "Run Sensitivity",
-                    class_="btn-primary w-100",
+                ui.tooltip(
+                    ui.input_action_button(
+                        "run_sensitivity",
+                        "Run Sensitivity",
+                        class_="btn-primary w-100",
+                    ),
+                    "Run the solver once per multiplier value per feature and "
+                    "plot objective cost vs. target multiplier.",
                 ),
                 width=280,
             ),
@@ -72,6 +93,8 @@ def sensitivity_server(
     problem: reactive.Value,
     solver: reactive.Calc,
 ):
+    help_server_setup(input, "sensitivity")
+
     result: reactive.Value[SensitivityResult | None] = reactive.value(None)
 
     @reactive.effect

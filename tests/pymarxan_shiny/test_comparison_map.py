@@ -6,6 +6,9 @@ from pymarxan_shiny.modules.mapping.comparison_map import (
     comparison_map_server,
     comparison_map_ui,
 )
+from pymarxan_shiny.modules.mapping.ocean_palette import (
+    CMP_BOTH, CMP_A_ONLY, CMP_B_ONLY, CMP_NEITHER,
+)
 
 
 def test_comparison_map_ui_returns_tag():
@@ -18,23 +21,23 @@ def test_comparison_map_server_callable():
 
 
 def test_comparison_color_both():
-    """Both selected -> green."""
-    assert comparison_color(True, True) == "#2ecc71"
+    """Both selected -> teal."""
+    assert comparison_color(True, True) == CMP_BOTH
 
 
 def test_comparison_color_a_only():
-    """A only -> blue."""
-    assert comparison_color(True, False) == "#3498db"
+    """A only -> ocean-blue."""
+    assert comparison_color(True, False) == CMP_A_ONLY
 
 
 def test_comparison_color_b_only():
-    """B only -> orange."""
-    assert comparison_color(False, True) == "#e67e22"
+    """B only -> coral."""
+    assert comparison_color(False, True) == CMP_B_ONLY
 
 
 def test_comparison_color_neither():
-    """Neither -> gray."""
-    assert comparison_color(False, False) == "#bdc3c7"
+    """Neither -> steel-gray."""
+    assert comparison_color(False, False) == CMP_NEITHER
 
 
 def test_comparison_map_ui_has_output_widget():

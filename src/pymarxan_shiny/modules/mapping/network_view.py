@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import (
+    METRIC_LOW_RGB, METRIC_HIGH_RGB, MAP_FALLBACK, EDGE_COLOR,
+)
 from pymarxan.connectivity.metrics import compute_in_degree
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
@@ -21,14 +25,14 @@ MAX_EDGES = 5000
 
 
 def metric_color(normalized: float) -> str:
-    """Map a 0-1 normalized metric to a yellow-to-purple hex color.
+    """Map a 0-1 normalized metric to an aqua → deep-navy hex color.
 
-    0.0 -> yellow (#f1c40f), 1.0 -> purple (#8e44ad).
+    0.0 -> aqua, 1.0 -> deep navy.
     """
     normalized = max(0.0, min(1.0, normalized))
-    r = int(241 * (1.0 - normalized) + 142 * normalized)
-    g = int(196 * (1.0 - normalized) + 68 * normalized)
-    b = int(15 * (1.0 - normalized) + 173 * normalized)
+    r = int(METRIC_LOW_RGB[0] * (1.0 - normalized) + METRIC_HIGH_RGB[0] * normalized)
+    g = int(METRIC_LOW_RGB[1] * (1.0 - normalized) + METRIC_HIGH_RGB[1] * normalized)
+    b = int(METRIC_LOW_RGB[2] * (1.0 - normalized) + METRIC_HIGH_RGB[2] * normalized)
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -45,28 +49,43 @@ def compute_centroids(
 @module.ui
 def network_view_ui():
     sidebar = ui.sidebar(
-        ui.input_select(
-            "metric",
-            "Color by Metric",
-            choices={
-                "in_degree": "In-Degree",
-                "out_degree": "Out-Degree",
-            },
-            selected="in_degree",
+        ui.tooltip(
+            ui.input_select(
+                "metric",
+                "Color by Metric",
+                choices={
+                    "in_degree": "In-Degree",
+                    "out_degree": "Out-Degree",
+                },
+                selected="in_degree",
+            ),
+            "Connectivity metric to color nodes by. In-degree counts incoming "
+            "connections; out-degree counts outgoing connections.",
         ),
-        ui.input_slider(
-            "edge_threshold",
-            "Min Edge Weight",
-            min=0.0,
-            max=1.0,
-            value=0.0,
-            step=0.01,
+        ui.tooltip(
+            ui.input_slider(
+                "edge_threshold",
+                "Min Edge Weight",
+                min=0.0,
+                max=1.0,
+                value=0.0,
+                step=0.01,
+            ),
+            "Only display edges with weight above this threshold. "
+            "Increase to reduce visual clutter for dense networks.",
         ),
         width=220,
     )
     if _HAS_IPYLEAFLET:
         return ui.card(
-            ui.card_header("Connectivity Network"),
+            help_card_header("Connectivity Network"),
+            ui.p(
+                "Visualise the connectivity network overlaid on planning units. "
+                "Nodes are colored by the selected graph metric; edges show "
+                "connections above the weight threshold. Useful for identifying "
+                "key corridors and connectivity bottlenecks.",
+                class_="text-muted small mb-3",
+            ),
             ui.layout_sidebar(
                 sidebar,
                 ui.div(
@@ -76,7 +95,11 @@ def network_view_ui():
             ),
         )
     return ui.card(
-        ui.card_header("Connectivity Network"),
+        help_card_header("Connectivity Network"),
+        ui.p(
+            "Connectivity network view (install ipyleaflet for interactive maps).",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(sidebar, ui.output_ui("network_content")),
     )
 
@@ -89,6 +112,8 @@ def network_view_server(
     problem: reactive.Value,
     connectivity_matrix: reactive.Value,
 ):
+    help_server_setup(input, "network_view")
+
     if _HAS_IPYLEAFLET:
 
         @render_widget
@@ -115,7 +140,7 @@ def network_view_server(
 
             colors = [
                 metric_color((float(metric_values[i]) - min_val) / rng)
-                if i < len(metric_values) else "#bdc3c7"
+                if i < len(metric_values) else MAP_FALLBACK
                 for i in range(n_pu)
             ]
 
@@ -142,7 +167,7 @@ def network_view_server(
                             break
                         line = ipyleaflet.Polyline(
                             locations=[centroids[i], centroids[j]],
-                            color="#3498db",
+                            color=EDGE_COLOR,
                             opacity=min(1.0, weight),
                             weight=2,
                         )
@@ -175,15 +200,23 @@ def network_view_server(
 
             threshold = input.edge_threshold()
             n = min(matrix.shape[0], n_pu)
-            edge_count = sum(
+            edge_count_total = sum(
                 1 for i in range(n) for j in range(n)
                 if float(matrix[i, j]) > threshold and i != j
             )
 
+            truncated = ""
+            if edge_count_total > MAX_EDGES:
+                truncated = (
+                    f"\n\u26A0 Showing {MAX_EDGES} of {edge_count_total} edges "
+                    f"(capped to prevent browser slowdown)"
+                )
+
             return (
-                f"{n_pu} nodes — colored by {metric_name}\n"
-                f"Metric range: {min_val:.2f} – {max_val:.2f}\n"
-                f"Edges shown: {edge_count} (threshold: {threshold:.2f})"
+                f"{n_pu} nodes \u2014 colored by {metric_name}\n"
+                f"Metric range: {min_val:.2f} \u2013 {max_val:.2f}\n"
+                f"Edges shown: {min(edge_count_total, MAX_EDGES)} "
+                f"(threshold: {threshold:.2f}){truncated}"
             )
 
     if not _HAS_IPYLEAFLET:

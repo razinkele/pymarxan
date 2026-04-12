@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import (
+    COST_LOW_RGB, COST_HIGH_RGB, MAP_AVAILABLE, MAP_LOCKED_IN,
+    MAP_LOCKED_OUT, MAP_FALLBACK,
+)
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
 
@@ -17,36 +22,50 @@ except ImportError:
 
 
 def cost_color(normalized: float) -> str:
-    """Map a 0-1 normalized cost to a yellow-to-red hex color."""
-    g = int(255 * (1.0 - max(0.0, min(1.0, normalized))))
-    return f"#ff{g:02x}00"
+    """Map a 0-1 normalized cost to a seafoam-to-coral hex color."""
+    t = max(0.0, min(1.0, normalized))
+    r = int(COST_LOW_RGB[0] * (1.0 - t) + COST_HIGH_RGB[0] * t)
+    g = int(COST_LOW_RGB[1] * (1.0 - t) + COST_HIGH_RGB[1] * t)
+    b = int(COST_LOW_RGB[2] * (1.0 - t) + COST_HIGH_RGB[2] * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def status_color(status: int) -> str:
     """Map a Marxan status code to a categorical color."""
     colors = {
-        0: "#95a5a6",  # available — gray
-        1: "#95a5a6",  # available (initial included) — gray
-        2: "#2ecc71",  # locked-in — green
-        3: "#e74c3c",  # locked-out — red
+        0: MAP_AVAILABLE,   # available — muted blue-gray
+        1: MAP_AVAILABLE,   # available (initial included)
+        2: MAP_LOCKED_IN,   # locked-in — kelp green
+        3: MAP_LOCKED_OUT,  # locked-out — deep coral
     }
-    return colors.get(status, "#bdc3c7")
+    return colors.get(status, MAP_FALLBACK)
 
 
 @module.ui
 def spatial_grid_ui():
     sidebar = ui.sidebar(
-        ui.input_select(
-            "color_by",
-            "Color by",
-            choices={"cost": "Cost", "status": "Status"},
-            selected="cost",
+        ui.tooltip(
+            ui.input_select(
+                "color_by",
+                "Color by",
+                choices={"cost": "Cost", "status": "Status"},
+                selected="cost",
+            ),
+            "Choose how to color planning units on the map. "
+            "'Cost' shows a yellow-to-red gradient; 'Status' shows "
+            "categorical colors (gray=available, green=locked-in, red=locked-out).",
         ),
         width=200,
     )
     if _HAS_IPYLEAFLET:
         return ui.card(
-            ui.card_header("Planning Unit Map"),
+            help_card_header("Planning Unit Map"),
+            ui.p(
+                "Interactive map of all planning units colored by cost or status. "
+                "Use this to visually inspect the spatial layout of your "
+                "conservation planning region.",
+                class_="text-muted small mb-3",
+            ),
             ui.layout_sidebar(
                 sidebar,
                 ui.div(
@@ -56,7 +75,11 @@ def spatial_grid_ui():
             ),
         )
     return ui.card(
-        ui.card_header("Planning Unit Map"),
+        help_card_header("Planning Unit Map"),
+        ui.p(
+            "Planning unit map (install ipyleaflet for interactive maps).",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(sidebar, ui.output_ui("grid_content")),
     )
 
@@ -68,6 +91,8 @@ def spatial_grid_server(
     session,
     problem: reactive.Value,
 ):
+    help_server_setup(input, "spatial_grid")
+
     if _HAS_IPYLEAFLET:
 
         @render_widget

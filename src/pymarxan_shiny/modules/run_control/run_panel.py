@@ -6,6 +6,7 @@ import threading
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.solvers.base import SolverConfig
 from pymarxan_shiny.modules.run_control.progress import SolverProgress
 
@@ -13,13 +14,24 @@ from pymarxan_shiny.modules.run_control.progress import SolverProgress
 @module.ui
 def run_panel_ui():
     return ui.card(
-        ui.card_header("Run Solver"),
+        help_card_header("Run Solver"),
+        ui.p(
+            "Execute the configured solver on the loaded conservation problem. "
+            "The solver runs in a background thread so the interface remains "
+            "responsive. Progress and results are displayed in real time. "
+            "After the run completes, explore results in the Results and Maps tabs.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_action_button(
-                    "run_solver",
-                    "Run Solver",
-                    class_="btn-primary btn-lg w-100",
+                ui.tooltip(
+                    ui.input_action_button(
+                        "run_solver",
+                        "Run Solver",
+                        class_="btn-primary btn-lg w-100",
+                    ),
+                    "Start the solver with the current configuration. "
+                    "Ensure a project is loaded and a solver is configured first.",
                 ),
                 ui.hr(),
                 ui.output_ui("progress_bar"),
@@ -43,6 +55,8 @@ def run_panel_server(
     current_solution: reactive.Value,
     all_solutions: reactive.Value,
 ):
+    help_server_setup(input, "run_panel")
+
     progress = SolverProgress()
 
     @reactive.effect
@@ -131,6 +145,7 @@ def run_panel_server(
                     class_="progress-bar",
                     role="progressbar",
                     style=f"width: {pct}%",
+                    **{"aria-valuenow": str(pct), "aria-valuemin": "0", "aria-valuemax": "100"},
                 ),
                 class_="progress",
             ),

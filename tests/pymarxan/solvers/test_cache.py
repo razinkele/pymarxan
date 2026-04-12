@@ -73,13 +73,27 @@ class TestConstruction:
         assert cache.feat_id_to_col == {1: 0, 2: 1, 3: 2}
 
     def test_neighbors_length(self, cache):
-        assert len(cache.neighbors) == 6
+        # CSR adj_start has length n_pu + 1
+        assert len(cache.adj_start) == 7  # 6 PUs + 1
 
     def test_neighbors_symmetry(self, cache):
-        """If (j, w) in neighbors[i], then (i, w) must be in neighbors[j]."""
-        for i, nbrs in enumerate(cache.neighbors):
-            for j, w in nbrs:
-                found = any(ni == i and nw == w for ni, nw in cache.neighbors[j])
+        """If j in neighbors of i with weight w, then i must be in neighbors of j with same weight."""
+        n = len(cache.adj_start) - 1
+        for i in range(n):
+            start_i = cache.adj_start[i]
+            end_i = cache.adj_start[i + 1]
+            for k in range(start_i, end_i):
+                j = cache.adj_indices[k]
+                w = cache.adj_weights[k]
+                # Find i in j's neighbors
+                start_j = cache.adj_start[j]
+                end_j = cache.adj_start[j + 1]
+                j_nbrs = cache.adj_indices[start_j:end_j]
+                j_wts = cache.adj_weights[start_j:end_j]
+                found = any(
+                    j_nbrs[m] == i and j_wts[m] == w
+                    for m in range(len(j_nbrs))
+                )
                 assert found, (
                     f"Neighbor symmetry broken: ({i},{j},w={w}) "
                     f"not mirrored"
@@ -87,9 +101,12 @@ class TestConstruction:
 
     def test_neighbors_content(self, cache):
         # PU 1 (idx 0) neighbors: PU 2 (idx 1) with weight 1.0
-        assert (1, 1.0) in cache.neighbors[0]
+        s0, e0 = cache.adj_start[0], cache.adj_start[1]
+        nbrs_0 = list(zip(cache.adj_indices[s0:e0], cache.adj_weights[s0:e0]))
+        assert (1, 1.0) in nbrs_0
         # PU 3 (idx 2) neighbors: PU 2 (idx 1) and PU 4 (idx 3)
-        nbr_ids = {j for j, _ in cache.neighbors[2]}
+        s2, e2 = cache.adj_start[2], cache.adj_start[3]
+        nbr_ids = set(cache.adj_indices[s2:e2])
         assert nbr_ids == {1, 3}
 
     def test_self_boundary_shape_and_values(self, cache):

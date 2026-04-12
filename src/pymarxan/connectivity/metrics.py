@@ -28,15 +28,10 @@ def compute_betweenness_centrality(matrix: np.ndarray) -> np.ndarray:
     """Compute betweenness centrality using networkx. Returns normalized [0, 1]."""
     import networkx as nx
 
-    n = matrix.shape[0]
-    G = nx.DiGraph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in range(n):
-            if i != j and matrix[i, j] > 0:
-                G.add_edge(i, j, weight=matrix[i, j])
+    G = nx.from_numpy_array(matrix, create_using=nx.DiGraph)
 
     bc = nx.betweenness_centrality(G, weight="weight", normalized=True)
+    n = matrix.shape[0]
     return np.array([bc.get(i, 0.0) for i in range(n)])
 
 
@@ -45,12 +40,7 @@ def compute_eigenvector_centrality(matrix: np.ndarray) -> np.ndarray:
     import networkx as nx
 
     n = matrix.shape[0]
-    G = nx.DiGraph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in range(n):
-            if i != j and matrix[i, j] > 0:
-                G.add_edge(i, j, weight=matrix[i, j])
+    G = nx.from_numpy_array(matrix, create_using=nx.DiGraph)
 
     if G.number_of_edges() == 0:
         return np.zeros(n)

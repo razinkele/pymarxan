@@ -5,15 +5,38 @@ import tempfile
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.io.exporters import export_solution_csv, export_summary_csv
 
 
 @module.ui
 def export_ui():
     return ui.card(
-        ui.card_header("Export Results"),
-        ui.download_button("download_solution", "Download Solution CSV"),
-        ui.download_button("download_summary", "Download Target Summary CSV"),
+        help_card_header("Export Results"),
+        ui.p(
+            "Download the solver results as CSV files for use in GIS software, "
+            "reports, or further analysis. The solution CSV lists each planning "
+            "unit and whether it was selected. The target summary CSV shows "
+            "feature-level achievement details.",
+            class_="text-muted small mb-3",
+        ),
+        ui.div(
+            ui.tooltip(
+                ui.download_button("download_solution", "Download Solution CSV"),
+                "Download a CSV with columns: PU ID, selected (1/0), cost. "
+                "One row per planning unit.",
+            ),
+            class_="mb-2",
+        ),
+        ui.div(
+            ui.tooltip(
+                ui.download_button("download_summary", "Download Target Summary CSV"),
+                "Download a CSV summarising target achievement: feature ID, name, "
+                "target, achieved amount, and whether the target is met.",
+            ),
+            class_="mb-2",
+        ),
+        ui.output_ui("export_status"),
     )
 
 
@@ -23,6 +46,8 @@ def export_server(
     problem: reactive.Value,
     solution: reactive.Value,
 ):
+    help_server_setup(input, "export")
+
     @render.download(filename="pymarxan_solution.csv")
     def download_solution():
         p = problem()
@@ -46,3 +71,17 @@ def export_server(
         )
         export_summary_csv(p, s, tmp.name)
         return tmp.name
+
+    @render.ui
+    def export_status():
+        p = problem()
+        s = solution()
+        if p is None or s is None:
+            return ui.p(
+                "\u26A0 No solution available to export. Run a solver first.",
+                class_="text-warning mt-2",
+            )
+        return ui.p(
+            f"\u2705 Ready — {s.n_selected} selected PUs, cost {s.cost:.2f}",
+            class_="text-success mt-2",
+        )

@@ -38,8 +38,12 @@ class ProblemCache:
         (n_feat,) float64 — species penalty factor for each feature.
     feat_id_to_col : dict[int, int]
         Mapping from feature ID to column index in pu_feat_matrix.
-    neighbors : list[list[tuple[int, float]]]
-        Adjacency list — neighbors[i] is list of (j, boundary_weight).
+    adj_indices : np.ndarray
+        (n_edges,) int32 — flattened array of neighbor indices.
+    adj_weights : np.ndarray
+        (n_edges,) float64 — flattened array of boundary weights.
+    adj_start : np.ndarray
+        (n_pu + 1,) int32 — start index in adj arrays for each PU.
     self_boundary : np.ndarray
         (n_pu,) float64 — diagonal boundary value for each PU.
     misslevel : float
@@ -61,7 +65,9 @@ class ProblemCache:
     feat_targets: np.ndarray
     feat_spf: np.ndarray
     feat_id_to_col: dict[int, int]
-    neighbors: list[list[tuple[int, float]]]
+    adj_indices: np.ndarray
+    adj_weights: np.ndarray
+    adj_start: np.ndarray
     self_boundary: np.ndarray
     misslevel: float
     cost_thresh: float
@@ -109,37 +115,53 @@ class ProblemCache:
         feat_targets = np.asarray(feat_df["target"].values, dtype=np.float64)
         feat_spf = np.asarray(feat_df["spf"].values, dtype=np.float64)
 
-        # PU-feature matrix (dense)
-        pu_feat_matrix = np.zeros((n_pu, n_feat), dtype=np.float64)
-        for _, row in puvspr_df.iterrows():
-            pu_id = int(row["pu"])
-            sp_id = int(row["species"])
-            amount = float(row["amount"])
-            ri = pu_id_to_idx.get(pu_id)
-            ci = feat_id_to_col.get(sp_id)
-            if ri is not None and ci is not None:
-                pu_feat_matrix[ri, ci] = amount
+        # PU-feature matrix (dense) — use shared builder
+        pu_feat_matrix = problem.build_pu_feature_matrix()
 
         # Boundary: adjacency list + self-boundary
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
         self_boundary = np.zeros(n_pu, dtype=np.float64)
 
         if problem.boundary is not None:
-            for _, row in problem.boundary.iterrows():
-                id1 = int(row["id1"])
-                id2 = int(row["id2"])
-                bval = float(row["boundary"])
+            b_id1 = problem.boundary["id1"].values
+            b_id2 = problem.boundary["id2"].values
+            b_val = problem.boundary["boundary"].values
+            for k in range(len(b_id1)):
+                i1 = int(b_id1[k])
+                i2 = int(b_id2[k])
+                bval = float(b_val[k])
 
-                if id1 == id2:
-                    idx = pu_id_to_idx.get(id1)
+                if i1 == i2:
+                    idx = pu_id_to_idx.get(i1)
                     if idx is not None:
                         self_boundary[idx] = bval
                 else:
-                    idx1 = pu_id_to_idx.get(id1)
-                    idx2 = pu_id_to_idx.get(id2)
+                    idx1 = pu_id_to_idx.get(i1)
+                    idx2 = pu_id_to_idx.get(i2)
                     if idx1 is not None and idx2 is not None:
+                        # Store both directions
                         neighbors[idx1].append((idx2, bval))
                         neighbors[idx2].append((idx1, bval))
+
+        # Flatten neighbors to CSR-like arrays for fast indexing
+        adj_indices_list = []
+        adj_weights_list = []
+        adj_start = np.zeros(n_pu + 1, dtype=np.int32)
+        
+        current_idx = 0
+        for i in range(n_pu):
+            adj_start[i] = current_idx
+            # Sort neighbors by index for better memory access pattern
+            # (though strictly not required for logic)
+            nbs = sorted(neighbors[i], key=lambda x: x[0])
+            for neighbor_idx, weight in nbs:
+                adj_indices_list.append(neighbor_idx)
+                adj_weights_list.append(weight)
+                current_idx += 1
+        adj_start[n_pu] = current_idx
+        
+        adj_indices = np.array(adj_indices_list, dtype=np.int32)
+        adj_weights = np.array(adj_weights_list, dtype=np.float64)
 
         # Cached scalars
         params = problem.parameters
@@ -158,7 +180,9 @@ class ProblemCache:
             feat_targets=feat_targets,
             feat_spf=feat_spf,
             feat_id_to_col=feat_id_to_col,
-            neighbors=neighbors,
+            adj_indices=adj_indices,
+            adj_weights=adj_weights,
+            adj_start=adj_start,
             self_boundary=self_boundary,
             misslevel=misslevel,
             cost_thresh=cost_thresh,
@@ -268,27 +292,41 @@ class ProblemCache:
         cost_delta = sign * self.costs[idx]
 
         # --- Boundary delta ---
-        boundary_delta = 0.0
+        # Get neighbors from CSR arrays
+        start = self.adj_start[idx]
+        end = self.adj_start[idx + 1]
+        
         # Self-boundary: only contributes when PU is selected
-        boundary_delta += sign * self.self_boundary[idx]
-        # Neighbor boundary: shared edges
-        for j, w in self.neighbors[idx]:
-            if adding:
-                # Adding idx: if j is selected, shared boundary goes away
-                # (was +w because mismatch, now both selected => no mismatch)
-                # If j is not selected, shared boundary appears
-                # (was no mismatch, now idx selected but j not => +w)
-                if selected[j]:
-                    boundary_delta -= w  # Mismatch resolved
-                else:
-                    boundary_delta += w  # New mismatch
-            else:
-                # Removing idx: if j is selected, new mismatch
-                # If j is not selected, mismatch resolved
-                if selected[j]:
-                    boundary_delta += w  # New mismatch
-                else:
-                    boundary_delta -= w  # Mismatch resolved
+        # (sign is +1 if adding, -1 if removing)
+        boundary_delta = sign * self.self_boundary[idx]
+        
+        if start < end:
+            nbs = self.adj_indices[start:end]
+            weights = self.adj_weights[start:end]
+            
+            # Vectorized boundary calculation
+            # If adding (sign=1):
+            #   neighbor selected => -weight (connected, boundary removed)
+            #   neighbor not selected => +weight (not connected, boundary added)
+            #   multiplier = (1 if not sel else -1) = 1 - 2*sel
+            # If removing (sign=-1):
+            #   neighbor selected => +weight (was connected, now broken) 
+            #   neighbor not selected => -weight (was isolated, now gone)
+            #   multiplier = (1 if sel else -1) = 2*sel - 1
+            
+            # Combined multiplier logic:
+            # multiplier = sign * (1 - 2 * selected[nbs])
+            # But selected is bool, so need conversion
+            
+            neighbor_selected = selected[nbs]
+            # Convert bool to float: True -> 1.0, False -> 0.0
+            # multiplier = sign * (1.0 - 2.0 * neighbor_selected)
+            
+            # Using loop for clarity vs small array overhead:
+            # Vectorized numpy op is faster for degree > ~5-10
+            
+            multipliers = sign * (1.0 - 2.0 * neighbor_selected.astype(np.float64))
+            boundary_delta += np.dot(weights, multipliers)
 
         # --- Penalty delta ---
         # Only features present in this PU can change their shortfall
@@ -343,12 +381,36 @@ class ProblemCache:
         total = float(np.sum(self.self_boundary[selected]))
 
         # Shared boundary for mismatched neighbors
-        for i in range(len(selected)):
-            if not selected[i]:
+        # Iterate only selected nodes
+        selected_indices = np.where(selected)[0]
+        
+        for i in selected_indices:
+            start = self.adj_start[i]
+            end = self.adj_start[i + 1]
+            if start == end:
                 continue
-            for j, w in self.neighbors[i]:
-                # Only count when exactly one is selected; avoid double-count
-                # by only counting (i, j) when i < j or j is not selected
-                if not selected[j]:
-                    total += w
+                
+            nbs = self.adj_indices[start:end]
+            weights = self.adj_weights[start:end]
+            
+            # For each neighbor j of selected node i:
+            # If j is NOT selected, we add weight (boundary exposed)
+            # If j IS selected, we do nothing (internal edge) 
+            # Note: The "double counting" issue in original code handled (i<j) check logic
+            # implicitly by looping all edges?
+            # Original code:
+            # for j, w in self.neighbors[i]:
+            #    if not selected[j]: total += w
+            
+            # Vectorized check for neighbors not selected
+            # logic: sum(weights where not selected[nbs])
+            
+            mask_not_selected = ~selected[nbs]
+            total += np.sum(weights[mask_not_selected])
+            
+        # WAIT: The above counts each boundary twice?
+        # If i is selected and j is not: i adds boundary w.
+        # If j is not selected, we don't iterate j. So only counted once.
+        # Correct.
+        
         return total

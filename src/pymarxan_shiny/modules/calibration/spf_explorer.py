@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.calibration.spf import SPFResult, calibrate_spf
 from pymarxan.solvers.base import SolverConfig
 
@@ -13,17 +14,35 @@ from pymarxan.solvers.base import SolverConfig
 @module.ui
 def spf_explorer_ui():
     return ui.card(
-        ui.card_header("SPF Calibration"),
+        help_card_header("SPF Calibration"),
+        ui.p(
+            "Iteratively calibrate the Species Penalty Factor (SPF) to ensure all "
+            "conservation targets are met. At each iteration, SPF values for unmet "
+            "features are multiplied by the given factor, increasing their penalty "
+            "until the solver meets all targets or the iteration limit is reached.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_numeric(
-                    "max_iterations", "Max iterations", value=10, min=1, max=50,
+                ui.tooltip(
+                    ui.input_numeric(
+                        "max_iterations", "Max iterations", value=10, min=1, max=50,
+                    ),
+                    "Maximum number of SPF calibration rounds. The process "
+                    "stops early if all targets are met.",
                 ),
-                ui.input_numeric(
-                    "multiplier", "SPF multiplier", value=2.0, min=1.1, max=10.0,
+                ui.tooltip(
+                    ui.input_numeric(
+                        "multiplier", "SPF multiplier", value=2.0, min=1.1, max=10.0,
+                    ),
+                    "Multiplies the Species Penalty Factor of unmet features "
+                    "each iteration until all targets are met or max iterations reached.",
                 ),
-                ui.input_action_button(
-                    "run_spf", "Run SPF Calibration", class_="btn-primary w-100",
+                ui.tooltip(
+                    ui.input_action_button(
+                        "run_spf", "Run SPF Calibration", class_="btn-primary w-100",
+                    ),
+                    "Start the iterative SPF calibration process.",
                 ),
                 ui.hr(),
                 ui.output_text("spf_status"),
@@ -42,6 +61,8 @@ def spf_explorer_server(
     problem: reactive.Value,
     solver: reactive.Calc,
 ):
+    help_server_setup(input, "spf_explorer")
+
     spf_result: reactive.Value[SPFResult | None] = reactive.value(None)
 
     @reactive.effect

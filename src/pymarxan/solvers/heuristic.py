@@ -10,6 +10,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.utils import build_solution
 
 _VALID_HEURTYPES = range(8)
 
@@ -179,13 +180,13 @@ class HeuristicSolver(Solver):
         # Build feature contribution lookup: pu_index -> {fid: amount}
         pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
         contributions: dict[int, dict[int, float]] = {}
-        for _, row in problem.pu_vs_features.iterrows():
-            pid = int(row["pu"])
-            fid = int(row["species"])
-            amount = float(row["amount"])
-            idx = pu_id_to_idx.get(pid)
+        pv_pu = problem.pu_vs_features["pu"].values
+        pv_sp = problem.pu_vs_features["species"].values
+        pv_am = problem.pu_vs_features["amount"].values
+        for k in range(len(pv_pu)):
+            idx = pu_id_to_idx.get(int(pv_pu[k]))
             if idx is not None:
-                contributions.setdefault(idx, {})[fid] = amount
+                contributions.setdefault(idx, {})[int(pv_sp[k])] = float(pv_am[k])
 
         # Total available amount per feature (for rarity / irreplaceability)
         # Exclude locked-out PUs from availability calculation
@@ -198,11 +199,12 @@ class HeuristicSolver(Solver):
 
         # Track remaining need per feature (with MISSLEVEL)
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+        feat_ids = problem.features["id"].values
+        feat_targets = problem.features["target"].values.astype(float)
+        feat_spf = problem.features["spf"].values.astype(float) if "spf" in problem.features.columns else np.ones(len(feat_ids))
         remaining: dict[int, float] = {}
-        for _, row in problem.features.iterrows():
-            fid = int(row["id"])
-            target = float(row["target"]) * misslevel
-            remaining[fid] = target
+        for k in range(len(feat_ids)):
+            remaining[int(feat_ids[k])] = float(feat_targets[k]) * misslevel
 
         # Subtract locked-in contributions
         for idx in np.where(locked_in)[0]:
@@ -251,53 +253,14 @@ class HeuristicSolver(Solver):
                     remaining[fid] -= amount
             available = available[available != best_idx]
 
-        # Compute objective
+        # Build solution using shared utility (handles boundary, penalty,
+        # targets, shortfall, cost-threshold consistently with all solvers)
         blm = float(problem.parameters.get("BLM", 0.0))
-        total_cost = float(np.asarray(costs[selected]).sum())
 
-        boundary_val = 0.0
-        if problem.boundary is not None and blm > 0:
-            for _, row in problem.boundary.iterrows():
-                id1 = int(row["id1"])
-                id2 = int(row["id2"])
-                bval = float(row["boundary"])
-                if id1 == id2:
-                    idx = pu_id_to_idx.get(id1)
-                    if idx is not None and selected[idx]:
-                        boundary_val += bval
-                else:
-                    i = pu_id_to_idx.get(id1)
-                    j = pu_id_to_idx.get(id2)
-                    if i is not None and j is not None:
-                        if selected[i] != selected[j]:
-                            boundary_val += bval
-
-        # Check targets
-        targets_met: dict[int, bool] = {}
-        for _, row in problem.features.iterrows():
-            fid = int(row["id"])
-            targets_met[fid] = remaining.get(fid, 0.0) <= 0
-
-        # Penalty
-        penalty = 0.0
-        for _, row in problem.features.iterrows():
-            fid = int(row["id"])
-            if not targets_met[fid]:
-                spf = float(row.get("spf", 1.0))
-                shortfall = max(remaining.get(fid, 0.0), 0.0)
-                penalty += spf * shortfall
-
-        total_shortfall = sum(max(r, 0.0) for r in remaining.values())
-        objective = total_cost + blm * boundary_val + penalty
-
-        return Solution(
-            selected=selected,
-            cost=total_cost,
-            boundary=boundary_val,
-            objective=objective,
-            targets_met=targets_met,
-            penalty=penalty,
-            shortfall=total_shortfall,
+        return build_solution(
+            problem,
+            selected,
+            blm,
             metadata={"solver": "greedy", "heurtype": effective_heurtype},
         )
 

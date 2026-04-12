@@ -51,6 +51,7 @@ class TestZoneIntegration:
 class TestConnectivityIntegration:
     @pytest.mark.integration
     def test_metrics_to_features_with_solver(self):
+        pytest.importorskip("networkx")
         problem = load_project(SIMPLE_DIR)
         pu_ids = problem.planning_units["id"].tolist()
         n = len(pu_ids)

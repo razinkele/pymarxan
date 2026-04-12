@@ -15,6 +15,7 @@ from pymarxan.zones.objective import (
     compute_zone_boundary,
     compute_zone_cost,
     compute_zone_penalty,
+    compute_zone_shortfall,
 )
 
 
@@ -68,9 +69,11 @@ class ZoneSASolver(Solver):
         locked: dict[int, int] = {}
         initial_include: set[int] = set()
         if "status" in problem.planning_units.columns:
-            for _, row in problem.planning_units.iterrows():
-                s = int(row["status"])
-                idx = pu_id_to_idx[int(row["id"])]
+            pu_id_vals = problem.planning_units["id"].values
+            pu_st_vals = problem.planning_units["status"].values.astype(int)
+            for k in range(len(pu_id_vals)):
+                s = int(pu_st_vals[k])
+                idx = pu_id_to_idx[int(pu_id_vals[k])]
                 if s == 2:
                     locked[idx] = zone_ids_list[0]
                 elif s == 3:
@@ -97,33 +100,7 @@ class ZoneSASolver(Solver):
                 zone_boundary = compute_zone_boundary(problem, assignment)
                 zone_targets = check_zone_targets(problem, assignment)
                 zone_penalty = compute_zone_penalty(problem, assignment)
-                zone_shortfall = 0.0
-                if problem.zone_targets is not None:
-                    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-                    pu_index = {
-                        int(pid): i
-                        for i, pid in enumerate(
-                            problem.planning_units["id"].tolist()
-                        )
-                    }
-                    for _, trow in problem.zone_targets.iterrows():
-                        zid = int(trow["zone"])
-                        fid = int(trow["feature"])
-                        target = float(trow["target"])
-                        contribution = problem.get_contribution(fid, zid)
-                        feat_data = problem.pu_vs_features[
-                            problem.pu_vs_features["species"] == fid
-                        ]
-                        achieved = 0.0
-                        for _, r in feat_data.iterrows():
-                            pid = int(r["pu"])
-                            idx_val = pu_index.get(pid)
-                            if (
-                                idx_val is not None
-                                and int(assignment[idx_val]) == zid
-                            ):
-                                achieved += float(r["amount"]) * contribution
-                        zone_shortfall += max(0.0, target * misslevel - achieved)
+                zone_shortfall = compute_zone_shortfall(problem, assignment)
                 obj = cost + blm_val * std_boundary + zone_penalty
                 sol = Solution(
                     selected=selected,
@@ -257,37 +234,7 @@ class ZoneSASolver(Solver):
             zone_boundary = compute_zone_boundary(problem, best_assignment)
             zone_targets = check_zone_targets(problem, best_assignment)
             zone_penalty = compute_zone_penalty(problem, best_assignment)
-
-            # Compute raw shortfall (unweighted by SPF)
-            zone_shortfall = 0.0
-            if problem.zone_targets is not None:
-                misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-                pu_index = {
-                    int(pid): i
-                    for i, pid in enumerate(
-                        problem.planning_units["id"].tolist()
-                    )
-                }
-                for _, trow in problem.zone_targets.iterrows():
-                    zid = int(trow["zone"])
-                    fid = int(trow["feature"])
-                    target = float(trow["target"])
-                    contribution = problem.get_contribution(fid, zid)
-                    feat_data = problem.pu_vs_features[
-                        problem.pu_vs_features["species"] == fid
-                    ]
-                    achieved = 0.0
-                    for _, r in feat_data.iterrows():
-                        pid = int(r["pu"])
-                        idx = pu_index.get(pid)
-                        if (
-                            idx is not None
-                            and int(best_assignment[idx]) == zid
-                        ):
-                            achieved += float(r["amount"]) * contribution
-                    zone_shortfall += max(
-                        0.0, target * misslevel - achieved
-                    )
+            zone_shortfall = compute_zone_shortfall(problem, best_assignment)
 
             sol = Solution(
                 selected=selected,

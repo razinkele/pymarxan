@@ -7,22 +7,42 @@ from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.io.readers import load_project
+from pymarxan_shiny.modules.data_input.directory_browser import (
+    directory_browser_ui,
+    directory_browser_server,
+)
 
 
 @module.ui
 def upload_ui():
     return ui.card(
-        ui.card_header("Load Marxan Project"),
+        help_card_header("Load Marxan Project"),
+        ui.p(
+            "Load an existing Marxan project to begin analysis. A valid project "
+            "requires an input.dat configuration file plus the standard Marxan "
+            "input files (pu.dat, spec.dat, puvspr.dat, and optionally bound.dat). "
+            "You can upload a ZIP archive or browse to a directory on the server.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_file("project_zip", "Upload Marxan project (.zip)",
-                              accept=[".zip"], multiple=False),
+                ui.tooltip(
+                    ui.input_file("project_zip", "Upload Marxan project (.zip)",
+                                  accept=[".zip"], multiple=False),
+                    "Upload a ZIP file containing a complete Marxan project directory. "
+                    "The ZIP must include input.dat and the standard input files "
+                    "(pu.dat, spec.dat, puvspr.dat).",
+                ),
                 ui.hr(),
                 ui.p("Or load from a local directory:"),
-                ui.input_text("project_path", "Project directory path",
-                              placeholder="/path/to/project"),
-                ui.input_action_button("load_local", "Load from path"),
+                directory_browser_ui("dir_browser"),
+                ui.tooltip(
+                    ui.input_action_button("load_local", "Load selected directory"),
+                    "Load the Marxan project from the selected server directory. "
+                    "The directory must contain an input.dat file.",
+                ),
                 width=350,
             ),
             ui.output_text_verbatim("project_summary"),
@@ -31,6 +51,10 @@ def upload_ui():
 
 @module.server
 def upload_server(input, output, session, problem: reactive.Value):
+    help_server_setup(input, "upload")
+    # Server-side directory browser — returns a reactive.Value[str | None]
+    _selected_dir = directory_browser_server("dir_browser")
+
     @reactive.effect
     @reactive.event(input.project_zip)
     def _handle_zip_upload():
@@ -62,8 +86,12 @@ def upload_server(input, output, session, problem: reactive.Value):
     @reactive.effect
     @reactive.event(input.load_local)
     def _handle_local_load():
-        path = input.project_path()
+        path = _selected_dir()
         if not path:
+            ui.notification_show(
+                "No directory selected. Use Browse\u2026 to pick one.",
+                type="warning",
+            )
             return
         project_dir = Path(path)
         if not (project_dir / "input.dat").exists():
@@ -86,5 +114,5 @@ def upload_server(input, output, session, problem: reactive.Value):
     def project_summary():
         p = problem()
         if p is None:
-            return "No project loaded. Upload a ZIP file or enter a directory path."
+            return "No project loaded. Upload a ZIP or browse to a local directory."
         return p.summary()

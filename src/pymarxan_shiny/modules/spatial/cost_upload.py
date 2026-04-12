@@ -6,34 +6,72 @@ import copy
 import geopandas as gpd
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.models.problem import has_geometry
 from pymarxan.spatial.cost_surface import apply_cost_from_vector
+
+
+def _read_vector_columns(path: str) -> list[str]:
+    """Read column names from a vector file header (no full read)."""
+    try:
+        gdf = gpd.read_file(path, rows=0)
+        return [c for c in gdf.columns if c != "geometry"]
+    except Exception:
+        return []
 
 
 @module.ui
 def cost_upload_ui():
     return ui.card(
-        ui.card_header("Custom Cost Surface"),
-        ui.input_file(
-            "cost_file",
-            "Upload Cost Layer (.shp, .geojson, .gpkg)",
-            accept=[".shp", ".geojson", ".gpkg", ".json", ".zip"],
+        help_card_header("Custom Cost Surface"),
+        ui.p(
+            "Upload a vector layer containing cost values to replace the default "
+            "planning unit costs. Costs represent what is sacrificed by including "
+            "a planning unit in the reserve (e.g. land price, opportunity cost, "
+            "area). The cost layer is intersected with planning units using the "
+            "chosen aggregation method.",
+            class_="text-muted small mb-3",
+        ),
+        ui.tooltip(
+            ui.input_file(
+                "cost_file",
+                "Upload Cost Layer (.shp, .geojson, .gpkg)",
+                accept=[".shp", ".geojson", ".gpkg", ".json", ".zip"],
+            ),
+            "Upload a vector file with polygons containing a numeric cost attribute. "
+            "The file is spatially joined with planning units.",
         ),
         ui.layout_columns(
-            ui.input_text("cost_col", "Cost Column", value="cost"),
-            ui.input_select(
-                "aggregation",
-                "Aggregation",
-                {
-                    "area_weighted_mean": "Area-Weighted Mean",
-                    "sum": "Sum",
-                    "max": "Maximum",
-                },
+            ui.tooltip(
+                ui.input_selectize(
+                    "cost_col", "Cost Column",
+                    choices=["cost"], selected="cost",
+                ),
+                "Column in the uploaded file containing the numeric cost values "
+                "to be applied to planning units.",
+            ),
+            ui.tooltip(
+                ui.input_select(
+                    "aggregation",
+                    "Aggregation",
+                    {
+                        "area_weighted_mean": "Area-Weighted Mean",
+                        "sum": "Sum",
+                        "max": "Maximum",
+                    },
+                ),
+                "How to combine cost values when a planning unit overlaps "
+                "multiple cost polygons. Area-weighted mean is recommended "
+                "for continuous cost surfaces.",
             ),
             col_widths=[6, 6],
         ),
-        ui.input_action_button(
-            "apply_cost", "Apply Cost Surface", class_="btn-primary"
+        ui.tooltip(
+            ui.input_action_button(
+                "apply_cost", "Apply Cost Surface", class_="btn-primary"
+            ),
+            "Intersect the uploaded cost layer with planning units and update "
+            "the cost column in the planning unit table.",
         ),
         ui.output_text_verbatim("cost_info"),
     )
@@ -41,6 +79,21 @@ def cost_upload_ui():
 
 @module.server
 def cost_upload_server(input, output, session, problem: reactive.Value):
+    help_server_setup(input, "cost_upload")
+
+    @reactive.effect
+    @reactive.event(input.cost_file)
+    def _update_cost_columns():
+        """Populate cost column dropdown from uploaded file."""
+        file_info = input.cost_file()
+        if not file_info:
+            return
+        cols = _read_vector_columns(file_info[0]["datapath"])
+        if cols:
+            ui.update_selectize(
+                "cost_col", choices=cols,
+                selected="cost" if "cost" in cols else cols[0],
+            )
 
     @reactive.effect
     @reactive.event(input.apply_cost)

@@ -99,7 +99,7 @@ def create_geo_map(
     m = ipyleaflet.Map(center=center, zoom=zoom)
 
     for idx, (_, row) in enumerate(gdf.iterrows()):
-        color = colors[idx] if idx < len(colors) else "#999999"
+        color = colors[idx] if idx < len(colors) else "#bcc9d1"
         geo_json = ipyleaflet.GeoJSON(
             data={
                 "type": "Feature",

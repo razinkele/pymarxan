@@ -36,14 +36,19 @@ class SolverRegistry:
 
     def available_solvers(self) -> list[str]:
         """Return names of solvers that are currently available."""
+        import logging
+
+        logger = logging.getLogger(__name__)
         result = []
         for name, cls in sorted(self._solvers.items()):
             try:
                 instance = cls()
                 if instance.available():
                     result.append(name)
-            except Exception:
-                pass
+            except (ImportError, FileNotFoundError, OSError):
+                pass  # Expected: optional dependency missing
+            except Exception as exc:
+                logger.warning("Solver '%s' failed availability check: %s", name, exc)
         return result
 
 

@@ -180,6 +180,55 @@ def compute_cost_threshold_penalty(
     return thresh_pen1 + thresh_pen2 * (total_cost - cost_thresh)
 
 
+def compute_connectivity_penalty(
+    problem: ConservationProblem,
+    selected: np.ndarray,
+    pu_index: dict[int, int],
+) -> float:
+    """Compute connectivity penalty for selected planning units.
+
+    Connectivity penalizes *loss* of connections between selected PUs.
+    For each edge (i,j) with value v where both i and j are selected,
+    v contributes negatively (bonus). Where only one is selected,
+    v contributes positively (penalty for broken connection).
+
+    Total = CONNECTIVITY_WEIGHT * Σ edges where exactly one PU selected * value
+          - CONNECTIVITY_WEIGHT * Σ edges where both PUs selected * value
+
+    If ASYMMETRIC_CONNECTIVITY is set, directionality is preserved.
+
+    Returns 0.0 if no connectivity data.
+    """
+    if problem.connectivity is None:
+        return 0.0
+
+    conn_weight = float(
+        problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0)
+    )
+    if conn_weight == 0.0:
+        return 0.0
+
+    conn = problem.connectivity
+    id1_col = conn["id1"].values
+    id2_col = conn["id2"].values
+    val_col = conn["value"].values.astype(np.float64)
+
+    total = 0.0
+    for k in range(len(id1_col)):
+        idx1 = pu_index.get(int(id1_col[k]))
+        idx2 = pu_index.get(int(id2_col[k]))
+        if idx1 is None or idx2 is None:
+            continue
+        val = float(val_col[k])
+        s1 = selected[idx1]
+        s2 = selected[idx2]
+        if s1 and s2:
+            total -= val  # bonus for connected pair
+        elif s1 or s2:
+            total += val  # penalty for broken connection
+    return conn_weight * total
+
+
 def compute_probability_penalty(
     problem: ConservationProblem,
     selected: np.ndarray,
@@ -238,6 +287,7 @@ def compute_objective_terms(
       - ``"penalty"``: SPF * shortfall per feature
       - ``"cost_threshold"``: penalty for exceeding cost threshold
       - ``"probability"``: Mode 1 risk premium (PROBABILITYWEIGHTING)
+      - ``"connectivity"``: connectivity penalty/bonus (CONNECTIVITY_WEIGHT)
 
     All terms use lower-is-better convention.  The ``"objective"`` key
     holds the sum of all terms.
@@ -274,6 +324,11 @@ def compute_objective_terms(
 
     # Probability risk premium (Mode 1 only)
     terms["probability"] = compute_probability_penalty(
+        problem, selected, pu_index,
+    )
+
+    # Connectivity penalty/bonus
+    terms["connectivity"] = compute_connectivity_penalty(
         problem, selected, pu_index,
     )
 

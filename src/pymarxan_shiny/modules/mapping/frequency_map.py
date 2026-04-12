@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import FREQ_LOW_RGB, FREQ_HIGH_RGB
 from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
@@ -18,14 +20,14 @@ except ImportError:
 
 
 def frequency_color(freq: float) -> str:
-    """Map a 0-1 frequency to a white-to-blue hex color.
+    """Map a 0-1 frequency to a ocean-white → deep-navy hex color.
 
-    0.0 -> white (#ffffff), 1.0 -> dark blue (#2c3e50).
+    0.0 -> ocean white, 1.0 -> deep navy.
     """
     freq = max(0.0, min(1.0, freq))
-    r = int(255 * (1.0 - freq) + 44 * freq)
-    g = int(255 * (1.0 - freq) + 62 * freq)
-    b = int(255 * (1.0 - freq) + 80 * freq)
+    r = int(FREQ_LOW_RGB[0] * (1.0 - freq) + FREQ_HIGH_RGB[0] * freq)
+    g = int(FREQ_LOW_RGB[1] * (1.0 - freq) + FREQ_HIGH_RGB[1] * freq)
+    b = int(FREQ_LOW_RGB[2] * (1.0 - freq) + FREQ_HIGH_RGB[2] * freq)
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
@@ -33,12 +35,23 @@ def frequency_color(freq: float) -> str:
 def frequency_map_ui():
     if _HAS_IPYLEAFLET:
         return ui.card(
-            ui.card_header("Selection Frequency"),
+            help_card_header("Selection Frequency"),
+            ui.p(
+                "Heatmap showing how often each planning unit is selected across "
+                "multiple solver runs. Darker blue = more frequently selected = "
+                "higher irreplaceability. Run the solver with multiple solutions "
+                "to populate this map.",
+                class_="text-muted small mb-3",
+            ),
             output_widget("map"),
             ui.output_text_verbatim("map_summary"),
         )
     return ui.card(
-        ui.card_header("Selection Frequency"),
+        help_card_header("Selection Frequency"),
+        ui.p(
+            "Selection frequency map (install ipyleaflet for interactive maps).",
+            class_="text-muted small mb-3",
+        ),
         ui.output_ui("freq_content"),
     )
 
@@ -49,6 +62,8 @@ def frequency_map_server(
     problem: reactive.Value,
     all_solutions: reactive.Value,
 ):
+    help_server_setup(input, "frequency_map")
+
     if _HAS_IPYLEAFLET:
 
         @render_widget

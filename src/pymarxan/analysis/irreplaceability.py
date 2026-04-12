@@ -6,6 +6,8 @@ removing it makes a target unachievable.
 """
 from __future__ import annotations
 
+import numpy as np
+
 from pymarxan.models.problem import ConservationProblem
 
 
@@ -16,39 +18,42 @@ def compute_irreplaceability(
 
     Score is the fraction of features for which this PU is critical
     (i.e., removing it would make the target unachievable from remaining PUs).
+
+    Vectorized implementation using a PU-feature matrix.
     """
-    pu_ids = problem.planning_units["id"].tolist()
-    feature_totals = problem.feature_amounts()
+    pu_ids = problem.planning_units["id"].values
+    feat_ids = problem.features["id"].values
+    feat_targets = problem.features["target"].values.astype(np.float64)
 
-    pu_contributions: dict[int, dict[int, float]] = {pid: {} for pid in pu_ids}
-    for _, row in problem.pu_vs_features.iterrows():
-        pid = int(row["pu"])
-        fid = int(row["species"])
-        amount = float(row["amount"])
-        pu_contributions[pid][fid] = amount
+    n_pu = len(pu_ids)
+    n_feat = len(feat_ids)
 
-    n_positive_target = sum(
-        1 for _, r in problem.features.iterrows() if float(r.get("target", 0.0)) > 0
-    )
+    pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
+    feat_id_to_col = {int(fid): j for j, fid in enumerate(feat_ids)}
+
+    # Build PU-feature amount matrix using shared utility
+    pu_feat_matrix = problem.build_pu_feature_matrix()
+
+    # Total amount per feature: shape (n_feat,)
+    total_per_feat = pu_feat_matrix.sum(axis=0)
+
+    # Only features with positive targets
+    positive_mask = feat_targets > 0
+    n_positive_target = int(positive_mask.sum())
+
+    if n_positive_target == 0:
+        return {int(pid): 0.0 for pid in pu_ids}
+
+    # For each PU, compute remaining = total - pu_contribution per feature
+    # A PU is critical for feature j if remaining[j] < target[j]
+    # remaining[i, j] = total[j] - pu_feat_matrix[i, j]
+    # critical[i, j] = (remaining[i, j] < target[j]) AND (target[j] > 0)
+    remaining = total_per_feat[np.newaxis, :] - pu_feat_matrix  # (n_pu, n_feat)
+    critical = (remaining < feat_targets[np.newaxis, :]) & positive_mask[np.newaxis, :]
+    critical_counts = critical.sum(axis=1)  # (n_pu,)
+
     scores: dict[int, float] = {}
-
-    for pid in pu_ids:
-        critical_count = 0
-        contributions = pu_contributions.get(pid, {})
-
-        for _, feat_row in problem.features.iterrows():
-            fid = int(feat_row["id"])
-            target = float(feat_row.get("target", 0.0))
-            if target <= 0:
-                continue
-
-            total = feature_totals.get(fid, 0.0)
-            pu_amount = contributions.get(fid, 0.0)
-
-            remaining = total - pu_amount
-            if remaining < target:
-                critical_count += 1
-
-        scores[pid] = critical_count / n_positive_target if n_positive_target > 0 else 0.0
+    for i, pid in enumerate(pu_ids):
+        scores[int(pid)] = float(critical_counts[i]) / n_positive_target
 
     return scores

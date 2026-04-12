@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pymarxan.analysis.selection_freq import SelectionFrequency
@@ -39,20 +40,28 @@ def export_summary_csv(
 
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
 
+    # Precompute achieved per feature in one pass
+    sel_set = {pid for pid, i in id_to_idx.items() if solution.selected[i]}
+    sel_mask = problem.pu_vs_features["pu"].isin(sel_set)
+    achieved_map = (
+        problem.pu_vs_features.loc[sel_mask]
+        .groupby("species")["amount"]
+        .sum()
+        .to_dict()
+    )
+
+    feat_ids = problem.features["id"].values
+    feat_names = problem.features["name"].values if "name" in problem.features.columns else [f"Feature {fid}" for fid in feat_ids]
+    feat_targets = problem.features["target"].values.astype(float) if "target" in problem.features.columns else np.zeros(len(feat_ids))
+
     rows = []
-    for _, frow in problem.features.iterrows():
-        fid = int(frow["id"])
-        fname = frow.get("name", f"Feature {fid}")
-        target = float(frow.get("target", 0.0))
-        mask = problem.pu_vs_features["species"] == fid
-        achieved = 0.0
-        for _, arow in problem.pu_vs_features[mask].iterrows():
-            pid = int(arow["pu"])
-            if pid in id_to_idx and solution.selected[id_to_idx[pid]]:
-                achieved += float(arow["amount"])
+    for k in range(len(feat_ids)):
+        fid = int(feat_ids[k])
+        achieved = achieved_map.get(fid, 0.0)
+        target = float(feat_targets[k])
         rows.append({
             "feature_id": fid,
-            "feature_name": fname,
+            "feature_name": feat_names[k],
             "target": target,
             "achieved": achieved,
             "met": achieved >= target * misslevel,

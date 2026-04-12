@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
 FORMAT_LABELS = {
     "edge_list": "Edge List (id1, id2, value)",
     "full_matrix": "Full Matrix (NxN)",
@@ -17,16 +19,33 @@ def parse_format_label(fmt: str) -> str:
 @module.ui
 def matrix_input_ui():
     return ui.card(
-        ui.card_header("Connectivity Matrix"),
-        ui.input_file("conn_file", "Upload CSV", accept=[".csv"]),
-        ui.input_radio_buttons(
-            "conn_format",
-            "Format",
-            choices={
-                "edge_list": "Edge List (id1, id2, value)",
-                "full_matrix": "Full Matrix (NxN)",
-            },
-            selected="edge_list",
+        help_card_header("Connectivity Matrix"),
+        ui.p(
+            "Upload a connectivity matrix that describes spatial relationships "
+            "between planning units. Marxan uses this in the boundary term of "
+            "the objective function. An edge list is a CSV with columns id1, id2, "
+            "value; a full matrix is an N\u00d7N CSV where entry (i,j) is the "
+            "connectivity between PU i and PU j.",
+            class_="text-muted small mb-3",
+        ),
+        ui.tooltip(
+            ui.input_file("conn_file", "Upload Connectivity File",
+                          accept=[".csv", ".tsv", ".txt"]),
+            "Upload a CSV, TSV, or TXT file containing connectivity data "
+            "in either edge-list or full-matrix format.",
+        ),
+        ui.tooltip(
+            ui.input_radio_buttons(
+                "conn_format",
+                "Format",
+                choices={
+                    "edge_list": "Edge List (id1, id2, value)",
+                    "full_matrix": "Full Matrix (NxN)",
+                },
+                selected="edge_list",
+            ),
+            "Edge List: CSV with columns id1, id2, value. "
+            "Full Matrix: square N\u00d7N CSV where row/column indices are PU IDs.",
         ),
         ui.output_text_verbatim("conn_preview"),
     )
@@ -41,6 +60,8 @@ def matrix_input_server(
     connectivity_matrix: reactive.Value,
     connectivity_pu_ids: reactive.Value,
 ):
+    help_server_setup(input, "matrix_input")
+
     @reactive.effect
     @reactive.event(input.conn_file)
     def _on_upload():

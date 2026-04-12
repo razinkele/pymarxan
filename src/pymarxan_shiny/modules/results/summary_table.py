@@ -3,15 +3,29 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
 
 @module.ui
 def summary_table_ui():
-    return ui.card(ui.card_header("Target Achievement"), ui.output_ui("target_table"))
+    return ui.card(
+        help_card_header("Target Achievement"),
+        ui.p(
+            "Summary table showing whether each conservation feature's target "
+            "is met by the current solution. The 'target' column is the minimum "
+            "amount required; 'achieved' is what the selected reserve network "
+            "provides. Green \u2713 = target met; red \u2717 = target not met.",
+            class_="text-muted small mb-3",
+        ),
+        ui.output_ui("target_table"),
+    )
 
 @module.server
 def summary_table_server(
     input, output, session, problem: reactive.Value, solution: reactive.Value,
 ):
+    help_server_setup(input, "summary_table")
+
     @render.ui
     def target_table():
         p = problem()
@@ -43,20 +57,36 @@ def summary_table_server(
                 "id": fid, "name": fname, "target": target,
                 "achieved": achieved, "pct": pct, "met": met,
             })
+        met_count = sum(1 for r in rows if r["met"])
+        total = len(rows)
+        summary_line = ui.p(
+            f"{met_count} of {total} targets met",
+            class_="fw-bold mb-2",
+        )
         table_rows = [
             ui.tags.tr(
                 ui.tags.td(str(r["id"])), ui.tags.td(r["name"]),
                 ui.tags.td(f"{r['target']:.1f}"), ui.tags.td(f"{r['achieved']:.1f}"),
                 ui.tags.td(f"{r['pct']:.1f}%"),
-                ui.tags.td("Met" if r["met"] else "NOT MET",
-                           style=f"color: {'green' if r['met'] else 'red'}; font-weight: bold"),
+                ui.tags.td(
+                    "\u2713 Met" if r["met"] else "\u2717 NOT MET",
+                    style=f"color: {'#2d936c' if r['met'] else '#c1440e'}; font-weight: bold",
+                ),
             ) for r in rows
         ]
-        return ui.tags.table(
-            ui.tags.thead(ui.tags.tr(
-                ui.tags.th("ID"), ui.tags.th("Feature"), ui.tags.th("Target"),
-                ui.tags.th("Achieved"), ui.tags.th("%"), ui.tags.th("Status"),
-            )),
-            ui.tags.tbody(*table_rows),
-            class_="table table-striped",
+        return ui.TagList(
+            summary_line,
+            ui.tags.table(
+                ui.tags.caption("Feature target achievement summary"),
+                ui.tags.thead(ui.tags.tr(
+                    ui.tags.th("ID", scope="col"),
+                    ui.tags.th("Feature", scope="col"),
+                    ui.tags.th("Target", scope="col"),
+                    ui.tags.th("Achieved", scope="col"),
+                    ui.tags.th("%", scope="col"),
+                    ui.tags.th("Status", scope="col"),
+                )),
+                ui.tags.tbody(*table_rows),
+                class_="table table-striped",
+            ),
         )

@@ -15,17 +15,7 @@ def read_connectivity_edgelist(
 ) -> np.ndarray:
     """Read an edge list CSV and convert to NxN matrix. Expected columns: id1, id2, value."""
     df = pd.read_csv(path)
-    n = len(pu_ids)
-    id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
-    matrix = np.zeros((n, n))
-    for _, row in df.iterrows():
-        i = id_to_idx.get(int(row["id1"]))
-        j = id_to_idx.get(int(row["id2"]))
-        if i is not None and j is not None:
-            matrix[i, j] = float(row["value"])
-            if symmetric:
-                matrix[j, i] = float(row["value"])
-    return matrix
+    return connectivity_to_matrix(df, pu_ids, symmetric=symmetric)
 
 
 def read_connectivity_matrix(path: str | Path) -> np.ndarray:
@@ -44,11 +34,18 @@ def connectivity_to_matrix(
     n = len(pu_ids)
     id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
     matrix = np.zeros((n, n))
-    for _, row in edgelist.iterrows():
-        i = id_to_idx.get(int(row["id1"]))
-        j = id_to_idx.get(int(row["id2"]))
-        if i is not None and j is not None:
-            matrix[i, j] = float(row["value"])
-            if symmetric:
-                matrix[j, i] = float(row["value"])
+
+    id1_col = edgelist["id1"].values
+    id2_col = edgelist["id2"].values
+    val_col = edgelist["value"].values.astype(np.float64)
+
+    # Map IDs to indices using vectorized lookup
+    idx1 = np.array([id_to_idx.get(int(v), -1) for v in id1_col], dtype=np.intp)
+    idx2 = np.array([id_to_idx.get(int(v), -1) for v in id2_col], dtype=np.intp)
+    valid = (idx1 >= 0) & (idx2 >= 0)
+
+    matrix[idx1[valid], idx2[valid]] = val_col[valid]
+    if symmetric:
+        matrix[idx2[valid], idx1[valid]] = val_col[valid]
+
     return matrix

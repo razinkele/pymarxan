@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.spatial.gadm import fetch_gadm, list_countries
 
 try:
@@ -25,22 +26,45 @@ def gadm_picker_ui():
         else ui.output_ui("boundary_text")
     )
     return ui.card(
-        ui.card_header("Administrative Boundaries (GADM)"),
+        help_card_header("Administrative Boundaries (GADM)"),
+        ui.p(
+            "Fetch administrative boundaries from the GADM database to define "
+            "your study region. Boundaries can be used to clip planning unit grids "
+            "and constrain the analysis area. Select a country and administrative "
+            "level, then fetch the boundary polygons.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_columns(
-            ui.input_selectize("country", "Country", choices=choices),
-            ui.input_select(
-                "admin_level",
-                "Admin Level",
-                {
-                    "0": "Country (ADM0)",
-                    "1": "State/Province (ADM1)",
-                    "2": "District (ADM2)",
-                },
+            ui.tooltip(
+                ui.input_selectize("country", "Country", choices=choices),
+                "Select the country whose administrative boundary you want to fetch "
+                "from the Global Administrative Areas (GADM) database.",
+            ),
+            ui.tooltip(
+                ui.input_select(
+                    "admin_level",
+                    "Admin Level",
+                    {
+                        "0": "Country (ADM0)",
+                        "1": "State/Province (ADM1)",
+                        "2": "District (ADM2)",
+                    },
+                ),
+                "Administrative level: ADM0 = entire country, ADM1 = state/province, "
+                "ADM2 = district/county. Finer levels give more precise boundaries.",
             ),
             col_widths=[6, 6],
         ),
-        ui.input_text("admin_name", "Region Name Filter (optional)", value=""),
-        ui.input_action_button("fetch", "Fetch Boundary", class_="btn-primary"),
+        ui.tooltip(
+            ui.input_text("admin_name", "Region Name Filter (optional)", value=""),
+            "Optionally filter by region name (e.g. 'California'). "
+            "Leave blank to fetch all regions at the selected admin level.",
+        ),
+        ui.tooltip(
+            ui.input_action_button("fetch", "Fetch Boundary", class_="btn-primary"),
+            "Download boundary polygons from the GADM server for the selected "
+            "country and administrative level.",
+        ),
         map_output,
         ui.output_text_verbatim("boundary_info"),
     )
@@ -48,6 +72,8 @@ def gadm_picker_ui():
 
 @module.server
 def gadm_picker_server(input, output, session, boundary: reactive.Value):
+    help_server_setup(input, "gadm_picker")
+
     @reactive.effect
     @reactive.event(input.fetch)
     def _fetch():

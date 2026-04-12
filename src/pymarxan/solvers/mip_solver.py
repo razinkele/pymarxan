@@ -53,32 +53,35 @@ class MIPSolver(Solver):
 
         # Decision variables: x_i = 1 if PU i is selected
         x = {}
-        for _, row in problem.planning_units.iterrows():
-            pid = int(row["id"])
-            status = int(row["status"])
+        pu_id_arr = problem.planning_units["id"].values
+        pu_st_arr = problem.planning_units["status"].values.astype(int)
+        for k in range(len(pu_id_arr)):
+            pid = int(pu_id_arr[k])
+            status = int(pu_st_arr[k])
+            x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
             if status == STATUS_LOCKED_IN:
-                x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
                 model += x[pid] == 1, f"locked_in_{pid}"
             elif status == STATUS_LOCKED_OUT:
-                x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
                 model += x[pid] == 0, f"locked_out_{pid}"
-            else:
-                x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
 
         # Objective: cost component
+        pu_cost_arr = problem.planning_units["cost"].values.astype(float)
         cost_expr = pulp.lpSum(
-            float(row["cost"]) * x[int(row["id"])]
-            for _, row in problem.planning_units.iterrows()
+            float(pu_cost_arr[k]) * x[int(pu_id_arr[k])]
+            for k in range(len(pu_id_arr))
         )
 
         # Boundary component with auxiliary variables
         boundary_expr = 0
         y = {}
         if blm > 0 and problem.boundary is not None:
-            for _, brow in problem.boundary.iterrows():
-                id1 = int(brow["id1"])
-                id2 = int(brow["id2"])
-                bval = float(brow["boundary"])
+            b_id1 = problem.boundary["id1"].values
+            b_id2 = problem.boundary["id2"].values
+            b_val = problem.boundary["boundary"].values.astype(float)
+            for bk in range(len(b_id1)):
+                id1 = int(b_id1[bk])
+                id2 = int(b_id2[bk])
+                bval = float(b_val[bk])
 
                 if id1 == id2:
                     # Self-boundary: external boundary cost when PU is selected
@@ -105,17 +108,27 @@ class MIPSolver(Solver):
 
         # Constraints: feature targets
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-        for _, feat_row in problem.features.iterrows():
-            fid = int(feat_row["id"])
-            target = float(feat_row["target"]) * misslevel
-            feat_data = problem.pu_vs_features[
-                problem.pu_vs_features["species"] == fid
-            ]
-            amount_expr = pulp.lpSum(
-                float(r["amount"]) * x[int(r["pu"])]
-                for _, r in feat_data.iterrows()
-            )
-            model += amount_expr >= target, f"target_{fid}"
+        
+        # Pre-group feature data for O(1) lookup instead of O(R) filtering
+        feat_groups = problem.pu_vs_features.groupby("species")
+        
+        feat_ids = problem.features["id"].values
+        feat_targets = problem.features["target"].values.astype(float)
+        for fi in range(len(feat_ids)):
+            fid = int(feat_ids[fi])
+            target = float(feat_targets[fi]) * misslevel
+            
+            if fid in feat_groups.groups:
+                feat_data = feat_groups.get_group(fid)
+                # Optimize iteration using zip instead of iterrows
+                pus = feat_data["pu"].values
+                amounts = feat_data["amount"].values
+                
+                amount_expr = pulp.lpSum(
+                    float(amt) * x[int(pu)]
+                    for pu, amt in zip(pus, amounts)
+                )
+                model += amount_expr >= target, f"target_{fid}"
 
         # Solve
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))

@@ -1,0 +1,1008 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   PYMARXAN — Ocean Palette Theme
+   A conservation-inspired design system evoking the depth and clarity
+   of ocean waters. Built for Shiny for Python / Bootstrap 5.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ────────────────────────────────────────────────────────────────────────
+   1. CSS Custom Properties (Design Tokens)
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+  /* ── Primary Ocean Palette ── */
+  --ocean-abyss:        #0a1628;   /* darkest — page bg accents             */
+  --ocean-deep:         #0b2545;   /* deep navy — navbar, headers            */
+  --ocean-mid:          #134074;   /* mid-ocean — secondary elements         */
+  --ocean-bright:       #13507c;   /* brighter blue — links, active states   */
+  --ocean-teal:         #0fa3b1;   /* tropical teal — primary accent         */
+  --ocean-aqua:         #48bfe3;   /* lighter aqua — hover states            */
+  --ocean-seafoam:      #b8e0d2;   /* seafoam green — subtle highlights      */
+  --ocean-mist:         #e8f4f8;   /* misty blue — card backgrounds          */
+  --ocean-foam:         #f0f7fa;   /* white foam — page background           */
+  --ocean-white:        #fafeff;   /* purest white with hint of blue         */
+
+  /* ── Warm Accents (Coral Reef) ── */
+  --reef-coral:         #e07a5f;   /* living coral — action accent           */
+  --reef-warm:          #f2cc8f;   /* sandy warm — warning states            */
+  --reef-sand:          #e8dab2;   /* beach sand — neutral warm              */
+
+  /* ── Semantic Colors ── */
+  --ocean-success:      #2d936c;   /* kelp green — success states            */
+  --ocean-warning:      #e6a23c;   /* amber — warning states                 */
+  --ocean-danger:       #c1440e;   /* deep coral — error/danger              */
+  --ocean-info:         #0fa3b1;   /* same as teal — informational           */
+
+  /* ── Typography ── */
+  --font-primary:       'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono:          'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* ── Shadows & Effects ── */
+  --shadow-sm:          0 1px 3px rgba(10, 22, 40, 0.08);
+  --shadow-md:          0 4px 12px rgba(10, 22, 40, 0.10);
+  --shadow-lg:          0 8px 30px rgba(10, 22, 40, 0.12);
+  --shadow-glow:        0 0 20px rgba(15, 163, 177, 0.15);
+
+  /* ── Borders & Radii ── */
+  --border-subtle:      1px solid rgba(11, 37, 69, 0.08);
+  --border-card:        1px solid rgba(15, 163, 177, 0.12);
+  --radius-sm:          6px;
+  --radius-md:          10px;
+  --radius-lg:          16px;
+  --radius-pill:        50px;
+
+  /* ── Transitions ── */
+  --transition-fast:    150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-smooth:  300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring:  400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   2. Global Resets & Base
+   ──────────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-primary);
+  background: var(--ocean-foam);
+  color: var(--ocean-deep);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle ocean-gradient overlay on the whole page */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 300px;
+  background: linear-gradient(
+    180deg,
+    rgba(15, 163, 177, 0.03) 0%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+::selection {
+  background: rgba(15, 163, 177, 0.25);
+  color: var(--ocean-deep);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   3. Navbar — Deep Ocean Header
+   ──────────────────────────────────────────────────────────────────────── */
+.navbar {
+  background: linear-gradient(135deg, var(--ocean-deep) 0%, var(--ocean-mid) 100%) !important;
+  border-bottom: 2px solid var(--ocean-teal);
+  box-shadow: var(--shadow-md), 0 2px 0 rgba(15, 163, 177, 0.3);
+  padding: 0.5rem 1.5rem;
+  position: relative;
+  z-index: 1040;
+}
+
+/* Animated shimmer line under navbar */
+.navbar::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ocean-aqua) 25%,
+    var(--ocean-teal) 50%,
+    var(--ocean-aqua) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 6s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { background-position: 200% center; }
+  50%      { background-position: -200% center; }
+}
+
+/* Brand title */
+.navbar .navbar-brand,
+.navbar .navbar-brand-container .navbar-brand {
+  color: var(--ocean-white) !important;
+  font-weight: 700;
+  font-size: 1.35rem;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: var(--transition-fast);
+}
+
+.navbar .navbar-brand:hover {
+  color: var(--ocean-aqua) !important;
+  text-shadow: 0 0 12px rgba(72, 191, 227, 0.4);
+}
+
+/* Nav links (top tabs) */
+.navbar .nav-link {
+  color: rgba(255, 255, 255, 0.78) !important;
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0.65rem 1rem !important;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: var(--transition-fast);
+  position: relative;
+}
+
+.navbar .nav-link:hover {
+  color: var(--ocean-white) !important;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.navbar .nav-link.active,
+.navbar .nav-item .nav-link.active {
+  color: var(--ocean-white) !important;
+  background: rgba(15, 163, 177, 0.2) !important;
+  border-bottom: 2px solid var(--ocean-teal);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   4. Sub-tabs (navset_tab inside panels)
+   ──────────────────────────────────────────────────────────────────────── */
+.nav-tabs {
+  border-bottom: 2px solid rgba(15, 163, 177, 0.15);
+  padding: 0 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.nav-tabs .nav-link {
+  color: var(--ocean-mid);
+  font-weight: 500;
+  font-size: 0.875rem;
+  padding: 0.6rem 1.1rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: -2px;
+  transition: var(--transition-fast);
+}
+
+.nav-tabs .nav-link:hover {
+  color: var(--ocean-teal);
+  background: rgba(15, 163, 177, 0.05);
+  border-bottom-color: rgba(15, 163, 177, 0.3);
+}
+
+.nav-tabs .nav-link.active {
+  color: var(--ocean-teal) !important;
+  background: var(--ocean-white);
+  border-bottom: 2px solid var(--ocean-teal) !important;
+  font-weight: 600;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   5. Cards — Frosted Glass Panels
+   ──────────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--ocean-white);
+  border: var(--border-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: box-shadow var(--transition-smooth), transform var(--transition-smooth);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.card-header {
+  background: linear-gradient(135deg, var(--ocean-mist) 0%, rgba(184, 224, 210, 0.2) 100%);
+  border-bottom: 1px solid rgba(15, 163, 177, 0.12);
+  padding: 0.75rem 1.1rem;
+  font-weight: 600;
+  color: var(--ocean-deep);
+  font-size: 0.95rem;
+  letter-spacing: 0.2px;
+}
+
+/* Decorative left accent on card headers */
+.card-header::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--ocean-teal), var(--ocean-aqua));
+  border-radius: 0 2px 2px 0;
+}
+
+.card-header {
+  position: relative;
+}
+
+.card-body {
+  padding: 1.1rem;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   6. Sidebar — Translucent Ocean Panel
+   ──────────────────────────────────────────────────────────────────────── */
+.bslib-sidebar-layout > .sidebar {
+  background: linear-gradient(180deg, var(--ocean-mist) 0%, var(--ocean-foam) 100%);
+  border-right: 1px solid rgba(15, 163, 177, 0.1);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.bslib-sidebar-layout > .sidebar .sidebar-title {
+  color: var(--ocean-deep);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(15, 163, 177, 0.15);
+  margin-bottom: 0.75rem;
+}
+
+/* Main content area beside sidebar */
+.bslib-sidebar-layout > .main {
+  background: var(--ocean-white);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   7. Buttons — Teal & Coral
+   ──────────────────────────────────────────────────────────────────────── */
+.btn {
+  font-weight: 500;
+  font-size: 0.875rem;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  letter-spacing: 0.2px;
+}
+
+/* Primary: Teal ocean gradient */
+.btn-primary {
+  background: linear-gradient(135deg, var(--ocean-teal) 0%, #0d8a97 100%);
+  border: 1px solid var(--ocean-teal);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(15, 163, 177, 0.25);
+}
+
+.btn-primary:hover,
+.btn-primary:focus-visible {
+  background: linear-gradient(135deg, #0d8a97 0%, var(--ocean-mid) 100%);
+  border-color: #0d8a97;
+  box-shadow: 0 4px 12px rgba(15, 163, 177, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(15, 163, 177, 0.2);
+}
+
+/* Warning: Coral reef */
+.btn-warning {
+  background: linear-gradient(135deg, var(--reef-coral) 0%, #cc6b52 100%);
+  border: 1px solid var(--reef-coral);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(224, 122, 95, 0.25);
+}
+
+.btn-warning:hover {
+  background: linear-gradient(135deg, #cc6b52 0%, #b35a44 100%);
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(224, 122, 95, 0.35);
+}
+
+/* Large button: Run Solver special styling */
+.btn-lg {
+  font-size: 1rem;
+  padding: 0.65rem 1.5rem;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+}
+
+.btn-lg.btn-primary {
+  background: linear-gradient(135deg, var(--ocean-teal) 0%, var(--ocean-mid) 100%);
+  box-shadow: 0 4px 15px rgba(15, 163, 177, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.btn-lg.btn-primary:hover {
+  box-shadow: var(--shadow-glow), 0 6px 20px rgba(15, 163, 177, 0.4);
+}
+
+/* Outline variants */
+.btn-outline-primary {
+  color: var(--ocean-teal);
+  border-color: var(--ocean-teal);
+}
+
+.btn-outline-primary:hover {
+  background: var(--ocean-teal);
+  color: #fff;
+}
+
+.btn-outline-secondary {
+  color: var(--ocean-mid);
+  border-color: rgba(19, 64, 116, 0.3);
+}
+
+.btn-outline-secondary:hover {
+  background: var(--ocean-mid);
+  color: #fff;
+}
+
+/* Help button — ocean-themed */
+.btn-outline-info {
+  color: var(--ocean-bright);
+  border-color: rgba(19, 80, 124, 0.35);
+  background: rgba(15, 163, 177, 0.05);
+  font-weight: 500;
+}
+
+.btn-outline-info:hover {
+  background: var(--ocean-teal);
+  border-color: var(--ocean-teal);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(15, 163, 177, 0.3);
+}
+
+/* Download buttons (export) */
+.btn-outline-success {
+  color: var(--ocean-success);
+  border-color: rgba(45, 147, 108, 0.3);
+}
+
+.btn-outline-success:hover {
+  background: var(--ocean-success);
+  color: #fff;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   8. Form Controls — Ocean-tinted Inputs
+   ──────────────────────────────────────────────────────────────────────── */
+.form-control,
+.form-select,
+.shiny-input-text,
+.shiny-input-number {
+  border: 1px solid rgba(11, 37, 69, 0.15);
+  border-radius: var(--radius-sm);
+  background: var(--ocean-white);
+  color: var(--ocean-deep);
+  font-size: 0.875rem;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--ocean-teal);
+  box-shadow: 0 0 0 3px rgba(15, 163, 177, 0.15);
+  outline: none;
+}
+
+.form-label,
+.control-label {
+  color: var(--ocean-mid);
+  font-weight: 500;
+  font-size: 0.825rem;
+  letter-spacing: 0.2px;
+  margin-bottom: 0.3rem;
+}
+
+/* Selectize inputs */
+.selectize-input {
+  border: 1px solid rgba(11, 37, 69, 0.15) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: none !important;
+  transition: border-color var(--transition-fast) !important;
+}
+
+.selectize-input.focus {
+  border-color: var(--ocean-teal) !important;
+  box-shadow: 0 0 0 3px rgba(15, 163, 177, 0.15) !important;
+}
+
+.selectize-dropdown {
+  border: 1px solid rgba(15, 163, 177, 0.2);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.selectize-dropdown .option.active {
+  background: rgba(15, 163, 177, 0.12);
+  color: var(--ocean-deep);
+}
+
+/* File input */
+.form-control[type="file"] {
+  padding: 0.4rem;
+}
+
+.form-control[type="file"]::file-selector-button {
+  background: linear-gradient(135deg, var(--ocean-mist) 0%, var(--ocean-seafoam) 100%);
+  border: 1px solid rgba(15, 163, 177, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--ocean-deep);
+  font-weight: 500;
+  padding: 0.35rem 0.75rem;
+  transition: var(--transition-fast);
+}
+
+.form-control[type="file"]::file-selector-button:hover {
+  background: var(--ocean-teal);
+  color: #fff;
+}
+
+/* Radio buttons & checkboxes */
+.form-check-input:checked {
+  background-color: var(--ocean-teal);
+  border-color: var(--ocean-teal);
+}
+
+.form-check-input:focus {
+  border-color: var(--ocean-teal);
+  box-shadow: 0 0 0 3px rgba(15, 163, 177, 0.15);
+}
+
+/* Slider / range inputs */
+.irs--shiny .irs-bar {
+  background: linear-gradient(90deg, var(--ocean-teal), var(--ocean-aqua));
+  border-color: var(--ocean-teal);
+}
+
+.irs--shiny .irs-handle {
+  background: var(--ocean-teal);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+.irs--shiny .irs-single,
+.irs--shiny .irs-from,
+.irs--shiny .irs-to {
+  background: var(--ocean-deep);
+  border-radius: var(--radius-sm);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   9. Tables — Striped Ocean
+   ──────────────────────────────────────────────────────────────────────── */
+.table {
+  color: var(--ocean-deep);
+  font-size: 0.875rem;
+}
+
+.table thead th {
+  background: linear-gradient(135deg, var(--ocean-deep) 0%, var(--ocean-mid) 100%);
+  color: var(--ocean-white);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0.65rem 0.75rem;
+  border: none;
+}
+
+.table-striped > tbody > tr:nth-of-type(odd) > * {
+  background-color: rgba(15, 163, 177, 0.04);
+}
+
+.table-striped > tbody > tr:hover > * {
+  background-color: rgba(15, 163, 177, 0.08) !important;
+}
+
+.table td {
+  padding: 0.55rem 0.75rem;
+  border-color: rgba(11, 37, 69, 0.06);
+  vertical-align: middle;
+}
+
+/* DataGrid overrides */
+.shiny-data-grid-grid {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid rgba(15, 163, 177, 0.12);
+}
+
+.shiny-data-grid-grid th {
+  background: linear-gradient(135deg, var(--ocean-deep) 0%, var(--ocean-mid) 100%) !important;
+  color: var(--ocean-white) !important;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.shiny-data-grid-grid tr:hover td {
+  background: rgba(15, 163, 177, 0.06) !important;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   10. Progress Bar — Animated Ocean Wave
+   ──────────────────────────────────────────────────────────────────────── */
+.progress {
+  height: 1.1rem;
+  border-radius: var(--radius-pill);
+  background: rgba(11, 37, 69, 0.08);
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.progress-bar {
+  background: linear-gradient(
+    90deg,
+    var(--ocean-teal) 0%,
+    var(--ocean-aqua) 50%,
+    var(--ocean-teal) 100%
+  );
+  background-size: 200% 100%;
+  animation: wave-progress 2s ease-in-out infinite;
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-smooth);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes wave-progress {
+  0%, 100% { background-position: 0% center; }
+  50%      { background-position: 100% center; }
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   11. Modals — Frosted Glass Ocean
+   ──────────────────────────────────────────────────────────────────────── */
+.modal-backdrop.show {
+  background: rgba(10, 22, 40, 0.55);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  border: 1px solid rgba(15, 163, 177, 0.15);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(15, 163, 177, 0.08);
+  overflow: hidden;
+}
+
+.modal-header {
+  background: linear-gradient(135deg, var(--ocean-mist) 0%, rgba(184, 224, 210, 0.3) 100%);
+  border-bottom: 1px solid rgba(15, 163, 177, 0.15);
+  padding: 1rem 1.25rem;
+}
+
+.modal-title {
+  color: var(--ocean-deep);
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 1.25rem;
+  color: var(--ocean-deep);
+  line-height: 1.65;
+}
+
+.modal-footer {
+  background: var(--ocean-foam);
+  border-top: 1px solid rgba(15, 163, 177, 0.1);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   12. Alerts & Notifications
+   ──────────────────────────────────────────────────────────────────────── */
+.alert {
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  border: none;
+}
+
+.alert-info {
+  background: linear-gradient(135deg, rgba(15, 163, 177, 0.08) 0%, rgba(72, 191, 227, 0.08) 100%);
+  color: var(--ocean-deep);
+  border-left: 3px solid var(--ocean-teal);
+}
+
+.alert-success {
+  background: rgba(45, 147, 108, 0.08);
+  color: #1a5c3e;
+  border-left: 3px solid var(--ocean-success);
+}
+
+.alert-warning {
+  background: rgba(242, 204, 143, 0.2);
+  color: #7c5a1a;
+  border-left: 3px solid var(--ocean-warning);
+}
+
+.alert-danger {
+  background: rgba(193, 68, 14, 0.08);
+  color: #7c2d0e;
+  border-left: 3px solid var(--ocean-danger);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   13. Tooltips — Ocean
+   ──────────────────────────────────────────────────────────────────────── */
+.tooltip .tooltip-inner {
+  background: var(--ocean-deep);
+  color: var(--ocean-white);
+  font-size: 0.8rem;
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.7rem;
+  box-shadow: var(--shadow-md);
+  max-width: 280px;
+}
+
+.tooltip .tooltip-arrow::before {
+  border-top-color: var(--ocean-deep) !important;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   14. Help System Overrides
+   ──────────────────────────────────────────────────────────────────────── */
+/* Help button in card headers */
+.card-header .btn-outline-info {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  background: rgba(15, 163, 177, 0.06);
+  border-color: rgba(15, 163, 177, 0.25);
+  color: var(--ocean-teal);
+  transition: var(--transition-fast);
+}
+
+.card-header .btn-outline-info:hover {
+  background: var(--ocean-teal);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(15, 163, 177, 0.3);
+  transform: scale(1.05);
+}
+
+/* Help modal content sections */
+.text-primary {
+  color: var(--ocean-teal) !important;
+}
+
+.text-info {
+  color: var(--ocean-bright) !important;
+}
+
+.text-success {
+  color: var(--ocean-success) !important;
+}
+
+.text-warning {
+  color: var(--ocean-warning) !important;
+}
+
+.text-danger {
+  color: var(--ocean-danger) !important;
+}
+
+.text-muted {
+  color: rgba(11, 37, 69, 0.55) !important;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   15. Status Text (export panel, run panel)
+   ──────────────────────────────────────────────────────────────────────── */
+.text-success {
+  color: var(--ocean-success) !important;
+  font-weight: 500;
+}
+
+.text-warning {
+  color: var(--ocean-warning) !important;
+  font-weight: 500;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   16. Download / Action Buttons (Export Panel)
+   ──────────────────────────────────────────────────────────────────────── */
+.btn-outline-primary,
+a.shiny-download-link {
+  color: var(--ocean-teal);
+  border-color: rgba(15, 163, 177, 0.3);
+  border-radius: var(--radius-sm);
+  transition: var(--transition-fast);
+}
+
+.btn-outline-primary:hover,
+a.shiny-download-link:hover {
+  background: var(--ocean-teal);
+  border-color: var(--ocean-teal);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(15, 163, 177, 0.25);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   17. Leaflet Map Containers
+   ──────────────────────────────────────────────────────────────────────── */
+.leaflet-container {
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(15, 163, 177, 0.12);
+  box-shadow: var(--shadow-sm);
+}
+
+.jupyter-widgets {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   18. Matplotlib / Plotly Plot Containers
+   ──────────────────────────────────────────────────────────────────────── */
+.shiny-plot-output {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(11, 37, 69, 0.06);
+}
+
+.plotly .main-svg {
+  border-radius: var(--radius-sm);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   19. Typography Utilities
+   ──────────────────────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--ocean-deep);
+  font-weight: 600;
+}
+
+h5 {
+  font-size: 1rem;
+}
+
+.small, small {
+  font-size: 0.825rem;
+}
+
+code, pre {
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+}
+
+code {
+  background: rgba(15, 163, 177, 0.08);
+  color: var(--ocean-mid);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+}
+
+pre {
+  background: var(--ocean-abyss);
+  color: var(--ocean-seafoam);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   20. Scrollbar Styling
+   ──────────────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ocean-foam);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(15, 163, 177, 0.25);
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 163, 177, 0.45);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 163, 177, 0.25) var(--ocean-foam);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   21. Badge / Pill Utilities
+   ──────────────────────────────────────────────────────────────────────── */
+.badge {
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.badge.bg-primary,
+.bg-primary {
+  background-color: var(--ocean-teal) !important;
+}
+
+.badge.bg-success,
+.bg-success {
+  background-color: var(--ocean-success) !important;
+}
+
+.badge.bg-warning,
+.bg-warning {
+  background-color: var(--ocean-warning) !important;
+  color: #fff;
+}
+
+.badge.bg-danger,
+.bg-danger {
+  background-color: var(--ocean-danger) !important;
+}
+
+.badge.bg-info,
+.bg-info {
+  background-color: var(--ocean-info) !important;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   22. Focus & Accessibility
+   ──────────────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--ocean-teal);
+  outline-offset: 2px;
+}
+
+.btn:focus-visible {
+  box-shadow: 0 0 0 3px rgba(15, 163, 177, 0.3);
+}
+
+/* Skip-to-content (accessibility) */
+.sr-only:focus {
+  position: static;
+  background: var(--ocean-teal);
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   23. Responsive Adjustments
+   ──────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .navbar {
+    padding: 0.4rem 0.75rem;
+  }
+
+  .navbar .nav-link {
+    font-size: 0.8rem;
+    padding: 0.5rem 0.6rem !important;
+  }
+
+  .card-body {
+    padding: 0.75rem;
+  }
+
+  .card-header {
+    padding: 0.6rem 0.85rem;
+    font-size: 0.875rem;
+  }
+}
+
+@media (max-width: 576px) {
+  .navbar .navbar-brand {
+    font-size: 1.1rem;
+  }
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   24. Micro-interactions & Polish
+   ──────────────────────────────────────────────────────────────────────── */
+/* Subtle fade-in for tab content */
+.tab-pane.active {
+  animation: fadeIn 0.25s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Card entrance animation */
+.card {
+  animation: cardSlideUp 0.3s ease-out;
+}
+
+@keyframes cardSlideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Loading shimmer for async content */
+@keyframes loading-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shiny-output-recalculating {
+  opacity: 0.5;
+  transition: opacity 0.3s;
+}
+
+
+/* ────────────────────────────────────────────────────────────────────────
+   25. Print-friendly Overrides
+   ──────────────────────────────────────────────────────────────────────── */
+@media print {
+  .navbar,
+  .sidebar,
+  .btn-outline-info {
+    display: none !important;
+  }
+
+  .card {
+    box-shadow: none;
+    border: 1px solid #ccc;
+    page-break-inside: avoid;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  body::before {
+    display: none;
+  }
+}

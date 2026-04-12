@@ -55,13 +55,13 @@ class ZonalProblem(ConservationProblem):
         else:
             pu_ids = set(self.planning_units["id"])
             z_ids = self.zone_ids
+            # Build set of existing (pu, zone) pairs in O(R) for O(1) lookup
+            existing_pairs = set(
+                zip(self.zone_costs["pu"].values, self.zone_costs["zone"].values)
+            )
             for pid in pu_ids:
                 for zid in z_ids:
-                    match = self.zone_costs[
-                        (self.zone_costs["pu"] == pid)
-                        & (self.zone_costs["zone"] == zid)
-                    ]
-                    if len(match) == 0:
+                    if (pid, zid) not in existing_pairs:
                         errors.append(
                             f"zone_costs missing entry for PU {pid}, zone {zid}"
                         )

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import MAP_SELECTED, MAP_NOT_SEL
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
 
@@ -20,12 +22,22 @@ except ImportError:
 def solution_map_ui():
     if _HAS_IPYLEAFLET:
         return ui.card(
-            ui.card_header("Solution Map"),
+            help_card_header("Solution Map"),
+            ui.p(
+                "Map of the current solution. Green planning units are selected "
+                "for the reserve network; gray units are not selected. "
+                "Run a solver to populate this map.",
+                class_="text-muted small mb-3",
+            ),
             output_widget("map"),
             ui.output_text_verbatim("map_summary"),
         )
     return ui.card(
-        ui.card_header("Solution Map"),
+        help_card_header("Solution Map"),
+        ui.p(
+            "Solution map (install ipyleaflet for interactive maps).",
+            class_="text-muted small mb-3",
+        ),
         ui.output_ui("map_content"),
     )
 
@@ -36,6 +48,8 @@ def solution_map_server(
     problem: reactive.Value,
     solution: reactive.Value,
 ):
+    help_server_setup(input, "solution_map")
+
     if _HAS_IPYLEAFLET:
 
         @render_widget
@@ -47,7 +61,7 @@ def solution_map_server(
 
             n_pu = len(p.planning_units)
             colors = [
-                "#2ecc71" if s.selected[i] else "#95a5a6"
+                MAP_SELECTED if s.selected[i] else MAP_NOT_SEL
                 for i in range(n_pu)
             ]
 

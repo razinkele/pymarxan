@@ -56,18 +56,22 @@ def compute_gap_analysis(problem: ConservationProblem) -> GapResult:
     feature_ids = problem.features["id"].tolist()
     feature_names = problem.features["name"].tolist()
 
-    targets: dict[int, float] = {}
-    for _, row in problem.features.iterrows():
-        targets[int(row["id"])] = float(row["target"])
+    targets: dict[int, float] = dict(
+        zip(problem.features["id"].astype(int), problem.features["target"].astype(float))
+    )
 
     total_amount = problem.feature_amounts()
-    protected_amount: dict[int, float] = {fid: 0.0 for fid in feature_ids}
 
-    for _, row in problem.pu_vs_features.iterrows():
-        pid = int(row["pu"])
-        fid = int(row["species"])
-        if pid in protected_pu_ids and fid in protected_amount:
-            protected_amount[fid] += float(row["amount"])
+    # Vectorized: filter pu_vs_features to protected PUs and groupby species
+    puvspr = problem.pu_vs_features
+    mask = puvspr["pu"].isin(protected_pu_ids)
+    if mask.any():
+        prot_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
+        protected_amount: dict[int, float] = {
+            fid: float(prot_totals.get(fid, 0.0)) for fid in feature_ids
+        }
+    else:
+        protected_amount: dict[int, float] = {fid: 0.0 for fid in feature_ids}
 
     gap: dict[int, float] = {}
     target_met: dict[int, bool] = {}

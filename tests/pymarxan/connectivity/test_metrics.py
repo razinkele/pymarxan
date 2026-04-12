@@ -1,4 +1,7 @@
 import numpy as np
+import pytest
+
+pytest.importorskip("networkx")
 
 from pymarxan.connectivity.metrics import (
     compute_betweenness_centrality,

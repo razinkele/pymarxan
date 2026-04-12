@@ -11,13 +11,23 @@ def compute_zone_cost(
     zone_assignment: np.ndarray,
 ) -> float:
     """Compute total cost given zone assignments. Zone 0 = unassigned (no cost)."""
-    pu_ids = problem.planning_units["id"].tolist()
+    pu_ids = problem.planning_units["id"].values
+    zc = problem.zone_costs
+
+    # Pre-build lookup: (pu, zone) -> cost
+    zc_pu = zc["pu"].values
+    zc_zone = zc["zone"].values
+    zc_cost = zc["cost"].values.astype(np.float64)
+    cost_lookup: dict[tuple[int, int], float] = {}
+    for k in range(len(zc_pu)):
+        cost_lookup[(int(zc_pu[k]), int(zc_zone[k]))] = float(zc_cost[k])
+
     total = 0.0
-    for i, pid in enumerate(pu_ids):
+    for i in range(len(pu_ids)):
         zid = int(zone_assignment[i])
         if zid == 0:
             continue
-        total += problem.get_zone_cost(pid, zid)
+        total += cost_lookup.get((int(pu_ids[i]), zid), 0.0)
     return total
 
 
@@ -29,20 +39,26 @@ def compute_zone_boundary(
     if problem.boundary is None or problem.zone_boundary_costs is None:
         return 0.0
 
-    pu_ids = problem.planning_units["id"].tolist()
-    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    pu_ids = problem.planning_units["id"].values
+    pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
 
+    # Pre-build zone boundary cost lookup
+    zbc = problem.zone_boundary_costs
     zbc_lookup: dict[tuple[int, int], float] = {}
-    for _, row in problem.zone_boundary_costs.iterrows():
-        z1 = int(row["zone1"])
-        z2 = int(row["zone2"])
-        cost = float(row["cost"])
-        zbc_lookup[(z1, z2)] = cost
+    z1_col = zbc["zone1"].values
+    z2_col = zbc["zone2"].values
+    cost_col = zbc["cost"].values
+    for k in range(len(z1_col)):
+        zbc_lookup[(int(z1_col[k]), int(z2_col[k]))] = float(cost_col[k])
+
+    bnd = problem.boundary
+    id1_col = bnd["id1"].values
+    id2_col = bnd["id2"].values
 
     total = 0.0
-    for _, row in problem.boundary.iterrows():
-        id1 = int(row["id1"])
-        id2 = int(row["id2"])
+    for k in range(len(id1_col)):
+        id1 = int(id1_col[k])
+        id2 = int(id2_col[k])
         if id1 == id2:
             continue
 
@@ -53,13 +69,10 @@ def compute_zone_boundary(
 
         z1 = int(zone_assignment[idx1])
         z2 = int(zone_assignment[idx2])
-        if z1 == 0 or z2 == 0:
-            continue
-        if z1 == z2:
+        if z1 == 0 or z2 == 0 or z1 == z2:
             continue
 
-        cost = zbc_lookup.get((z1, z2), 0.0)
-        total += cost
+        total += zbc_lookup.get((z1, z2), 0.0)
 
     return total
 
@@ -72,15 +85,20 @@ def compute_standard_boundary(
     if problem.boundary is None:
         return 0.0
 
-    pu_ids = problem.planning_units["id"].tolist()
-    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    pu_ids = problem.planning_units["id"].values
+    pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
     selected = zone_assignment > 0
 
+    bnd = problem.boundary
+    id1_col = bnd["id1"].values
+    id2_col = bnd["id2"].values
+    bval_col = bnd["boundary"].values.astype(np.float64)
+
     total = 0.0
-    for _, row in problem.boundary.iterrows():
-        id1 = int(row["id1"])
-        id2 = int(row["id2"])
-        bval = float(row["boundary"])
+    for k in range(len(id1_col)):
+        id1 = int(id1_col[k])
+        id2 = int(id2_col[k])
+        bval = float(bval_col[k])
 
         if id1 == id2:
             idx = pu_index.get(id1)
@@ -95,6 +113,48 @@ def compute_standard_boundary(
     return total
 
 
+def _compute_zone_achieved(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+) -> dict[tuple[int, int], float]:
+    """Precompute achieved amounts per (zone, feature) pair.
+
+    Returns dict mapping (zone_id, feature_id) -> achieved amount.
+    """
+    pu_ids = problem.planning_units["id"].values
+    pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
+
+    # Pre-build contribution lookup
+    contrib_lookup: dict[tuple[int, int], float] = {}
+    if problem.zone_contributions is not None:
+        zc = problem.zone_contributions
+        for k in range(len(zc)):
+            fid = int(zc["feature"].values[k])
+            zid = int(zc["zone"].values[k])
+            contrib_lookup[(fid, zid)] = float(zc["contribution"].values[k])
+
+    puvspr = problem.pu_vs_features
+    pu_col = puvspr["pu"].values
+    sp_col = puvspr["species"].values
+    amt_col = puvspr["amount"].values
+
+    achieved: dict[tuple[int, int], float] = {}
+    for k in range(len(pu_col)):
+        pid = int(pu_col[k])
+        idx = pu_index.get(pid)
+        if idx is None:
+            continue
+        zid = int(zone_assignment[idx])
+        if zid == 0:
+            continue
+        fid = int(sp_col[k])
+        contribution = contrib_lookup.get((fid, zid), 1.0)
+        key = (zid, fid)
+        achieved[key] = achieved.get(key, 0.0) + float(amt_col[k]) * contribution
+
+    return achieved
+
+
 def check_zone_targets(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
@@ -103,29 +163,20 @@ def check_zone_targets(
     if problem.zone_targets is None:
         return {}
 
-    pu_ids = problem.planning_units["id"].tolist()
-    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    achieved = _compute_zone_achieved(problem, zone_assignment)
 
     targets_met: dict[tuple[int, int], bool] = {}
-    for _, trow in problem.zone_targets.iterrows():
-        zid = int(trow["zone"])
-        fid = int(trow["feature"])
-        target = float(trow["target"])
+    zt = problem.zone_targets
+    zone_col = zt["zone"].values
+    feat_col = zt["feature"].values
+    target_col = zt["target"].values
 
-        contribution = problem.get_contribution(fid, zid)
-        feat_data = problem.pu_vs_features[
-            problem.pu_vs_features["species"] == fid
-        ]
-
-        achieved = 0.0
-        for _, r in feat_data.iterrows():
-            pid = int(r["pu"])
-            idx = pu_index.get(pid)
-            if idx is not None and int(zone_assignment[idx]) == zid:
-                achieved += float(r["amount"]) * contribution
-
-        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-        targets_met[(zid, fid)] = achieved >= target * misslevel
+    for k in range(len(zone_col)):
+        zid = int(zone_col[k])
+        fid = int(feat_col[k])
+        target = float(target_col[k])
+        targets_met[(zid, fid)] = achieved.get((zid, fid), 0.0) >= target * misslevel
 
     return targets_met
 
@@ -138,34 +189,54 @@ def compute_zone_penalty(
     if problem.zone_targets is None:
         return 0.0
 
-    pu_ids = problem.planning_units["id"].tolist()
-    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    achieved = _compute_zone_achieved(problem, zone_assignment)
 
+    # Pre-build SPF lookup
     spf_lookup: dict[int, float] = {}
-    for _, frow in problem.features.iterrows():
-        spf_lookup[int(frow["id"])] = float(frow.get("spf", 1.0))
+    feat_ids = problem.features["id"].values
+    feat_spf = problem.features["spf"].values if "spf" in problem.features.columns else np.ones(len(feat_ids))
+    for i in range(len(feat_ids)):
+        spf_lookup[int(feat_ids[i])] = float(feat_spf[i])
+
+    zt = problem.zone_targets
+    zone_col = zt["zone"].values
+    feat_col = zt["feature"].values
+    target_col = zt["target"].values
 
     total = 0.0
-    for _, trow in problem.zone_targets.iterrows():
-        zid = int(trow["zone"])
-        fid = int(trow["feature"])
-        target = float(trow["target"])
-
-        contribution = problem.get_contribution(fid, zid)
-        feat_data = problem.pu_vs_features[
-            problem.pu_vs_features["species"] == fid
-        ]
-
-        achieved = 0.0
-        for _, r in feat_data.iterrows():
-            pid = int(r["pu"])
-            idx = pu_index.get(pid)
-            if idx is not None and int(zone_assignment[idx]) == zid:
-                achieved += float(r["amount"]) * contribution
-
-        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-        shortfall = max(0.0, target * misslevel - achieved)
+    for k in range(len(zone_col)):
+        zid = int(zone_col[k])
+        fid = int(feat_col[k])
+        target = float(target_col[k])
+        shortfall = max(0.0, target * misslevel - achieved.get((zid, fid), 0.0))
         total += spf_lookup.get(fid, 1.0) * shortfall
+
+    return total
+
+
+def compute_zone_shortfall(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+) -> float:
+    """Compute raw (unweighted) total shortfall across all zone targets."""
+    if problem.zone_targets is None:
+        return 0.0
+
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    achieved = _compute_zone_achieved(problem, zone_assignment)
+
+    zt = problem.zone_targets
+    zone_col = zt["zone"].values
+    feat_col = zt["feature"].values
+    target_col = zt["target"].values
+
+    total = 0.0
+    for k in range(len(zone_col)):
+        zid = int(zone_col[k])
+        fid = int(feat_col[k])
+        target = float(target_col[k])
+        total += max(0.0, target * misslevel - achieved.get((zid, fid), 0.0))
 
     return total
 

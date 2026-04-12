@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.solvers.base import Solution
 
 
@@ -28,19 +29,34 @@ def extract_history(
 @module.ui
 def convergence_ui():
     return ui.card(
-        ui.card_header("SA Convergence"),
+        help_card_header("SA Convergence"),
+        ui.p(
+            "Plot the simulated annealing convergence curve for each solver run. "
+            "The current objective (blue) should decline towards the best objective "
+            "(green) as iterations progress. Optionally overlay the temperature "
+            "schedule (red dotted line). If the curves have not flattened, consider "
+            "increasing NUMITNS or NUMTEMP.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_select(
-                    "run_select",
-                    "Select Run",
-                    choices={"1": "Run 1"},
-                    selected="1",
+                ui.tooltip(
+                    ui.input_select(
+                        "run_select",
+                        "Select Run",
+                        choices={"1": "Run 1"},
+                        selected="1",
+                    ),
+                    "Choose which solver run's convergence history to display.",
                 ),
-                ui.input_checkbox(
-                    "show_temperature",
-                    "Show Temperature",
-                    value=False,
+                ui.tooltip(
+                    ui.input_checkbox(
+                        "show_temperature",
+                        "Show Temperature",
+                        value=False,
+                    ),
+                    "Overlay the SA temperature on a secondary y-axis (log scale). "
+                    "Useful for diagnosing cooling schedule issues.",
                 ),
                 width=200,
             ),
@@ -56,6 +72,8 @@ def convergence_server(
     session: Session,
     all_solutions: reactive.Value,
 ):
+    help_server_setup(input, "convergence")
+
     @reactive.calc
     def histories():
         solutions = all_solutions()
@@ -91,7 +109,7 @@ def convergence_server(
                 y=entry["objective"],
                 mode="lines",
                 name="Current Objective",
-                line=dict(color="steelblue", width=1),
+                line=dict(color="#0fa3b1", width=1),
                 opacity=0.6,
             ))
             fig.add_trace(go.Scatter(
@@ -99,7 +117,7 @@ def convergence_server(
                 y=entry["best_objective"],
                 mode="lines",
                 name="Best Objective",
-                line=dict(color="darkgreen", width=2),
+                line=dict(color="#2d936c", width=2),
             ))
 
             if input.show_temperature():
@@ -108,7 +126,7 @@ def convergence_server(
                     y=entry["temperature"],
                     mode="lines",
                     name="Temperature",
-                    line=dict(color="orangered", width=1, dash="dot"),
+                    line=dict(color="#e07a5f", width=1, dash="dot"),
                     yaxis="y2",
                 ))
                 fig.update_layout(

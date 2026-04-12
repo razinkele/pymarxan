@@ -157,6 +157,7 @@ class TestComputeObjectiveTerms:
         assert "penalty" in terms
         assert "cost_threshold" in terms
         assert "probability" in terms
+        assert "connectivity" in terms
         assert "objective" in terms
 
     def test_cost_threshold_term(self):
@@ -168,7 +169,9 @@ class TestComputeObjectiveTerms:
         terms = compute_objective_terms(self.problem, selected, self.pu_index, blm=0.0)
         assert terms["cost_threshold"] > 0.0
         assert terms["objective"] == pytest.approx(
-            terms["base"] + terms["boundary"] + terms["penalty"] + terms["cost_threshold"]
+            terms["base"] + terms["boundary"] + terms["penalty"]
+            + terms["cost_threshold"] + terms["probability"]
+            + terms["connectivity"]
         )
 
 
@@ -267,3 +270,136 @@ class TestProbabilityObjectiveTerm:
         selected = np.array([True, False, False])
         terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
         assert "probability" in terms
+
+
+class TestConnectivityObjectiveTerm:
+    """Test connectivity penalty/bonus in objective."""
+
+    def setup_method(self):
+        import pandas as pd
+
+        self.pu = pd.DataFrame({
+            "id": [1, 2, 3, 4],
+            "cost": [10.0, 20.0, 30.0, 40.0],
+            "status": [0, 0, 0, 0],
+        })
+        self.features = pd.DataFrame({
+            "id": [1],
+            "name": ["sp_a"],
+            "target": [5.0],
+            "spf": [1.0],
+        })
+        self.puvspr = pd.DataFrame({
+            "species": [1, 1, 1, 1],
+            "pu": [1, 2, 3, 4],
+            "amount": [5.0, 5.0, 5.0, 5.0],
+        })
+        # Connectivity: 1-2 (value 3.0), 2-3 (value 2.0), 3-4 (value 1.0)
+        self.conn = pd.DataFrame({
+            "id1": [1, 2, 3],
+            "id2": [2, 3, 4],
+            "value": [3.0, 2.0, 1.0],
+        })
+
+    def _make_problem(self, **kw):
+        from pymarxan.models.problem import ConservationProblem
+
+        return ConservationProblem(
+            planning_units=self.pu,
+            features=self.features,
+            pu_vs_features=self.puvspr,
+            parameters=kw.pop("parameters", {"BLM": 0.0}),
+            **kw,
+        )
+
+    def test_no_connectivity_data(self):
+        problem = self._make_problem()
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        selected = np.array([True, True, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == 0.0
+
+    def test_zero_weight_no_penalty(self):
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 0.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        selected = np.array([True, True, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == 0.0
+
+    def test_both_selected_bonus(self):
+        """Both PUs in a connected pair selected → negative (bonus)."""
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        # Select PU 1 and 2 (connected with value 3.0)
+        # Edge 1-2: both selected → -3.0
+        # Edge 2-3: only PU 2 selected → +2.0
+        # Edge 3-4: neither selected → 0
+        # Total = 1.0 * (-3.0 + 2.0) = -1.0
+        selected = np.array([True, True, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == pytest.approx(-1.0)
+
+    def test_one_selected_penalty(self):
+        """Only one PU in a connected pair selected → positive (penalty)."""
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        # Select only PU 2
+        # Edge 1-2: only PU 2 → +3.0
+        # Edge 2-3: only PU 2 → +2.0
+        # Edge 3-4: neither → 0
+        # Total = 1.0 * (3.0 + 2.0) = 5.0
+        selected = np.array([False, True, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == pytest.approx(5.0)
+
+    def test_all_selected_full_bonus(self):
+        """All PUs selected → maximum connectivity bonus."""
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 2.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        # All edges have both selected: -(3+2+1) = -6.0
+        # Total = 2.0 * -6.0 = -12.0
+        selected = np.array([True, True, True, True])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == pytest.approx(-12.0)
+
+    def test_none_selected_zero(self):
+        """No PUs selected → zero connectivity contribution."""
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        selected = np.array([False, False, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert terms["connectivity"] == 0.0
+
+    def test_connectivity_included_in_objective(self):
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.5},
+        )
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        selected = np.array([True, True, True, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        non_obj = sum(v for k, v in terms.items() if k != "objective")
+        assert terms["objective"] == pytest.approx(non_obj)
+        assert terms["connectivity"] != 0.0
+
+    def test_terms_has_connectivity_key(self):
+        problem = self._make_problem()
+        pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
+        selected = np.array([True, False, False, False])
+        terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
+        assert "connectivity" in terms

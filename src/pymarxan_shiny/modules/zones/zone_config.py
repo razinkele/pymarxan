@@ -3,11 +3,20 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
 
 @module.ui
 def zone_config_ui():
     return ui.card(
-        ui.card_header("Zone Configuration"),
+        help_card_header("Zone Configuration"),
+        ui.p(
+            "View the zone definitions and costs for multi-zone Marxan problems. "
+            "In multi-zone planning, each planning unit can be assigned to one of "
+            "several management zones (e.g. no-take, buffer, sustainable use). "
+            "Zone data is loaded automatically from the project files.",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.p("Zone project data is loaded via the Data tab."),
@@ -28,6 +37,8 @@ def zone_config_server(
     input, output, session,
     zone_problem: reactive.Value,
 ):
+    help_server_setup(input, "zone_config")
+
     @render.text
     def zone_summary():
         zp = zone_problem()

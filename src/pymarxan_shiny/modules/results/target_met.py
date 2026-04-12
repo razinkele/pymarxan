@@ -6,11 +6,19 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
 
 @module.ui
 def target_met_ui():
     return ui.card(
-        ui.card_header("Target Achievement"),
+        help_card_header("Target Achievement"),
+        ui.p(
+            "Data table of conservation targets and whether each feature is "
+            "adequately represented in the current solution. Sortable and "
+            "filterable for quick inspection of individual features.",
+            class_="text-muted small mb-3",
+        ),
         ui.output_data_frame("target_table"),
     )
 
@@ -23,6 +31,8 @@ def target_met_server(
     problem: reactive.Value,
     solution: reactive.Value,
 ):
+    help_server_setup(input, "target_met")
+
     @render.data_frame
     def target_table():
         import pandas as pd

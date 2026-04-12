@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import (
+    CMP_BOTH, CMP_A_ONLY, CMP_B_ONLY, CMP_NEITHER,
+)
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
 
@@ -19,40 +23,53 @@ except ImportError:
 def comparison_color(in_a: bool, in_b: bool) -> str:
     """Return color based on which solutions include a PU.
 
-    Green (#2ecc71) = both, Blue (#3498db) = A only,
-    Orange (#e67e22) = B only, Gray (#bdc3c7) = neither.
+    Teal = both, Ocean-blue = A only,
+    Coral = B only, Steel-gray = neither.
     """
     if in_a and in_b:
-        return "#2ecc71"  # green -- both
+        return CMP_BOTH      # teal — both
     elif in_a:
-        return "#3498db"  # blue -- A only
+        return CMP_A_ONLY    # ocean-blue — A only
     elif in_b:
-        return "#e67e22"  # orange -- B only
-    return "#bdc3c7"  # gray -- neither
+        return CMP_B_ONLY    # coral — B only
+    return CMP_NEITHER       # steel-gray — neither
 
 
 @module.ui
 def comparison_map_ui():
     sidebar = ui.sidebar(
-        ui.input_select(
-            "sol_a", "Solution A",
-            choices={"0": "Run 1"}, selected="0",
+        ui.tooltip(
+            ui.input_select(
+                "sol_a", "Solution A",
+                choices={"0": "Run 1"}, selected="0",
+            ),
+            "First solution to compare. Select from the available solver runs.",
         ),
-        ui.input_select(
-            "sol_b", "Solution B",
-            choices={"1": "Run 2"}, selected="1",
+        ui.tooltip(
+            ui.input_select(
+                "sol_b", "Solution B",
+                choices={"1": "Run 2"}, selected="1",
+            ),
+            "Second solution to compare against Solution A.",
         ),
         ui.div(
-            ui.span("\u25a0", style="color:#2ecc71"), " Both  ",
-            ui.span("\u25a0", style="color:#3498db"), " A only  ",
-            ui.span("\u25a0", style="color:#e67e22"), " B only  ",
-            ui.span("\u25a0", style="color:#bdc3c7"), " Neither",
+            ui.span("\u25a0", style=f"color:{CMP_BOTH}"), " Both  ",
+            ui.span("\u25a0", style=f"color:{CMP_A_ONLY}"), " A only  ",
+            ui.span("\u25a0", style=f"color:{CMP_B_ONLY}"), " B only  ",
+            ui.span("\u25a0", style=f"color:{CMP_NEITHER}"), " Neither",
         ),
         width=220,
     )
     if _HAS_IPYLEAFLET:
         return ui.card(
-            ui.card_header("Solution Comparison"),
+            help_card_header("Solution Comparison"),
+            ui.p(
+                "Compare two solutions side-by-side to see which planning units "
+                "are shared vs. unique to each. Green = in both, blue = A only, "
+                "orange = B only, gray = neither. Useful for assessing solution "
+                "consistency.",
+                class_="text-muted small mb-3",
+            ),
             ui.layout_sidebar(
                 sidebar,
                 ui.div(
@@ -62,7 +79,11 @@ def comparison_map_ui():
             ),
         )
     return ui.card(
-        ui.card_header("Solution Comparison"),
+        help_card_header("Solution Comparison"),
+        ui.p(
+            "Solution comparison (install ipyleaflet for interactive maps).",
+            class_="text-muted small mb-3",
+        ),
         ui.layout_sidebar(sidebar, ui.output_ui("cmp_content")),
     )
 
@@ -75,6 +96,8 @@ def comparison_map_server(
     problem: reactive.Value,
     all_solutions: reactive.Value,
 ):
+    help_server_setup(input, "comparison_map")
+
     @reactive.effect
     def _update_choices():
         sols = all_solutions()

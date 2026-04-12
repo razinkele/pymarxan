@@ -114,27 +114,19 @@ class ZoneProblemCache:
         for k, zid in enumerate(zone_ids):
             zone_id_to_col[zid] = k + 1  # 1-indexed; 0 = unassigned
 
-        # --- PU-feature matrix (dense) ---
-        pu_feat_matrix = np.zeros((n_pu, n_feat), dtype=np.float64)
-        for _, row in problem.pu_vs_features.iterrows():
-            pu_id = int(row["pu"])
-            sp_id = int(row["species"])
-            amount = float(row["amount"])
-            ri = pu_id_to_idx.get(pu_id)
-            ci = feat_id_to_col.get(sp_id)
-            if ri is not None and ci is not None:
-                pu_feat_matrix[ri, ci] = amount
+        # --- PU-feature matrix (dense) — use shared builder ---
+        pu_feat_matrix = problem.build_pu_feature_matrix()
 
         # --- Zone cost matrix: (n_pu, n_zones+1) ---
         zone_cost_matrix = np.zeros((n_pu, n_zones + 1), dtype=np.float64)
-        for _, row in problem.zone_costs.iterrows():
-            pu_id = int(row["pu"])
-            zid = int(row["zone"])
-            cost = float(row["cost"])
-            ri = pu_id_to_idx.get(pu_id)
-            zcol = zone_id_to_col.get(zid)
+        zc_pu = problem.zone_costs["pu"].values
+        zc_zn = problem.zone_costs["zone"].values
+        zc_ct = problem.zone_costs["cost"].values
+        for k in range(len(zc_pu)):
+            ri = pu_id_to_idx.get(int(zc_pu[k]))
+            zcol = zone_id_to_col.get(int(zc_zn[k]))
             if ri is not None and zcol is not None:
-                zone_cost_matrix[ri, zcol] = cost
+                zone_cost_matrix[ri, zcol] = float(zc_ct[k])
 
         # --- Contribution matrix: (n_zones+1, n_feat) ---
         # Default: 1.0 for all zone-feature pairs (standard Marxan behavior)
@@ -145,26 +137,26 @@ class ZoneProblemCache:
             contribution_matrix[zcol, :] = 1.0
         # Override with explicit contributions if available
         if problem.zone_contributions is not None:
-            for _, row in problem.zone_contributions.iterrows():
-                fid = int(row["feature"])
-                zid = int(row["zone"])
-                contrib = float(row["contribution"])
-                fcol = feat_id_to_col.get(fid)
-                zcol = zone_id_to_col.get(zid)
+            zc_feat = problem.zone_contributions["feature"].values
+            zc_zone = problem.zone_contributions["zone"].values
+            zc_val = problem.zone_contributions["contribution"].values
+            for k in range(len(zc_feat)):
+                fcol = feat_id_to_col.get(int(zc_feat[k]))
+                zcol = zone_id_to_col.get(int(zc_zone[k]))
                 if fcol is not None and zcol is not None:
-                    contribution_matrix[zcol, fcol] = contrib
+                    contribution_matrix[zcol, fcol] = float(zc_val[k])
 
         # --- Zone target matrix: (n_zones+1, n_feat) ---
         zone_target_matrix = np.zeros((n_zones + 1, n_feat), dtype=np.float64)
         if problem.zone_targets is not None:
-            for _, row in problem.zone_targets.iterrows():
-                zid = int(row["zone"])
-                fid = int(row["feature"])
-                target = float(row["target"])
-                zcol = zone_id_to_col.get(zid)
-                fcol = feat_id_to_col.get(fid)
+            zt_zn = problem.zone_targets["zone"].values
+            zt_ft = problem.zone_targets["feature"].values
+            zt_tg = problem.zone_targets["target"].values
+            for k in range(len(zt_zn)):
+                zcol = zone_id_to_col.get(int(zt_zn[k]))
+                fcol = feat_id_to_col.get(int(zt_ft[k]))
                 if zcol is not None and fcol is not None:
-                    zone_target_matrix[zcol, fcol] = target
+                    zone_target_matrix[zcol, fcol] = float(zt_tg[k])
 
         # Apply MISSLEVEL to zone targets (match objective.py behavior)
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
@@ -173,33 +165,36 @@ class ZoneProblemCache:
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
         zbc: dict[tuple[int, int], float] = {}
         if problem.zone_boundary_costs is not None:
-            for _, row in problem.zone_boundary_costs.iterrows():
-                z1 = int(row["zone1"])
-                z2 = int(row["zone2"])
-                cost = float(row["cost"])
-                zcol1 = zone_id_to_col.get(z1)
-                zcol2 = zone_id_to_col.get(z2)
+            zb_z1 = problem.zone_boundary_costs["zone1"].values
+            zb_z2 = problem.zone_boundary_costs["zone2"].values
+            zb_ct = problem.zone_boundary_costs["cost"].values
+            for k in range(len(zb_z1)):
+                zcol1 = zone_id_to_col.get(int(zb_z1[k]))
+                zcol2 = zone_id_to_col.get(int(zb_z2[k]))
                 if zcol1 is not None and zcol2 is not None:
-                    zbc[(zcol1, zcol2)] = cost
-                    zbc[(zcol2, zcol1)] = cost
+                    zbc[(zcol1, zcol2)] = float(zb_ct[k])
+                    zbc[(zcol2, zcol1)] = float(zb_ct[k])
 
         # --- Boundary: adjacency list + self-boundary ---
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
         self_boundary = np.zeros(n_pu, dtype=np.float64)
 
         if problem.boundary is not None:
-            for _, row in problem.boundary.iterrows():
-                id1 = int(row["id1"])
-                id2 = int(row["id2"])
-                bval = float(row["boundary"])
+            b_id1 = problem.boundary["id1"].values
+            b_id2 = problem.boundary["id2"].values
+            b_val = problem.boundary["boundary"].values
+            for k in range(len(b_id1)):
+                i1 = int(b_id1[k])
+                i2 = int(b_id2[k])
+                bval = float(b_val[k])
 
-                if id1 == id2:
-                    idx = pu_id_to_idx.get(id1)
+                if i1 == i2:
+                    idx = pu_id_to_idx.get(i1)
                     if idx is not None:
                         self_boundary[idx] = bval
                 else:
-                    idx1 = pu_id_to_idx.get(id1)
-                    idx2 = pu_id_to_idx.get(id2)
+                    idx1 = pu_id_to_idx.get(i1)
+                    idx2 = pu_id_to_idx.get(i2)
                     if idx1 is not None and idx2 is not None:
                         neighbors[idx1].append((idx2, bval))
                         neighbors[idx2].append((idx1, bval))

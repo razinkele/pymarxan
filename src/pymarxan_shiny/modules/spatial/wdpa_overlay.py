@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.models.problem import STATUS_INITIAL_INCLUDE, STATUS_LOCKED_IN, has_geometry
 from pymarxan.spatial.wdpa import apply_wdpa_status, fetch_wdpa
 
@@ -10,25 +11,50 @@ from pymarxan.spatial.wdpa import apply_wdpa_status, fetch_wdpa
 @module.ui
 def wdpa_overlay_ui():
     return ui.card(
-        ui.card_header("Protected Areas (WDPA)"),
-        ui.input_text("api_token", "API Token (optional)", value=""),
+        help_card_header("Protected Areas (WDPA)"),
+        ui.p(
+            "Overlay existing protected areas from the World Database on Protected "
+            "Areas (WDPA) onto your planning units. Planning units that overlap "
+            "sufficiently with protected areas can be locked in (status=2) or "
+            "given initial-include status (status=1), reflecting existing conservation.",
+            class_="text-muted small mb-3",
+        ),
+        ui.tooltip(
+            ui.input_password("api_token", "API Token (optional)", value=""),
+            "Protected Planet API token for accessing WDPA data. "
+            "Optional — a default public endpoint is used if left blank. "
+            "Get a token at protectedplanet.net/en/thematic-areas/wdpa.",
+        ),
         ui.layout_columns(
-            ui.input_slider(
-                "threshold", "Overlap Threshold",
-                min=0.1, max=1.0, value=0.5, step=0.1,
+            ui.tooltip(
+                ui.input_slider(
+                    "threshold", "Overlap Threshold",
+                    min=0.1, max=1.0, value=0.5, step=0.1,
+                ),
+                "Minimum fraction of a planning unit's area that must overlap "
+                "with a protected area to be marked as protected.",
             ),
-            ui.input_select(
-                "status",
-                "Set Status",
-                {
-                    str(STATUS_LOCKED_IN): "Locked In (2)",
-                    str(STATUS_INITIAL_INCLUDE): "Initial Include (1)",
-                },
+            ui.tooltip(
+                ui.input_select(
+                    "status",
+                    "Set Status",
+                    {
+                        str(STATUS_LOCKED_IN): "Locked In (2)",
+                        str(STATUS_INITIAL_INCLUDE): "Initial Include (1)",
+                    },
+                ),
+                "Marxan status to assign to protected planning units. "
+                "'Locked In' (2) forces inclusion; 'Initial Include' (1) "
+                "starts them in the solution but allows removal.",
             ),
             col_widths=[6, 6],
         ),
-        ui.input_action_button(
-            "fetch_wdpa", "Fetch & Apply Protected Areas", class_="btn-primary",
+        ui.tooltip(
+            ui.input_action_button(
+                "fetch_wdpa", "Fetch & Apply Protected Areas", class_="btn-primary",
+            ),
+            "Download WDPA polygons for the planning unit extent, compute "
+            "overlap, and update planning unit status codes.",
         ),
         ui.output_text_verbatim("wdpa_info"),
     )
@@ -36,6 +62,8 @@ def wdpa_overlay_ui():
 
 @module.server
 def wdpa_overlay_server(input, output, session, problem: reactive.Value):
+    help_server_setup(input, "wdpa_overlay")
+
     @reactive.effect
     @reactive.event(input.fetch_wdpa)
     def _fetch_and_apply():
