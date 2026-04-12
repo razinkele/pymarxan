@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import numpy as np
-
 import pytest
 
 from pymarxan.io.readers import load_project
@@ -10,6 +9,7 @@ from pymarxan.solvers.utils import (
     check_targets,
     compute_boundary,
     compute_feature_shortfalls,
+    compute_objective_terms,
 )
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
@@ -129,3 +129,43 @@ def test_build_solution_has_penalty_field(tiny_problem):
     all_selected = np.ones(tiny_problem.n_planning_units, dtype=bool)
     sol2 = build_solution(tiny_problem, all_selected, blm=0.0)
     assert sol2.penalty == 0.0
+
+
+class TestComputeObjectiveTerms:
+    def setup_method(self):
+        self.problem = load_project(DATA_DIR)
+        self.pu_ids = self.problem.planning_units["id"].tolist()
+        self.pu_index = {pid: i for i, pid in enumerate(self.pu_ids)}
+
+    def test_terms_sum_to_objective(self):
+        selected = np.ones(6, dtype=bool)
+        terms = compute_objective_terms(self.problem, selected, self.pu_index, blm=1.0)
+        non_obj = sum(v for k, v in terms.items() if k != "objective")
+        assert terms["objective"] == pytest.approx(non_obj)
+
+    def test_terms_match_build_solution(self):
+        selected = np.ones(6, dtype=bool)
+        sol = build_solution(self.problem, selected, blm=1.5)
+        terms = compute_objective_terms(self.problem, selected, self.pu_index, blm=1.5)
+        assert sol.objective == pytest.approx(terms["objective"])
+
+    def test_terms_keys(self):
+        selected = np.zeros(6, dtype=bool)
+        terms = compute_objective_terms(self.problem, selected, self.pu_index, blm=0.0)
+        assert "base" in terms
+        assert "boundary" in terms
+        assert "penalty" in terms
+        assert "cost_threshold" in terms
+        assert "objective" in terms
+
+    def test_cost_threshold_term(self):
+        """When COSTTHRESH is set, the cost_threshold term should be nonzero."""
+        self.problem.parameters["COSTTHRESH"] = 1.0
+        self.problem.parameters["THRESHPEN1"] = 10.0
+        self.problem.parameters["THRESHPEN2"] = 5.0
+        selected = np.ones(6, dtype=bool)
+        terms = compute_objective_terms(self.problem, selected, self.pu_index, blm=0.0)
+        assert terms["cost_threshold"] > 0.0
+        assert terms["objective"] == pytest.approx(
+            terms["base"] + terms["boundary"] + terms["penalty"] + terms["cost_threshold"]
+        )
