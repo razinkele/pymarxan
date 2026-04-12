@@ -112,3 +112,57 @@ class TestConservationProblem:
         copied = problem.copy_with()
         assert copied.n_planning_units == problem.n_planning_units
         assert copied is not problem
+
+    def test_probability_field_default_none(self):
+        problem = _make_simple_problem()
+        assert problem.probability is None
+
+    def test_probability_field_set(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 3], "probability": [0.1, 0.5, 0.9]})
+        problem = _make_simple_problem()
+        problem_with_prob = problem.copy_with(probability=prob_df)
+        assert problem_with_prob.probability is not None
+        assert len(problem_with_prob.probability) == 3
+
+    def test_validate_probability_valid(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 3], "probability": [0.0, 0.5, 1.0]})
+        problem = ConservationProblem(
+            planning_units=_make_simple_problem().planning_units,
+            features=_make_simple_problem().features,
+            pu_vs_features=_make_simple_problem().pu_vs_features,
+            probability=prob_df,
+        )
+        errors = problem.validate()
+        assert errors == []
+
+    def test_validate_probability_missing_columns(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 3], "prob": [0.1, 0.5, 0.9]})
+        problem = _make_simple_problem()
+        problem_with_prob = problem.copy_with(probability=prob_df)
+        errors = problem_with_prob.validate()
+        assert any("probability missing columns" in e for e in errors)
+
+    def test_validate_probability_unknown_pus(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 99], "probability": [0.1, 0.5, 0.9]})
+        problem = _make_simple_problem()
+        problem_with_prob = problem.copy_with(probability=prob_df)
+        errors = problem_with_prob.validate()
+        assert any("planning unit IDs not in" in e for e in errors)
+
+    def test_validate_probability_out_of_range(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 3], "probability": [-0.1, 0.5, 1.1]})
+        problem = _make_simple_problem()
+        problem_with_prob = problem.copy_with(probability=prob_df)
+        errors = problem_with_prob.validate()
+        assert any("range [0, 1]" in e for e in errors)
+
+    def test_copy_with_preserves_probability(self):
+        prob_df = pd.DataFrame({"pu": [1, 2, 3], "probability": [0.1, 0.5, 0.9]})
+        problem = ConservationProblem(
+            planning_units=_make_simple_problem().planning_units,
+            features=_make_simple_problem().features,
+            pu_vs_features=_make_simple_problem().pu_vs_features,
+            probability=prob_df,
+        )
+        copied = problem.copy_with(parameters={"BLM": 2.0})
+        assert copied.probability is problem.probability

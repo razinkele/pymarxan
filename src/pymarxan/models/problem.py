@@ -42,6 +42,8 @@ class ConservationProblem:
     pu_vs_features: pd.DataFrame
     boundary: pd.DataFrame | None = None
     parameters: dict = field(default_factory=dict)
+    # --- Keyword-only fields (new capabilities) ---
+    probability: pd.DataFrame | None = field(default=None, kw_only=True)
 
     def __post_init__(self):
         """Validate critical data integrity constraints."""
@@ -217,6 +219,30 @@ class ConservationProblem:
                 errors.append(
                     f"boundary missing columns: {sorted(missing_bnd)}"
                 )
+
+        # --- Probability validation ---
+        if self.probability is not None:
+            prob_required = {"pu", "probability"}
+            missing_prob = prob_required - set(self.probability.columns)
+            if missing_prob:
+                errors.append(
+                    f"probability missing columns: {sorted(missing_prob)}"
+                )
+            else:
+                # Check PU references
+                prob_pu_ids = set(self.probability["pu"])
+                unknown_prob_pus = prob_pu_ids - self.pu_ids
+                if unknown_prob_pus:
+                    errors.append(
+                        f"probability references planning unit IDs not in "
+                        f"planning_units: {sorted(unknown_prob_pus)}"
+                    )
+                # Check probability range [0, 1]
+                prob_vals = self.probability["probability"]
+                if (prob_vals < 0.0).any() or (prob_vals > 1.0).any():
+                    errors.append(
+                        "probability values must be in range [0, 1]"
+                    )
 
         return errors
 
