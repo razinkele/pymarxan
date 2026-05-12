@@ -129,8 +129,8 @@ class TestExportSummaryCSV:
         assert df.loc[10, "achieved"] == 10.0
         assert df.loc[20, "achieved"] == 8.0
         # Sanity-check met flags vs achieved (raw targets, MISSLEVEL=1.0)
-        assert df.loc[10, "met"] == False  # 10 < 100
-        assert df.loc[20, "met"] == False  # 8 < 50
+        assert not df.loc[10, "met"]  # 10 < 100
+        assert not df.loc[20, "met"]  # 8 < 50
 
 
 class TestExportSelectionFrequencyCSV:

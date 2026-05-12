@@ -22,11 +22,8 @@ def compute_irreplaceability(
     Vectorized implementation using a PU-feature matrix.
     """
     pu_ids = problem.planning_units["id"].values
-    feat_ids = problem.features["id"].values
     feat_targets = problem.features["target"].values.astype(np.float64)
     statuses = problem.planning_units["status"].values.astype(int)
-
-    n_pu = len(pu_ids)
 
     # Build PU-feature amount matrix using shared utility
     pu_feat_matrix = problem.build_pu_feature_matrix()

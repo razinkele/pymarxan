@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import tempfile
 import zipfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import geopandas as gpd
 import numpy as np
