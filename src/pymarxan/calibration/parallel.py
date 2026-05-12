@@ -70,7 +70,8 @@ def run_sweep_parallel(
         "parameters": dict(problem.parameters),
     }
 
-    # Submit all jobs
+    # Submit all jobs; collect successful results and drop infeasible points
+    # (mirrors sequential run_sweep, which skips with `if not sols: continue`).
     indexed_results: dict[int, Solution] = {}
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -80,17 +81,23 @@ def run_sweep_parallel(
             for i, params in enumerate(param_dicts)
         }
         for future in as_completed(futures):
-            idx, sol = future.result()
+            try:
+                idx, sol = future.result()
+            except ValueError:
+                # Infeasible point — drop from results, like sequential sweep
+                continue
             indexed_results[idx] = sol
 
-    # Reassemble in order
-    solutions = [indexed_results[i] for i in range(len(param_dicts))]
+    # Reassemble in original order, keeping only the points that succeeded
+    ordered_indices = sorted(indexed_results.keys())
+    solutions = [indexed_results[i] for i in ordered_indices]
+    surviving_param_dicts = [param_dicts[i] for i in ordered_indices]
     costs = [s.cost for s in solutions]
     boundaries = [s.boundary for s in solutions]
     objectives = [s.objective for s in solutions]
 
     return SweepResult(
-        param_dicts=param_dicts,
+        param_dicts=surviving_param_dicts,
         solutions=solutions,
         costs=costs,
         boundaries=boundaries,

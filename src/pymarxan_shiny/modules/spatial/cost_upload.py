@@ -35,10 +35,12 @@ def cost_upload_ui():
         ui.tooltip(
             ui.input_file(
                 "cost_file",
-                "Upload Cost Layer (.shp, .geojson, .gpkg)",
-                accept=[".shp", ".geojson", ".gpkg", ".json", ".zip"],
+                "Upload Cost Layer (.geojson, .gpkg, or .zip)",
+                accept=[".geojson", ".gpkg", ".json", ".zip"],
             ),
             "Upload a vector file with polygons containing a numeric cost attribute. "
+            "Supported formats: GeoJSON, GeoPackage (.gpkg), or a .zip archive "
+            "containing a Shapefile bundle (.shp + .shx + .dbf + .prj). "
             "The file is spatially joined with planning units.",
         ),
         ui.layout_columns(

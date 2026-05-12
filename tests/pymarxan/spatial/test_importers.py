@@ -71,6 +71,42 @@ class TestImportPlanningUnits:
         )
         assert gdf.crs is not None
 
+    def test_import_bare_shp_raises_clear_error(self, tmp_path):
+        """A standalone .shp file (no .shx/.dbf sidecars) should error helpfully.
+
+        Shiny's ``input_file`` delivers only the .shp without sidecars, so users
+        must upload shapefiles as a ZIP archive. The error must point this out
+        instead of surfacing a raw Fiona stack trace.
+        """
+        fake_shp = tmp_path / "test.shp"
+        fake_shp.write_bytes(b"not a real shapefile")
+        with pytest.raises(ValueError, match="zip|sidecar|\\.shx"):
+            import_planning_units(fake_shp)
+
+    def test_import_zipped_shapefile_works(self, tmp_path):
+        """A ZIP containing a full shapefile bundle should be importable."""
+        import zipfile
+
+        # Write a real shapefile to disk
+        gdf = gpd.GeoDataFrame(
+            {"id": [1, 2], "cost": [1.0, 2.0], "status": [0, 0]},
+            geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+            crs="EPSG:4326",
+        )
+        shp_dir = tmp_path / "shp_bundle"
+        shp_dir.mkdir()
+        gdf.to_file(shp_dir / "pus.shp", driver="ESRI Shapefile")
+
+        # Zip the bundle (.shp + .shx + .dbf + .prj)
+        zip_path = tmp_path / "pus.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in shp_dir.iterdir():
+                zf.write(f, arcname=f.name)
+
+        result = import_planning_units(zip_path)
+        assert len(result) == 2
+        assert result["id"].tolist() == [1, 2]
+
 
 class TestImportFeaturesFromVector:
     def _make_pus(self):

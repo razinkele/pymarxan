@@ -37,11 +37,12 @@ def import_wizard_ui():
         ui.tooltip(
             ui.input_file(
                 "pu_file",
-                "Upload File (.shp, .geojson, .gpkg)",
-                accept=[".shp", ".geojson", ".gpkg", ".json", ".zip"],
+                "Upload File (.geojson, .gpkg, or .zip)",
+                accept=[".geojson", ".gpkg", ".json", ".zip"],
             ),
             "Upload a geospatial vector file containing planning unit polygons. "
-            "Supported formats: Shapefile (.shp), GeoJSON, GeoPackage (.gpkg).",
+            "Supported formats: GeoJSON, GeoPackage (.gpkg), or a .zip archive "
+            "containing a Shapefile bundle (.shp + .shx + .dbf + .prj).",
         ),
         ui.layout_columns(
             ui.tooltip(

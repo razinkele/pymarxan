@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -15,6 +15,9 @@ class CoolingSchedule:
     num_steps: int = 10_000
     _alpha: float = 1.0
     _beta: float = 0.0
+    # Lazily-built lookup table for Lundy-Mees, where each step depends on the
+    # previous one; without this every call would recompute from step 0.
+    _lundy_table: list[float] = field(default_factory=list)
 
     def temperature(self, step: int) -> float:
         """Return temperature at given step index."""
@@ -29,12 +32,21 @@ class CoolingSchedule:
             )
             return max(t, self.final_temp)
         if self.name == "lundy_mees":
-            t = self.initial_temp
-            for _ in range(step):
-                t = t / (1.0 + self._beta * t)
-            return max(t, self.final_temp)
+            return self._lundy_mees_temperature(step)
         msg = f"Unknown cooling schedule: {self.name}"
         raise ValueError(msg)
+
+    def _lundy_mees_temperature(self, step: int) -> float:
+        """Look up Lundy-Mees temperature in O(1) via a precomputed table."""
+        if not self._lundy_table:
+            t = self.initial_temp
+            table = [max(t, self.final_temp)]
+            for _ in range(self.num_steps):
+                t = t / (1.0 + self._beta * t)
+                table.append(max(t, self.final_temp))
+            self._lundy_table = table
+        idx = min(step, len(self._lundy_table) - 1)
+        return self._lundy_table[idx]
 
     @staticmethod
     def geometric(

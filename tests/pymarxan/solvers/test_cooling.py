@@ -93,6 +93,24 @@ class TestLundyMeesSchedule:
         gap2 = inv_t500 - inv_t250
         assert gap1 == pytest.approx(gap2, rel=1e-2)
 
+    def test_sequential_calls_are_fast(self):
+        """Sequential `temperature(k)` calls must not be O(k) each.
+
+        The original implementation looped from 0 to ``step`` on every call,
+        giving O(n^2) total work for a single SA run. With num_steps=10_000
+        this took multiple seconds purely on temperature updates. After the
+        fix, all 10_000 calls together should finish in well under a second.
+        """
+        import time
+        s = CoolingSchedule.lundy_mees(initial_temp=1.0, num_steps=10_000)
+        start = time.perf_counter()
+        temps = [s.temperature(k) for k in range(10_001)]
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"Lundy-Mees temperature scaled super-linearly: {elapsed:.3f}s"
+        # Still monotone after the perf fix
+        for i in range(1, len(temps)):
+            assert temps[i] <= temps[i - 1] + 1e-12
+
 
 class TestUnknownSchedule:
     def test_unknown_name_raises(self):
