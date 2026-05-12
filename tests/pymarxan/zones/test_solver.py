@@ -79,6 +79,16 @@ class TestZoneSASolver:
         assert len(solutions) == 1
         assert solutions[0].cost >= 0
 
+    def test_all_locked_in_assigns_nonzero_zone(self):
+        """Every locked-in PU must end up in a real (non-zero) zone."""
+        problem = copy.deepcopy(self.problem)
+        problem.planning_units["status"] = 2
+        problem.parameters["NUMITNS"] = 100
+        sol = self.solver.solve(problem, SolverConfig(num_solutions=1, seed=42))[0]
+        assert sol.zone_assignment is not None
+        for z in sol.zone_assignment:
+            assert z > 0, f"locked-in PU has zone {z}"
+
     def test_all_locked_out_returns_solution(self):
         """Zone SA should handle all PUs locked-out without crashing."""
         problem = copy.deepcopy(self.problem)
@@ -87,6 +97,16 @@ class TestZoneSASolver:
         config = SolverConfig(num_solutions=1, seed=42)
         solutions = self.solver.solve(problem, config)
         assert len(solutions) == 1
+
+    def test_all_locked_out_assigns_zone_zero(self):
+        """Every locked-out PU must remain in zone 0."""
+        problem = copy.deepcopy(self.problem)
+        problem.planning_units["status"] = 3
+        problem.parameters["NUMITNS"] = 100
+        sol = self.solver.solve(problem, SolverConfig(num_solutions=1, seed=42))[0]
+        assert sol.zone_assignment is not None
+        for z in sol.zone_assignment:
+            assert z == 0, f"locked-out PU has zone {z}"
 
     def test_cooling_counts_all_iterations(self):
         """SA should cool at the same rate regardless of same-zone skips."""

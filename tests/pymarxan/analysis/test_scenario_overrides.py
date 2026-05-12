@@ -80,6 +80,33 @@ class TestScenarioSetClone:
         original = ss.get("original")
         assert original.parameters["BLM"] == "1.0"
 
+    def test_clone_feature_overrides_isolated_from_source(self):
+        """Adding new feature_overrides on the clone must not mutate the source.
+
+        Without proper deepcopy, the clone could share the source's nested
+        feature_overrides dict; any later merge would silently mutate the
+        original scenario's overrides.
+        """
+        ss = ScenarioSet()
+        ss.add(
+            "original",
+            _make_solution(),
+            feature_overrides={1: {"target": 10.0}},
+        )
+        cloned = ss.clone_scenario(
+            "original",
+            "clone",
+            feature_overrides={2: {"target": 20.0}},
+        )
+        original = ss.get("original")
+        # Source must still have only feature 1
+        assert set(original.feature_overrides.keys()) == {1}
+        # Clone must have the merged keys
+        assert set(cloned.feature_overrides.keys()) == {1, 2}
+        # Mutating the clone's inner dict must not bleed into the source
+        cloned.feature_overrides[1]["target"] = 999.0
+        assert original.feature_overrides[1]["target"] == 10.0
+
     def test_clone_nonexistent_raises(self):
         ss = ScenarioSet()
         with pytest.raises(KeyError):
