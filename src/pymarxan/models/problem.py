@@ -117,7 +117,10 @@ class ConservationProblem:
             ri = pu_id_to_idx.get(int(pv_pu[k]))
             ci = feat_id_to_col.get(int(pv_sp[k]))
             if ri is not None and ci is not None:
-                matrix[ri, ci] = float(pv_am[k])
+                # Accumulate so duplicate (pu, species) rows are summed —
+                # matches feature_amounts() (groupby sum) and Marxan reference
+                # behaviour. Assignment would silently drop all but the last.
+                matrix[ri, ci] += float(pv_am[k])
         return matrix
 
     def feature_amounts(self) -> dict[int, float]:

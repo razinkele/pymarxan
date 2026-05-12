@@ -104,3 +104,21 @@ class TestCreateGeoMap:
             layer for layer in m.layers if isinstance(layer, ipyleaflet.GeoJSON)
         ]
         assert len(geo_layers) == 2
+
+    def test_reprojects_projected_crs_to_wgs84(self):
+        """Projected CRS (e.g. UTM, metres) must be reprojected to lat/lon.
+
+        ipyleaflet renders all coordinates as geographic. Without
+        reprojection, a UTM polygon's metre-valued coordinates end up as
+        absurd lat/lon (off the coast of Africa or beyond), making the map
+        unusable for any imported or generated non-geographic data.
+        """
+        # UTM zone 33N polygon around Berlin (approx 13°E, 52.5°N)
+        berlin_utm = box(390_000, 5_800_000, 400_000, 5_810_000)
+        gdf = gpd.GeoDataFrame(
+            {"id": [1]}, geometry=[berlin_utm], crs="EPSG:32633",
+        )
+        m = create_geo_map(gdf, ["#ff0000"])
+        # Center should land near Berlin in geographic coordinates
+        assert 50 < m.center[0] < 55, f"lat {m.center[0]} not near Berlin"
+        assert 10 < m.center[1] < 15, f"lon {m.center[1]} not near Berlin"

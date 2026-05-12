@@ -171,3 +171,35 @@ class TestImportFeaturesFromVector:
             feat_path, pu_gdf, feature_name="test", feature_id=1,
         )
         assert isinstance(result, pd.DataFrame)
+
+    def test_import_features_warns_on_one_sided_crs(self, tmp_path):
+        """Only one side having a CRS makes overlay silently wrong — must warn.
+
+        Without the warning, users see a perfectly empty (or nonsensically
+        populated) result and don't know why. The warning gives them a
+        chance to set the missing CRS before re-running.
+        """
+        import warnings as _w
+
+        # Planning units have a non-WGS84 CRS so the round-tripped GeoJSON
+        # (which auto-becomes EPSG:4326) genuinely differs.
+        pu_gdf = gpd.GeoDataFrame(
+            {"id": [1]},
+            geometry=[box(390_000, 5_800_000, 400_000, 5_810_000)],
+            crs="EPSG:32633",
+        )
+        # Write a feature file then strip its CRS metadata on disk
+        feat_gdf = gpd.GeoDataFrame({"value": [1.0]}, geometry=[box(0, 0, 1, 1)])
+        feat_path = tmp_path / "feat_no_crs.shp"
+        feat_gdf.to_file(feat_path, driver="ESRI Shapefile")
+        # Remove the .prj sidecar to force CRS=None on re-read
+        prj = feat_path.with_suffix(".prj")
+        if prj.exists():
+            prj.unlink()
+
+        with _w.catch_warnings(record=True) as captured:
+            _w.simplefilter("always")
+            import_features_from_vector(
+                feat_path, pu_gdf, feature_name="t", feature_id=1,
+            )
+        assert any("CRS mismatch" in str(w.message) for w in captured)

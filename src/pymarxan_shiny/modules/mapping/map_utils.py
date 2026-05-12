@@ -92,6 +92,12 @@ def create_geo_map(
     if not _HAS_IPYLEAFLET:
         raise ImportError("ipyleaflet is required for create_geo_map")
 
+    # ipyleaflet expects geographic coordinates (lat/lon). Projected CRSs
+    # (UTM, equal-area, etc.) would otherwise render polygons at absurd
+    # locations because their coordinates are in metres rather than degrees.
+    if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs("EPSG:4326")
+
     if center is None:
         b = gdf.total_bounds  # [minx, miny, maxx, maxy]
         center = ((b[1] + b[3]) / 2, (b[0] + b[2]) / 2)

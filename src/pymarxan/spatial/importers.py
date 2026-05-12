@@ -140,6 +140,19 @@ def import_features_from_vector(
     with _resolve_gis_path(path) as resolved:
         features_gdf = gpd.read_file(resolved)
 
+    # Warn when only one side has a CRS — overlay() will proceed with
+    # mismatched coordinate frames and produce silently wrong intersections.
+    # We can't safely auto-reproject, but the user deserves to know.
+    if (features_gdf.crs is None) != (planning_units.crs is None):
+        import warnings
+        warnings.warn(
+            "CRS mismatch in import_features_from_vector: "
+            f"features CRS={features_gdf.crs}, planning units CRS={planning_units.crs}. "
+            "Overlay results may be incorrect. Set both CRSes explicitly.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # Reproject if CRS differs
     if (features_gdf.crs is not None
             and planning_units.crs is not None

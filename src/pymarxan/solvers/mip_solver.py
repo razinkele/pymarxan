@@ -229,7 +229,17 @@ class MIPSolver(Solver):
         )
         model.solve(solver)
 
-        if model.status != pulp.constants.LpStatusOptimal:
+        # Accept any solver outcome where decision variables have integer
+        # incumbent values. CBC sets status=LpStatusNotSolved (not Optimal)
+        # when MIP_TIME_LIMIT fires but a feasible solution was already found;
+        # returning [] in that case silently loses a usable solution.
+        infeasible_statuses = {
+            pulp.constants.LpStatusInfeasible,
+            pulp.constants.LpStatusUnbounded,
+            pulp.constants.LpStatusUndefined,
+        }
+        has_values = all(pulp.value(x[pid]) is not None for pid in pu_ids)
+        if model.status in infeasible_statuses or not has_values:
             return []
 
         # Extract solution

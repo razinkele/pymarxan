@@ -117,6 +117,47 @@ class TestZoneSASolver:
         with pytest.raises(TypeError, match="ZonalProblem"):
             self.solver.solve(plain, config)
 
+    def test_cooling_param_honoured(self, monkeypatch):
+        """COOLING parameter selects the cooling schedule, like single-zone SA.
+
+        Previously ZoneSASolver hardcoded geometric cooling and silently ignored
+        the user's COOLING choice. Verify the configured factory is invoked.
+        """
+        from pymarxan.solvers import cooling as cooling_mod
+
+        captured: list[str] = []
+        real_linear = cooling_mod.CoolingSchedule.linear
+
+        def spy_linear(**kwargs):
+            captured.append("linear")
+            return real_linear(**kwargs)
+
+        monkeypatch.setattr(
+            "pymarxan.zones.solver._COOLING_FACTORIES",
+            {
+                "geometric": cooling_mod.CoolingSchedule.geometric,
+                "exponential": cooling_mod.CoolingSchedule.exponential,
+                "linear": spy_linear,
+                "lundy_mees": cooling_mod.CoolingSchedule.lundy_mees,
+            },
+        )
+
+        problem = copy.deepcopy(self.problem)
+        problem.parameters["COOLING"] = "linear"
+        problem.parameters["NUMITNS"] = 500
+        config = SolverConfig(num_solutions=1, seed=42)
+        self.solver.solve(problem, config)
+        assert "linear" in captured, "linear schedule factory was never invoked"
+
+    def test_invalid_cooling_raises(self):
+        """Unknown COOLING value should raise, matching single-zone SA."""
+        problem = copy.deepcopy(self.problem)
+        problem.parameters["COOLING"] = "not_a_real_schedule"
+        problem.parameters["NUMITNS"] = 100
+        config = SolverConfig(num_solutions=1, seed=42)
+        with pytest.raises(ValueError, match="Unknown COOLING schedule"):
+            self.solver.solve(problem, config)
+
     @pytest.mark.slow
     def test_finds_feasible_on_simple_problem(self):
         problem = copy.deepcopy(self.problem)

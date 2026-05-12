@@ -1,4 +1,8 @@
+import copy
+
+import numpy as np
 import pandas as pd
+import pytest
 
 from pymarxan.models.problem import ConservationProblem
 
@@ -210,3 +214,34 @@ class TestConservationProblem:
         problem_with_conn = problem.copy_with(connectivity=conn_df)
         copied = problem_with_conn.copy_with(parameters={"BLM": 2.0})
         assert copied.connectivity is problem_with_conn.connectivity
+
+
+def test_build_pu_feature_matrix_sums_duplicate_rows():
+    """Duplicate (pu, species) rows in pu_vs_features must sum, not overwrite.
+
+    Marxan reference behaviour is to accumulate; ``feature_amounts()`` already
+    uses ``groupby().sum()``. ``build_pu_feature_matrix`` previously assigned
+    (``matrix[ri, ci] = ...``), keeping only the last duplicate. The two paths
+    must agree because the SA ``ProblemCache`` uses the matrix while
+    ``build_solution`` aggregates via groupby — divergence makes SA optimize a
+    different objective than the reported summary.
+    """
+    problem = _make_simple_problem()
+    # Inject a duplicate row: (pu=1, species=1) already exists with amount 10
+    dup = pd.DataFrame({"species": [1], "pu": [1], "amount": [5.0]})
+    problem = problem.copy_with(
+        pu_vs_features=pd.concat([problem.pu_vs_features, dup], ignore_index=True),
+    )
+
+    matrix = problem.build_pu_feature_matrix()
+    pu_idx = problem.pu_id_to_index[1]
+    feat_ids = list(problem.features["id"].astype(int))
+    feat_idx = feat_ids.index(1)
+    # 10 (original) + 5 (dup) = 15
+    assert matrix[pu_idx, feat_idx] == pytest.approx(15.0)
+
+    # Matrix column sums must match feature_amounts (which sums via groupby)
+    totals = problem.feature_amounts()
+    matrix_totals = matrix.sum(axis=0)
+    for j, fid in enumerate(feat_ids):
+        assert matrix_totals[j] == pytest.approx(totals[int(fid)])

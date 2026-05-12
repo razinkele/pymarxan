@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
@@ -72,6 +73,25 @@ def spatial_export_server(
 ):
     help_server_setup(input, "spatial_export")
 
+    # Track temp files so they can be cleaned up when the session ends.
+    # Spatial exports (GeoPackage/Shapefile) can be many MB each — without
+    # cleanup, they accumulate in /tmp for the lifetime of the server.
+    _temp_paths: list[Path] = []
+
+    def _track_tempfile(suffix: str) -> tempfile._TemporaryFileWrapper:
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp.close()
+        _temp_paths.append(Path(tmp.name))
+        return tmp
+
+    @session.on_ended
+    def _cleanup_temp_files() -> None:
+        for path in _temp_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     @reactive.calc
     def _has_geometry():
         p = problem()
@@ -90,10 +110,7 @@ def spatial_export_server(
 
         driver = input.export_format()
         ext = FORMAT_EXTENSIONS.get(driver, ".gpkg")
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=ext, delete=False,
-        )
-        tmp.close()
+        tmp = _track_tempfile(ext)
         export_solution_spatial(p.planning_units, s, tmp.name, driver=driver)
         return tmp.name
 
@@ -107,10 +124,7 @@ def spatial_export_server(
 
         driver = input.export_format()
         ext = FORMAT_EXTENSIONS.get(driver, ".gpkg")
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=ext, delete=False,
-        )
-        tmp.close()
+        tmp = _track_tempfile(ext)
         export_frequency_spatial(p.planning_units, sols, tmp.name, driver=driver)
         return tmp.name
 

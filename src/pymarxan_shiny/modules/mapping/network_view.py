@@ -146,10 +146,17 @@ def network_view_server(
 
             if has_geometry(p):
                 m = create_geo_map(p.planning_units, colors)
-                # Centroids from real geometry (lat, lon)
+                # Centroids must also be in EPSG:4326 (lat/lon) to line up
+                # with the reprojected polygons drawn by create_geo_map.
+                pus_for_centroids = p.planning_units
+                if (
+                    pus_for_centroids.crs is not None
+                    and pus_for_centroids.crs.to_epsg() != 4326
+                ):
+                    pus_for_centroids = pus_for_centroids.to_crs("EPSG:4326")
                 centroids = [
                     (geom.centroid.y, geom.centroid.x)
-                    for geom in p.planning_units.geometry
+                    for geom in pus_for_centroids.geometry
                 ]
             else:
                 grid = generate_grid(n_pu)

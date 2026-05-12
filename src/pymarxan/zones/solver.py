@@ -7,6 +7,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import (
@@ -18,6 +19,14 @@ from pymarxan.zones.objective import (
     compute_zone_penalty,
     compute_zone_shortfall,
 )
+
+
+_COOLING_FACTORIES = {
+    "geometric": CoolingSchedule.geometric,
+    "exponential": CoolingSchedule.exponential,
+    "linear": CoolingSchedule.linear,
+    "lundy_mees": CoolingSchedule.lundy_mees,
+}
 
 
 class ZoneSASolver(Solver):
@@ -180,25 +189,33 @@ class ZoneSASolver(Solver):
 
             initial_temp = max(initial_temp, 0.001)
 
-            iters_per_step = max(1, num_iterations // num_temp_steps)
-            if initial_temp > 0:
-                alpha = (0.001 / initial_temp) ** (
-                    1.0 / max(1, num_temp_steps)
-                )
-            else:
-                alpha = 0.99
+            # Honour COOLING parameter — was previously hardcoded geometric,
+            # silently ignoring user choice of linear/exponential/lundy_mees.
+            cooling_name = problem.parameters.get("COOLING", "geometric")
+            factory = _COOLING_FACTORIES.get(cooling_name)
+            if factory is None:
+                msg = f"Unknown COOLING schedule: {cooling_name}"
+                raise ValueError(msg)
+            schedule = factory(
+                initial_temp=initial_temp,
+                final_temp=0.001,
+                num_steps=num_temp_steps,
+            )
 
+            iters_per_step = max(1, num_iterations // num_temp_steps)
             temp = initial_temp
             best_assignment = assignment.copy()
             best_obj = current_obj
             step_count = 0
             iter_count = 0
+            temp_step = 0
 
             for _ in range(num_iterations):
                 # Cool and count BEFORE any early-continue
                 step_count += 1
                 if step_count >= iters_per_step:
-                    temp *= alpha
+                    temp_step = min(temp_step + 1, num_temp_steps)
+                    temp = schedule.temperature(temp_step)
                     step_count = 0
 
                 iter_count += 1

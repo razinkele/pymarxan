@@ -139,7 +139,17 @@ class ZoneMIPSolver(Solver):
         )
         model.solve(solver)
 
-        if model.status != pulp.constants.LpStatusOptimal:
+        # Accept feasible-on-timeout solutions: CBC sets status=NotSolved when
+        # the time limit fires before optimality is proved, even though a
+        # usable integer incumbent exists. See mip_solver.py for rationale.
+        infeasible_statuses = {
+            pulp.constants.LpStatusInfeasible,
+            pulp.constants.LpStatusUnbounded,
+            pulp.constants.LpStatusUndefined,
+        }
+        first_pid = int(pu_ids[0])
+        has_values = pulp.value(x[(first_pid, zone_ids[0])]) is not None
+        if model.status in infeasible_statuses or not has_values:
             return []
 
         # Extract zone assignment

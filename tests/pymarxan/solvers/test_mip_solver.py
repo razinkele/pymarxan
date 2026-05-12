@@ -94,6 +94,31 @@ def test_mip_infeasible_returns_empty(tiny_problem):
     assert solutions == []
 
 
+def test_mip_returns_feasible_on_timeout(tiny_problem, monkeypatch):
+    """When CBC hits MIP_TIME_LIMIT but has a feasible incumbent, return it.
+
+    CBC sets ``model.status = LpStatusNotSolved`` (not Optimal) when the time
+    limit fires before optimality is proved. Previously we returned ``[]`` and
+    silently lost a perfectly usable feasible solution.
+    """
+    import pulp
+
+    real_solve = pulp.LpProblem.solve
+
+    def patched_solve(self, *args, **kwargs):
+        real_solve(self, *args, **kwargs)
+        # Simulate "time limit hit, but feasible incumbent already found"
+        self.status = pulp.constants.LpStatusNotSolved
+        return self.status
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", patched_solve)
+
+    solver = MIPSolver()
+    solutions = solver.solve(tiny_problem, SolverConfig(num_solutions=1))
+    assert len(solutions) == 1
+    assert solutions[0].n_selected >= 0  # values were extractable
+
+
 def test_mip_includes_self_boundary():
     """MIP objective must include self-boundary (external boundary) terms.
 

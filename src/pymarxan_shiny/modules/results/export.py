@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
@@ -48,15 +49,31 @@ def export_server(
 ):
     help_server_setup(input, "export")
 
+    # Track temp file paths so they can be cleaned up when the session ends —
+    # otherwise each download leaks a file in /tmp for the lifetime of the
+    # server process (megabytes per export accumulate over long sessions).
+    _temp_paths: list[Path] = []
+
+    def _track_tempfile(suffix: str, mode: str = "w") -> tempfile._TemporaryFileWrapper:
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False, mode=mode)
+        _temp_paths.append(Path(tmp.name))
+        return tmp
+
+    @session.on_ended
+    def _cleanup_temp_files() -> None:
+        for path in _temp_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
     @render.download(filename="pymarxan_solution.csv")
     def download_solution():
         p = problem()
         s = solution()
         if p is None or s is None:
             return
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".csv", delete=False, mode="w",
-        )
+        tmp = _track_tempfile(".csv")
         export_solution_csv(p, s, tmp.name)
         return tmp.name
 
@@ -66,9 +83,7 @@ def export_server(
         s = solution()
         if p is None or s is None:
             return
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".csv", delete=False, mode="w",
-        )
+        tmp = _track_tempfile(".csv")
         export_summary_csv(p, s, tmp.name)
         return tmp.name
 
