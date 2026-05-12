@@ -124,7 +124,7 @@ class RunModePipeline(Solver):
 
         is_zonal = isinstance(problem, ZonalProblem)
 
-        def _make_ii():
+        def _make_ii() -> Any:
             if is_zonal:
                 return ii_cls()
             itimptype = int(problem.parameters.get("ITIMPTYPE", 2))
@@ -141,12 +141,14 @@ class RunModePipeline(Solver):
         if runmode == 2:
             # SA then iterative improvement
             sa_sol = sa_cls().solve(problem, config)[0]
-            return _make_ii().improve(problem, sa_sol)
+            improved: Solution = _make_ii().improve(problem, sa_sol)
+            return improved
 
         if runmode == 3:
             # Heuristic then iterative improvement
             heur_sol = heuristic_cls().solve(problem, config)[0]
-            return _make_ii().improve(problem, heur_sol)
+            improved3: Solution = _make_ii().improve(problem, heur_sol)
+            return improved3
 
         if runmode == 4:
             # Heuristic then SA -- pick best (minimum objective)
@@ -163,9 +165,11 @@ class RunModePipeline(Solver):
                 if heur_sol.objective <= sa_sol.objective
                 else sa_sol
             )
-            return _make_ii().improve(problem, best)
+            improved5: Solution = _make_ii().improve(problem, best)
+            return improved5
 
         # runmode == 6
         # Iterative improvement only (from all-selected)
         ii_solver = _make_ii()
-        return ii_solver.solve(problem, config)[0]
+        ii_sol: Solution = ii_solver.solve(problem, config)[0]
+        return ii_sol

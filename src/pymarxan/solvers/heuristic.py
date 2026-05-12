@@ -168,9 +168,10 @@ class HeuristicSolver(Solver):
 
         selected = np.zeros(n, dtype=bool)
 
-        # Lock-in (status 2) and lock-out (status 3)
-        locked_in = statuses == 2
-        locked_out = statuses == 3
+        # Lock-in (status 2) and lock-out (status 3) — np.asarray ensures
+        # ndarray (not bool|Any) so indexing locked_out[idx] type-checks.
+        locked_in: np.ndarray = np.asarray(statuses == 2)
+        locked_out: np.ndarray = np.asarray(statuses == 3)
         selected[locked_in] = True
 
         # Status 1: initial include — start selected but swappable

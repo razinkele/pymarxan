@@ -65,13 +65,14 @@ def compute_gap_analysis(problem: ConservationProblem) -> GapResult:
     # Vectorized: filter pu_vs_features to protected PUs and groupby species
     puvspr = problem.pu_vs_features
     mask = puvspr["pu"].isin(protected_pu_ids)
+    protected_amount: dict[int, float]
     if mask.any():
         prot_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
-        protected_amount: dict[int, float] = {
+        protected_amount = {
             fid: float(prot_totals.get(fid, 0.0)) for fid in feature_ids
         }
     else:
-        protected_amount: dict[int, float] = {fid: 0.0 for fid in feature_ids}
+        protected_amount = {fid: 0.0 for fid in feature_ids}
 
     # Apply MISSLEVEL so gap analysis agrees with solver / build_solution /
     # export_summary — previously gap was measured against the raw target.

@@ -32,7 +32,8 @@ def inverse_power(distance: np.ndarray, beta: float) -> np.ndarray:
     """
     if beta <= 0:
         raise ValueError("beta must be positive")
-    return 1.0 / (1.0 + np.power(distance, beta))
+    result: np.ndarray = 1.0 / (1.0 + np.power(distance, beta))
+    return result
 
 
 def threshold(distance: np.ndarray, max_distance: float) -> np.ndarray:

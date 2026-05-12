@@ -1,6 +1,7 @@
 """Feature intersection for conservation planning."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import geopandas as gpd
@@ -9,7 +10,7 @@ import pandas as pd
 import rasterio
 from rasterio.mask import mask as rasterio_mask
 
-_AGG_FUNCS = {
+_AGG_FUNCS: dict[str, Callable[[np.ndarray], float]] = {
     "mean": np.nanmean,
     "sum": np.nansum,
     "max": np.nanmax,

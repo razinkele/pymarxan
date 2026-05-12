@@ -47,9 +47,12 @@ class ZoneMIPSolver(Solver):
     def available(self) -> bool:
         return True
 
-    def solve(
+    def solve(  # type: ignore[override]
         self, problem: ZonalProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        # Liskov: the Solver base takes ConservationProblem; zone solvers
+        # specialise to ZonalProblem and verify at runtime. supports_zones()
+        # advertises this so dispatchers route correctly.
         if not isinstance(problem, ZonalProblem):
             raise TypeError(
                 f"ZoneMIPSolver requires a ZonalProblem, got {type(problem).__name__}"

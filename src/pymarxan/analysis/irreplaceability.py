@@ -22,8 +22,10 @@ def compute_irreplaceability(
     Vectorized implementation using a PU-feature matrix.
     """
     pu_ids = problem.planning_units["id"].values
-    feat_targets = problem.features["target"].values.astype(np.float64)
-    statuses = problem.planning_units["status"].values.astype(int)
+    # np.asarray forces a concrete ndarray type (pandas .values can also
+    # return ExtensionArray, which doesn't support the arithmetic below).
+    feat_targets = np.asarray(problem.features["target"].values, dtype=np.float64)
+    statuses = np.asarray(problem.planning_units["status"].values, dtype=int)
 
     # Build PU-feature amount matrix using shared utility
     pu_feat_matrix = problem.build_pu_feature_matrix()

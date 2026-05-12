@@ -42,7 +42,8 @@ def _compute_achieved(
     totals = selected_amounts.groupby("species")["amount"].sum()
     result = {int(fid): 0.0 for fid in problem.features["id"]}
     for fid, amount in totals.items():
-        result[int(fid)] = float(amount)
+        # groupby keys come back typed as Hashable; the species column is int
+        result[int(fid)] = float(amount)  # type: ignore[call-overload]
     return result
 
 

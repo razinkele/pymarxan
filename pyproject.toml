@@ -42,6 +42,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.8",
     "pandas-stubs",
+    "types-requests",
     "pdoc>=16.0",
 ]
 spatial = ["rasterio>=1.3", "requests>=2.28"]

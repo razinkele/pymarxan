@@ -223,7 +223,8 @@ class OutputController:
         rows = []
         for i, sol in enumerate(solutions, start=1):
             for fid in feat_ids:
-                met = sol.targets_met.get(int(fid), False)
+                # output.py is single-zone Marxan; targets_met is dict[int, bool]
+                met = sol.targets_met.get(int(fid), False)  # type: ignore[call-overload]
                 rows.append({
                     "Run": i,
                     "Feature_ID": int(fid),

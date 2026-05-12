@@ -1,6 +1,7 @@
 """Cost surface processing for conservation planning."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import geopandas as gpd
@@ -132,7 +133,7 @@ def combine_cost_layers(
     return result
 
 
-_AGG_FUNCS = {
+_AGG_FUNCS: dict[str, Callable[[np.ndarray], float]] = {
     "mean": np.nanmean,
     "sum": np.nansum,
     "max": np.nanmax,
@@ -217,9 +218,9 @@ def apply_cost_from_raster(
         id_to_idx = {pid: i for i, pid in enumerate(result["id"].values)}
         cost_arr = result["cost"].values.copy().astype(float)
         for pu_id, cost in new_costs.items():
-            idx = id_to_idx.get(pu_id)
-            if idx is not None:
-                cost_arr[idx] = cost
+            cost_idx = id_to_idx.get(pu_id)
+            if cost_idx is not None:
+                cost_arr[cost_idx] = cost
         result["cost"] = cost_arr
 
     return result

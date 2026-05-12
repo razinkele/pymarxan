@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 
@@ -19,7 +20,7 @@ from pymarxan.zones.objective import (
     compute_zone_shortfall,
 )
 
-_COOLING_FACTORIES = {
+_COOLING_FACTORIES: dict[str, Callable[..., CoolingSchedule]] = {
     "geometric": CoolingSchedule.geometric,
     "exponential": CoolingSchedule.exponential,
     "linear": CoolingSchedule.linear,

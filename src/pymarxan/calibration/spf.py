@@ -54,8 +54,10 @@ def calibrate_spf(
         best = min(sols, key=lambda s: s.objective)
         best_solution = best
 
-        unmet = [
-            fid for fid, met in best.targets_met.items() if not met
+        # SPF calibration is single-zone only; feature IDs are plain ints.
+        unmet: list[int] = [
+            int(fid) for fid, met in best.targets_met.items()  # type: ignore[arg-type]
+            if not met
         ]
 
         history.append({

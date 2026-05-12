@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Callable
 
 import numpy as np
 
@@ -161,7 +162,7 @@ class SimulatedAnnealingSolver(Solver):
                 initial_temp = max(initial_temp, 0.001)
 
             # Build cooling schedule
-            schedule_factory = {
+            schedule_factory: dict[str, Callable[..., CoolingSchedule]] = {
                 "geometric": CoolingSchedule.geometric,
                 "exponential": CoolingSchedule.exponential,
                 "linear": CoolingSchedule.linear,

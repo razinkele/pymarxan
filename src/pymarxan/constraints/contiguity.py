@@ -149,7 +149,7 @@ class ContiguityConstraint(Constraint):
 
         # Gate: skip if no meaningful targets
         if problem.features is not None and len(problem.features) > 0:
-            targets = problem.features["target"].values
+            targets = np.asarray(problem.features["target"].values)
             if np.all(targets <= 0):
                 return
         else:

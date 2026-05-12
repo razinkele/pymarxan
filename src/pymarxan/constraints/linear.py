@@ -194,4 +194,4 @@ class LinearConstraint(IncrementalConstraint):
         if not hasattr(cache, "_idx_to_pu_id_map"):
             mapping = {v: k for k, v in cache.pu_id_to_idx.items()}
             object.__setattr__(cache, "_idx_to_pu_id_map", mapping)
-        return cache._idx_to_pu_id_map.get(idx, -1)  # type: ignore[attr-defined]
+        return int(cache._idx_to_pu_id_map.get(idx, -1))  # type: ignore[attr-defined]

@@ -84,7 +84,7 @@ class ConservationProblem:
         Cached on first access for O(1) repeated lookups.
         """
         # Use object __dict__ to cache on frozen-ish dataclass
-        cache = self.__dict__.get("_pu_id_to_index")
+        cache: dict[int, int] | None = self.__dict__.get("_pu_id_to_index")
         if cache is not None:
             return cache
         mapping = {int(pid): i for i, pid in enumerate(self.planning_units["id"].values)}
@@ -147,12 +147,12 @@ class ConservationProblem:
         """
         # Vectorized implementation
         totals = self.pu_vs_features.groupby("species")["amount"].sum()
-        
+
         # Map totals to features aligned by id
         available = self.features["id"].map(totals).fillna(0.0)
-        
+
         # Check if any target exceeds available amount
-        return (available >= self.features["target"]).all()
+        return bool((available >= self.features["target"]).all())
 
     def validate(self) -> list[str]:
         """Validate the problem data and return a list of error messages.
