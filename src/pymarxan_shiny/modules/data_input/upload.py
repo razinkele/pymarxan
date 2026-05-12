@@ -7,12 +7,12 @@ from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.io.readers import load_project
 from pymarxan_shiny.modules.data_input.directory_browser import (
-    directory_browser_ui,
     directory_browser_server,
+    directory_browser_ui,
 )
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
 @module.ui

@@ -6,9 +6,9 @@ from collections.abc import Callable
 import pandas as pd
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.spatial.grid import compute_adjacency, generate_planning_grid
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 try:
     from shinywidgets import output_widget, render_widget

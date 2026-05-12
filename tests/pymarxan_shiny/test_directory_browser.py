@@ -1,6 +1,4 @@
 """Tests for data_input/directory_browser Shiny module."""
-import tempfile
-from pathlib import Path
 
 from pymarxan_shiny.modules.data_input.directory_browser import (
     _list_directory,
@@ -8,7 +6,6 @@ from pymarxan_shiny.modules.data_input.directory_browser import (
     directory_browser_server,
     directory_browser_ui,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper unit tests

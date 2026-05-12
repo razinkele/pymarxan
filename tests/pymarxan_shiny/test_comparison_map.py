@@ -7,7 +7,10 @@ from pymarxan_shiny.modules.mapping.comparison_map import (
     comparison_map_ui,
 )
 from pymarxan_shiny.modules.mapping.ocean_palette import (
-    CMP_BOTH, CMP_A_ONLY, CMP_B_ONLY, CMP_NEITHER,
+    CMP_A_ONLY,
+    CMP_B_ONLY,
+    CMP_BOTH,
+    CMP_NEITHER,
 )
 
 

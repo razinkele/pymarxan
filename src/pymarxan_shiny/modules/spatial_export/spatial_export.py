@@ -8,7 +8,6 @@ from shiny import module, reactive, render, ui
 
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
-
 FORMAT_CHOICES = {
     "GPKG": "GeoPackage (.gpkg)",
     "ESRI Shapefile": "Shapefile (.shp)",

@@ -5,7 +5,6 @@ import math
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from pymarxan.constraints.budget import budget_constraint
 from pymarxan.constraints.linear import LinearConstraint

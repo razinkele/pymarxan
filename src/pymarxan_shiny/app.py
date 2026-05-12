@@ -24,36 +24,42 @@ _CSS_PATH = _APP_DIR / "www" / "ocean_theme.css"
 # ---------------------------------------------------------------------------
 # Module UI imports
 # ---------------------------------------------------------------------------
-from modules.data_input.upload import upload_ui, upload_server
-from modules.spatial.grid_builder import grid_builder_ui, grid_builder_server
-from modules.spatial.import_wizard import import_wizard_ui, import_wizard_server
-from modules.spatial.gadm_picker import gadm_picker_ui, gadm_picker_server
-from modules.spatial.wdpa_overlay import wdpa_overlay_ui, wdpa_overlay_server
-from modules.spatial.cost_upload import cost_upload_ui, cost_upload_server
-from modules.data.feature_table import feature_table_ui, feature_table_server
-from modules.connectivity.matrix_input import matrix_input_ui, matrix_input_server
-from modules.connectivity.metrics_viz import metrics_viz_ui, metrics_viz_server
-from modules.solver_config.solver_picker import solver_picker_ui, solver_picker_server
-from modules.solver_config.objective_selector import objective_selector_ui, objective_selector_server
-from modules.probability.probability_config import probability_config_ui, probability_config_server
-from modules.connectivity.connectivity_config import connectivity_config_ui, connectivity_config_server
-from modules.spatial_export.spatial_export import spatial_export_ui, spatial_export_server
-from modules.zones.zone_config import zone_config_ui, zone_config_server
-from modules.calibration.blm_explorer import blm_explorer_ui, blm_explorer_server
-from modules.calibration.sensitivity_ui import sensitivity_ui, sensitivity_server
-from modules.calibration.spf_explorer import spf_explorer_ui, spf_explorer_server
-from modules.calibration.sweep_explorer import sweep_explorer_ui, sweep_explorer_server
-from modules.run_control.run_panel import run_panel_ui, run_panel_server
-from modules.mapping.spatial_grid import spatial_grid_ui, spatial_grid_server
-from modules.mapping.solution_map import solution_map_ui, solution_map_server
-from modules.mapping.frequency_map import frequency_map_ui, frequency_map_server
-from modules.mapping.comparison_map import comparison_map_ui, comparison_map_server
-from modules.mapping.network_view import network_view_ui, network_view_server
-from modules.results.summary_table import summary_table_ui, summary_table_server
-from modules.results.target_met import target_met_ui, target_met_server
-from modules.results.convergence import convergence_ui, convergence_server
-from modules.results.export import export_ui, export_server
-from modules.results.scenario_compare import scenario_compare_ui, scenario_compare_server
+from modules.calibration.blm_explorer import blm_explorer_server, blm_explorer_ui
+from modules.calibration.sensitivity_ui import sensitivity_server, sensitivity_ui
+from modules.calibration.spf_explorer import spf_explorer_server, spf_explorer_ui
+from modules.calibration.sweep_explorer import sweep_explorer_server, sweep_explorer_ui
+from modules.connectivity.connectivity_config import (
+    connectivity_config_server,
+    connectivity_config_ui,
+)
+from modules.connectivity.matrix_input import matrix_input_server, matrix_input_ui
+from modules.connectivity.metrics_viz import metrics_viz_server, metrics_viz_ui
+from modules.data.feature_table import feature_table_server, feature_table_ui
+from modules.data_input.upload import upload_server, upload_ui
+from modules.mapping.comparison_map import comparison_map_server, comparison_map_ui
+from modules.mapping.frequency_map import frequency_map_server, frequency_map_ui
+from modules.mapping.network_view import network_view_server, network_view_ui
+from modules.mapping.solution_map import solution_map_server, solution_map_ui
+from modules.mapping.spatial_grid import spatial_grid_server, spatial_grid_ui
+from modules.probability.probability_config import probability_config_server, probability_config_ui
+from modules.results.convergence import convergence_server, convergence_ui
+from modules.results.export import export_server, export_ui
+from modules.results.scenario_compare import scenario_compare_server, scenario_compare_ui
+from modules.results.summary_table import summary_table_server, summary_table_ui
+from modules.results.target_met import target_met_server, target_met_ui
+from modules.run_control.run_panel import run_panel_server, run_panel_ui
+from modules.solver_config.objective_selector import (
+    objective_selector_server,
+    objective_selector_ui,
+)
+from modules.solver_config.solver_picker import solver_picker_server, solver_picker_ui
+from modules.spatial.cost_upload import cost_upload_server, cost_upload_ui
+from modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
+from modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
+from modules.spatial.import_wizard import import_wizard_server, import_wizard_ui
+from modules.spatial.wdpa_overlay import wdpa_overlay_server, wdpa_overlay_ui
+from modules.spatial_export.spatial_export import spatial_export_server, spatial_export_ui
+from modules.zones.zone_config import zone_config_server, zone_config_ui
 
 # ---------------------------------------------------------------------------
 # UI

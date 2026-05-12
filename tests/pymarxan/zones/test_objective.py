@@ -6,8 +6,8 @@ from pymarxan.zones.objective import (
     check_zone_targets,
     compute_zone_boundary,
     compute_zone_cost,
-    compute_zone_penalty,
     compute_zone_objective,
+    compute_zone_penalty,
 )
 from pymarxan.zones.readers import load_zone_project
 

@@ -2,8 +2,10 @@
 import numpy as np
 import pandas as pd
 import pytest
+
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.cache import ProblemCache
+
 
 def test_conservation_problem_validation():
     """Test that duplicate IDs are rejected."""

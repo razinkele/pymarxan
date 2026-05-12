@@ -6,8 +6,8 @@ import threading
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.solvers.base import SolverConfig
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan_shiny.modules.run_control.progress import SolverProgress
 
 

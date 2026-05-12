@@ -1,7 +1,6 @@
 """Tests for solution aliasing bug — [sol] * N creates references."""
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 
 import pytest

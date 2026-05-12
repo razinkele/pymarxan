@@ -11,15 +11,14 @@ using three-way logic to allow repair from infeasible initial states.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from pymarxan.constraints.base import IncrementalConstraint
 
 if TYPE_CHECKING:
-    import pulp
 
     from pymarxan.models.problem import ConservationProblem
     from pymarxan.solvers.cache import ProblemCache

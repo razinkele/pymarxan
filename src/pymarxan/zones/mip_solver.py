@@ -14,12 +14,11 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import (
     check_zone_targets,
-    compute_zone_boundary,
+    compute_standard_boundary,
     compute_zone_cost,
     compute_zone_objective,
     compute_zone_penalty,
     compute_zone_shortfall,
-    compute_standard_boundary,
 )
 
 
@@ -421,14 +420,6 @@ def _build_zone_solution(
     blm: float,
 ) -> Solution:
     """Build a Solution from a zone assignment array."""
-    from pymarxan.zones.objective import (
-        check_zone_targets,
-        compute_zone_cost,
-        compute_zone_objective,
-        compute_zone_penalty,
-        compute_zone_shortfall,
-        compute_standard_boundary,
-    )
 
     selected = zone_assignment > 0
     cost = compute_zone_cost(problem, zone_assignment)

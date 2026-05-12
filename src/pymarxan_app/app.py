@@ -27,6 +27,10 @@ from pymarxan_shiny.modules.calibration.sweep_explorer import (
     sweep_explorer_server,
     sweep_explorer_ui,
 )
+from pymarxan_shiny.modules.connectivity.connectivity_config import (
+    connectivity_config_server,
+    connectivity_config_ui,
+)
 from pymarxan_shiny.modules.connectivity.matrix_input import (
     matrix_input_server,
     matrix_input_ui,
@@ -57,6 +61,10 @@ from pymarxan_shiny.modules.mapping.spatial_grid import (
     spatial_grid_server,
     spatial_grid_ui,
 )
+from pymarxan_shiny.modules.probability.probability_config import (
+    probability_config_server,
+    probability_config_ui,
+)
 from pymarxan_shiny.modules.results.convergence import convergence_server, convergence_ui
 from pymarxan_shiny.modules.results.export import export_server, export_ui
 from pymarxan_shiny.modules.results.scenario_compare import (
@@ -69,31 +77,23 @@ from pymarxan_shiny.modules.results.target_met import (
     target_met_ui,
 )
 from pymarxan_shiny.modules.run_control.run_panel import run_panel_server, run_panel_ui
-from pymarxan_shiny.modules.solver_config.solver_picker import (
-    solver_picker_server,
-    solver_picker_ui,
-)
 from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_server,
     objective_selector_ui,
 )
-from pymarxan_shiny.modules.probability.probability_config import (
-    probability_config_server,
-    probability_config_ui,
-)
-from pymarxan_shiny.modules.connectivity.connectivity_config import (
-    connectivity_config_server,
-    connectivity_config_ui,
-)
-from pymarxan_shiny.modules.spatial_export.spatial_export import (
-    spatial_export_server,
-    spatial_export_ui,
+from pymarxan_shiny.modules.solver_config.solver_picker import (
+    solver_picker_server,
+    solver_picker_ui,
 )
 from pymarxan_shiny.modules.spatial.cost_upload import cost_upload_server, cost_upload_ui
 from pymarxan_shiny.modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
 from pymarxan_shiny.modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
 from pymarxan_shiny.modules.spatial.import_wizard import import_wizard_server, import_wizard_ui
 from pymarxan_shiny.modules.spatial.wdpa_overlay import wdpa_overlay_server, wdpa_overlay_ui
+from pymarxan_shiny.modules.spatial_export.spatial_export import (
+    spatial_export_server,
+    spatial_export_ui,
+)
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 app_ui = ui.page_navbar(

@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
-from pymarxan_shiny.modules.mapping.ocean_palette import FREQ_LOW_RGB, FREQ_HIGH_RGB
 from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import FREQ_HIGH_RGB, FREQ_LOW_RGB
 
 try:
     from shinywidgets import output_widget, render_widget

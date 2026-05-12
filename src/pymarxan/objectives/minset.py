@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     import pulp
 
     from pymarxan.models.problem import ConservationProblem
-    from pymarxan.solvers.cache import ProblemCache
 
 
 class MinSetObjective(ZonalObjective):

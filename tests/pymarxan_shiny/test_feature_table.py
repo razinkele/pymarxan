@@ -4,7 +4,6 @@ from __future__ import annotations
 import copy
 
 import pandas as pd
-import pytest
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan_shiny.modules.data.feature_table import (

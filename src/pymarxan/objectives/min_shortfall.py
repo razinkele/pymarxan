@@ -11,7 +11,6 @@ from pymarxan.objectives.base import ZonalObjective
 if TYPE_CHECKING:
     import pulp
 
-    from pymarxan.models.problem import ConservationProblem
 
 
 class MinShortfallObjective(ZonalObjective):

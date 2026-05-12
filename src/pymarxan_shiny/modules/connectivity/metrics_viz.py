@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.connectivity.metrics import (
     compute_betweenness_centrality,
     compute_eigenvector_centrality,
     compute_in_degree,
     compute_out_degree,
 )
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
 @module.ui

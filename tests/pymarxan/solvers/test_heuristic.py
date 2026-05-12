@@ -156,7 +156,6 @@ def test_heuristic_status1_starts_selected():
 
 def test_heuristic_includes_self_boundary():
     """Heuristic solver must include self-boundary in cost calculation."""
-    import numpy as np
 
     pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
     features = pd.DataFrame({"id": [1], "name": ["f1"], "target": [1.0], "spf": [1.0]})

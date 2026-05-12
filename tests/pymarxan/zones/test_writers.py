@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from pymarxan.solvers.base import Solution
 from pymarxan.zones.model import ZonalProblem

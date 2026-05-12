@@ -14,12 +14,10 @@ from pymarxan.zones.objective import (
     check_zone_targets,
     compute_standard_boundary,
     compute_zone_boundary,
-    compute_zone_connectivity,
     compute_zone_cost,
     compute_zone_penalty,
     compute_zone_shortfall,
 )
-
 
 _COOLING_FACTORIES = {
     "geometric": CoolingSchedule.geometric,

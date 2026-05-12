@@ -1,10 +1,10 @@
 """Tests for zone connectivity penalty support."""
 import copy
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
 
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.cache import ZoneProblemCache

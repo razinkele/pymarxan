@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
-from pymarxan_shiny.modules.mapping.ocean_palette import (
-    CMP_BOTH, CMP_A_ONLY, CMP_B_ONLY, CMP_NEITHER,
-)
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import (
+    CMP_A_ONLY,
+    CMP_B_ONLY,
+    CMP_BOTH,
+    CMP_NEITHER,
+)
 
 try:
     from shinywidgets import output_widget, render_widget

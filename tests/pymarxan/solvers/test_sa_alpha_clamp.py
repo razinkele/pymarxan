@@ -1,9 +1,6 @@
 """Tests for SA alpha computation when initial_temp is very small."""
 from __future__ import annotations
 
-import math
-import pytest
-
 
 class TestAlphaClamp:
     def test_alpha_below_one_when_temp_tiny(self):

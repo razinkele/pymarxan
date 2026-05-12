@@ -219,7 +219,7 @@ class ZonalConstraint(ABC):
             Decision variables keyed by (pu_id, zone_id).
         """
         raise NotImplementedError(
-            f"Zonal MIP not supported for this constraint"
+            "Zonal MIP not supported for this constraint"
         )
 
 

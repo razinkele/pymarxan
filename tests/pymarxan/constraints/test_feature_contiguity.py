@@ -8,7 +8,6 @@ import pytest
 from pymarxan.constraints.feature_contiguity import FeatureContiguityConstraint
 from pymarxan.models.problem import ConservationProblem
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------

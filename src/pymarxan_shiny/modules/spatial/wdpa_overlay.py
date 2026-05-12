@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.models.problem import STATUS_INITIAL_INCLUDE, STATUS_LOCKED_IN, has_geometry
 from pymarxan.spatial.wdpa import apply_wdpa_status, fetch_wdpa
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
 @module.ui

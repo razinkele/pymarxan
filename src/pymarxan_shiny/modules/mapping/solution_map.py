@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
-from pymarxan_shiny.modules.mapping.ocean_palette import MAP_SELECTED, MAP_NOT_SEL
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.ocean_palette import MAP_NOT_SEL, MAP_SELECTED
 
 try:
     from shinywidgets import output_widget, render_widget

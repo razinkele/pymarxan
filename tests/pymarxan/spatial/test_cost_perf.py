@@ -1,8 +1,8 @@
 """Tests for cost_surface performance fix -- correctness after O(n)->O(1) update."""
 from __future__ import annotations
 
-import numpy as np
 import geopandas as gpd
+import numpy as np
 import pytest
 from shapely.geometry import box
 

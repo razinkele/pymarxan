@@ -3,10 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from pymarxan.io.readers import load_project
-from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.base import Solver
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "simple"
 

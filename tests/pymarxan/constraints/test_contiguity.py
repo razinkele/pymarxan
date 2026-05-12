@@ -11,7 +11,6 @@ from pymarxan.constraints.contiguity import (
 )
 from pymarxan.models.problem import ConservationProblem
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------

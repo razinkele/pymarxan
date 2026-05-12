@@ -4,10 +4,10 @@ from __future__ import annotations
 import pandas as pd
 from shiny import module, reactive, render, ui
 
-from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.spatial.grid import compute_adjacency
 from pymarxan.spatial.importers import import_planning_units
+from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 _COMMON_GEOSPATIAL_EXTS = (".shp", ".geojson", ".gpkg", ".json", ".zip")
 
