@@ -91,3 +91,12 @@ def test_sweep_to_dataframe(small_problem: ConservationProblem):
     assert "cost" in df.columns
     assert "objective" in df.columns
     assert "BLM" in df.columns
+
+
+def test_sweep_result_best_empty_raises():
+    """SweepResult.best must raise a clear error when every point failed."""
+    result = SweepResult(
+        param_dicts=[], solutions=[], costs=[], boundaries=[], objectives=[],
+    )
+    with pytest.raises(ValueError, match="No feasible solutions"):
+        _ = result.best

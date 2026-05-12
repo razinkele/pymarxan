@@ -133,6 +133,11 @@ def fetch_gadm(
         crs="EPSG:4326",
     )
 
+    # Strip whitespace so a stray space character isn't treated as a filter —
+    # str.contains(" ") would match every row that has a space in its name.
+    if admin_name is not None:
+        admin_name = admin_name.strip() or None
+
     if admin_name is not None:
         name_col = "shapeName" if "shapeName" in gdf.columns else gdf.columns[0]
         gdf = gdf[gdf[name_col].str.contains(admin_name, case=False, na=False)]

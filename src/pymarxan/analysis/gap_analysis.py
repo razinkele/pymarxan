@@ -73,10 +73,15 @@ def compute_gap_analysis(problem: ConservationProblem) -> GapResult:
     else:
         protected_amount: dict[int, float] = {fid: 0.0 for fid in feature_ids}
 
+    # Apply MISSLEVEL so gap analysis agrees with solver / build_solution /
+    # export_summary — previously gap was measured against the raw target.
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+
     gap: dict[int, float] = {}
     target_met: dict[int, bool] = {}
     for fid in feature_ids:
-        shortfall = max(targets[fid] - protected_amount[fid], 0.0)
+        effective_target = targets[fid] * misslevel
+        shortfall = max(effective_target - protected_amount[fid], 0.0)
         gap[fid] = shortfall
         target_met[fid] = shortfall <= 0
 

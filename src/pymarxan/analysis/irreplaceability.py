@@ -24,33 +24,40 @@ def compute_irreplaceability(
     pu_ids = problem.planning_units["id"].values
     feat_ids = problem.features["id"].values
     feat_targets = problem.features["target"].values.astype(np.float64)
+    statuses = problem.planning_units["status"].values.astype(int)
 
     n_pu = len(pu_ids)
-    n_feat = len(feat_ids)
-
-    pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
-    feat_id_to_col = {int(fid): j for j, fid in enumerate(feat_ids)}
 
     # Build PU-feature amount matrix using shared utility
     pu_feat_matrix = problem.build_pu_feature_matrix()
 
-    # Total amount per feature: shape (n_feat,)
-    total_per_feat = pu_feat_matrix.sum(axis=0)
+    # Locked-out PUs can never be selected, so they don't contribute to
+    # available amount, and they themselves are never irreplaceable.
+    locked_out = statuses == 3
+    available_matrix = pu_feat_matrix.copy()
+    available_matrix[locked_out, :] = 0.0
 
-    # Only features with positive targets
+    # Total available amount per feature (excluding locked-out PUs)
+    total_per_feat = available_matrix.sum(axis=0)
+
+    # Apply MISSLEVEL — match solver/build_solution/export_summary behaviour
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    effective_targets = feat_targets * misslevel
+
+    # Only features with positive targets count toward the score denominator
     positive_mask = feat_targets > 0
     n_positive_target = int(positive_mask.sum())
 
     if n_positive_target == 0:
         return {int(pid): 0.0 for pid in pu_ids}
 
-    # For each PU, compute remaining = total - pu_contribution per feature
-    # A PU is critical for feature j if remaining[j] < target[j]
-    # remaining[i, j] = total[j] - pu_feat_matrix[i, j]
-    # critical[i, j] = (remaining[i, j] < target[j]) AND (target[j] > 0)
-    remaining = total_per_feat[np.newaxis, :] - pu_feat_matrix  # (n_pu, n_feat)
-    critical = (remaining < feat_targets[np.newaxis, :]) & positive_mask[np.newaxis, :]
-    critical_counts = critical.sum(axis=1)  # (n_pu,)
+    # For each selectable PU, compute remaining = total - pu_contribution per feature
+    # critical[i, j] = (remaining[i, j] < effective_target[j]) AND target[j] > 0
+    remaining = total_per_feat[np.newaxis, :] - available_matrix
+    critical = (remaining < effective_targets[np.newaxis, :]) & positive_mask[np.newaxis, :]
+    critical_counts = critical.sum(axis=1)
+    # Locked-out PUs cannot be critical
+    critical_counts[locked_out] = 0
 
     scores: dict[int, float] = {}
     for i, pid in enumerate(pu_ids):

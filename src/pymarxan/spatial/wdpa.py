@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import geopandas as gpd
 import requests
+from shapely.errors import GEOSException
 from shapely.geometry import box as shapely_box
 from shapely.geometry import shape
 
@@ -57,6 +59,16 @@ def fetch_wdpa(
             break
         all_pa.extend(pa_list)
         page += 1
+        if page == 5:
+            # Heads-up for large countries — WDPA has no server-side bbox
+            # filter, so a multi-page fetch blocks the calling thread.
+            warnings.warn(
+                f"WDPA fetch has retrieved {page - 1} pages; further pages "
+                "may take minutes for large countries. Consider narrowing "
+                "the bounding box or country filter.",
+                UserWarning,
+                stacklevel=2,
+            )
         if page > 100:  # Safety limit
             break
 
@@ -120,6 +132,11 @@ def apply_wdpa_status(
         wdpa = wdpa.to_crs(pu_gdf.crs)
 
     wdpa_union = wdpa.geometry.union_all()
+    # Self-intersecting WDPA polygons (common for complex coastlines) yield
+    # invalid unions; cleaning with buffer(0) avoids TopologicalError on
+    # subsequent .intersection() calls.
+    if not wdpa_union.is_valid:
+        wdpa_union = wdpa_union.buffer(0)
 
     new_statuses = pu_gdf["status"].values.copy()
     for idx in range(len(pu_gdf)):
@@ -127,7 +144,15 @@ def apply_wdpa_status(
         pu_area = pu_geom.area
         if pu_area <= 0:
             continue
-        intersection = pu_geom.intersection(wdpa_union)
+        try:
+            intersection = pu_geom.intersection(wdpa_union)
+        except GEOSException:
+            # Retry on a buffered copy of the PU itself; if it still fails,
+            # treat as no overlap rather than crashing the whole apply.
+            try:
+                intersection = pu_geom.buffer(0).intersection(wdpa_union)
+            except GEOSException:
+                continue
         overlap_ratio = intersection.area / pu_area
         if overlap_ratio >= overlap_threshold:
             new_statuses[idx] = status

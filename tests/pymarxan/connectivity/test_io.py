@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from pymarxan.connectivity.io import (
     connectivity_to_matrix,
@@ -45,3 +46,13 @@ class TestConnectivityToMatrix:
         m = connectivity_to_matrix(df, pu_ids=[1, 2, 3])
         assert m.shape == (3, 3)
         assert m[0, 1] == 0.5
+
+    def test_duplicate_edges_sum(self):
+        """Duplicate (id1, id2) rows must be summed, not overwritten."""
+        df = pd.DataFrame({
+            "id1": [1, 1, 2], "id2": [2, 2, 1], "value": [1.5, 2.5, 4.0],
+        })
+        m = connectivity_to_matrix(df, pu_ids=[1, 2], symmetric=False)
+        # (1,2): 1.5 + 2.5 = 4.0; (2,1): 4.0
+        assert m[0, 1] == pytest.approx(4.0)
+        assert m[1, 0] == pytest.approx(4.0)

@@ -52,6 +52,11 @@ class SweepResult:
     @property
     def best(self) -> Solution:
         """Return the solution with the lowest objective."""
+        if not self.objectives:
+            raise ValueError(
+                "No feasible solutions in sweep — every sweep point was "
+                "infeasible. Loosen targets or check problem setup."
+            )
         idx = min(range(len(self.objectives)), key=lambda i: self.objectives[i])
         return self.solutions[idx]
 

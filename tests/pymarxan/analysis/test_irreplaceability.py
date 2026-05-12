@@ -97,3 +97,69 @@ def test_irreplaceability_excludes_zero_target_features():
     # Removing PU 1: remaining = 5 < 10 => critical for feature 1
     # Only 1 positive-target feature, so score = 1/1 = 1.0
     assert scores[1] == 1.0, f"Expected 1.0, got {scores[1]}"
+
+
+def test_irreplaceability_locked_out_pus_score_zero():
+    """Locked-out PUs cannot be selected — they can never be irreplaceable.
+
+    Previously their amounts inflated the available-total used as the
+    'with PU removed' baseline, making the score for OTHER PUs look lower.
+    """
+    from pymarxan.models.problem import ConservationProblem
+
+    pu = pd.DataFrame({
+        "id": [1, 2, 3],
+        "cost": [1.0, 1.0, 1.0],
+        "status": [0, 0, 3],  # PU 3 locked out
+    })
+    features = pd.DataFrame({
+        "id": [1], "name": ["sp"], "target": [10.0], "spf": [1.0],
+    })
+    # PU 3 (locked-out) carries the bulk of the feature.
+    puvspr = pd.DataFrame({
+        "species": [1, 1, 1], "pu": [1, 2, 3], "amount": [6.0, 6.0, 100.0],
+    })
+    problem = ConservationProblem(
+        planning_units=pu, features=features, pu_vs_features=puvspr,
+    )
+    scores = compute_irreplaceability(problem)
+    # Locked-out PU should have score 0 (cannot be selected, never critical)
+    assert scores[3] == 0.0
+    # With PU 3 excluded, PU 1 and 2 each have 6.0; either one alone gives 6 < 10,
+    # so both are critical for the sole feature.
+    assert scores[1] == 1.0
+    assert scores[2] == 1.0
+
+
+def test_irreplaceability_applies_misslevel():
+    """MISSLEVEL scales the effective target used in criticality test.
+
+    All other target-checking paths (solver, build_solution, export_summary)
+    apply MISSLEVEL. Irreplaceability previously compared against raw target,
+    over-reporting criticality.
+    """
+    from pymarxan.models.problem import ConservationProblem
+
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    features = pd.DataFrame({
+        "id": [1], "name": ["sp"], "target": [10.0], "spf": [1.0],
+    })
+    puvspr = pd.DataFrame({
+        "species": [1, 1], "pu": [1, 2], "amount": [6.0, 6.0],
+    })
+    # With MISSLEVEL=1.0: total=12, removing PU1 leaves 6 < 10 -> critical
+    full = ConservationProblem(
+        planning_units=pu, features=features, pu_vs_features=puvspr,
+        parameters={"MISSLEVEL": 1.0},
+    )
+    scores_full = compute_irreplaceability(full)
+    assert scores_full[1] == 1.0
+
+    # With MISSLEVEL=0.5: effective target = 5, removing PU1 leaves 6 >= 5 -> NOT critical
+    relaxed = ConservationProblem(
+        planning_units=pu, features=features, pu_vs_features=puvspr,
+        parameters={"MISSLEVEL": 0.5},
+    )
+    scores_relaxed = compute_irreplaceability(relaxed)
+    assert scores_relaxed[1] == 0.0
+    assert scores_relaxed[2] == 0.0

@@ -73,3 +73,35 @@ def test_gap_analysis_no_protection():
     result = compute_gap_analysis(p)
     assert result.protected_amount[1] == pytest.approx(0.0)
     assert result.gap[1] == pytest.approx(5.0)
+
+
+def test_gap_analysis_applies_misslevel():
+    """MISSLEVEL must scale the effective target — gap analysis previously
+    compared against raw target, contradicting solver and exporter behaviour."""
+    pu = pd.DataFrame({
+        "id": [1, 2], "cost": [10.0, 20.0], "status": [2, 0],
+    })
+    feat = pd.DataFrame({
+        "id": [1], "name": ["f1"], "target": [10.0], "spf": [1.0],
+    })
+    puvspr = pd.DataFrame({
+        "species": [1, 1], "pu": [1, 2], "amount": [6.0, 4.0],
+    })
+    # status=2 on PU 1 -> protected_amount = 6.0
+    p_strict = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=puvspr,
+        parameters={"MISSLEVEL": 1.0},
+    )
+    res_strict = compute_gap_analysis(p_strict)
+    # raw target 10, protected 6 -> shortfall = 4, not met
+    assert res_strict.gap[1] == pytest.approx(4.0)
+    assert res_strict.target_met[1] is False
+
+    p_relaxed = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=puvspr,
+        parameters={"MISSLEVEL": 0.5},
+    )
+    res_relaxed = compute_gap_analysis(p_relaxed)
+    # effective target = 5, protected = 6 -> shortfall = 0, met
+    assert res_relaxed.gap[1] == pytest.approx(0.0)
+    assert res_relaxed.target_met[1] is True

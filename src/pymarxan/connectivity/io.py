@@ -30,16 +30,27 @@ def connectivity_to_matrix(
     *,
     symmetric: bool = True,
 ) -> np.ndarray:
-    """Convert an edge list DataFrame to NxN matrix."""
+    """Convert an edge list DataFrame to NxN matrix.
+
+    Duplicate ``(id1, id2)`` rows are summed (Marxan-style accumulation).
+    Vectorized assignment would silently drop all but the last duplicate.
+    """
     n = len(pu_ids)
     id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
     matrix = np.zeros((n, n))
 
-    id1_col = edgelist["id1"].values
-    id2_col = edgelist["id2"].values
-    val_col = edgelist["value"].values.astype(np.float64)
+    # Sum duplicates first so users who provide both (A,B,v1) and (A,B,v2)
+    # or repeated rows for the same pair don't lose data.
+    deduped = (
+        edgelist[["id1", "id2", "value"]]
+        .groupby(["id1", "id2"], as_index=False, sort=False)["value"]
+        .sum()
+    )
 
-    # Map IDs to indices using vectorized lookup
+    id1_col = deduped["id1"].values
+    id2_col = deduped["id2"].values
+    val_col = deduped["value"].values.astype(np.float64)
+
     idx1 = np.array([id_to_idx.get(int(v), -1) for v in id1_col], dtype=np.intp)
     idx2 = np.array([id_to_idx.get(int(v), -1) for v in id2_col], dtype=np.intp)
     valid = (idx1 >= 0) & (idx2 >= 0)

@@ -106,8 +106,15 @@ def comparison_map_server(
         choices = {
             str(i): f"Run {i + 1}" for i in range(len(sols))
         }
-        ui.update_select("sol_a", choices=choices, selected="0")
-        ui.update_select("sol_b", choices=choices, selected="1")
+        # Preserve the user's current selection if it still references a
+        # valid run — previously every new solver run reset both dropdowns
+        # back to Run 1 / Run 2.
+        current_a = input.sol_a()
+        current_b = input.sol_b()
+        selected_a = current_a if current_a in choices else "0"
+        selected_b = current_b if current_b in choices else "1"
+        ui.update_select("sol_a", choices=choices, selected=selected_a)
+        ui.update_select("sol_b", choices=choices, selected=selected_b)
 
     if _HAS_IPYLEAFLET:
 

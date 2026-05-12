@@ -100,6 +100,40 @@ class TestApplyWdpaStatus:
         assert all(result.planning_units["status"] == STATUS_INITIAL_INCLUDE)
 
 
+    def test_apply_wdpa_status_handles_invalid_wdpa_union(self):
+        """Invalid (self-intersecting) WDPA geometry must not crash.
+
+        Complex coastlines often produce self-intersecting unions; the
+        cleanup with buffer(0) keeps apply_wdpa_status usable instead of
+        raising a raw GEOSException to the Shiny UI.
+        """
+        from shapely.geometry import Polygon
+
+        # Bowtie polygon — invalid, self-intersecting
+        bowtie = Polygon([(0, 0), (1, 1), (1, 0), (0, 1), (0, 0)])
+        pu_gdf = gpd.GeoDataFrame(
+            {"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]},
+            geometry=[box(0, 0, 0.5, 0.5), box(2, 2, 3, 3)],
+            crs="EPSG:4326",
+        )
+        problem = ConservationProblem(
+            planning_units=pu_gdf,
+            features=pd.DataFrame(
+                {"id": [1], "name": ["f"], "target": [1.0], "spf": [1.0]}
+            ),
+            pu_vs_features=pd.DataFrame(
+                {"species": [1], "pu": [1], "amount": [1.0]}
+            ),
+        )
+        wdpa = gpd.GeoDataFrame(
+            {"name": ["bow"], "desig": ["?"], "iucn_cat": ["?"]},
+            geometry=[bowtie],
+            crs="EPSG:4326",
+        )
+        # Must not raise
+        result = apply_wdpa_status(problem, wdpa, overlap_threshold=0.1)
+        assert "status" in result.planning_units.columns
+
     def test_apply_wdpa_status_reprojects_crs(self):
         """apply_wdpa_status must reproject WDPA to PU CRS before intersection."""
         # PUs in a projected CRS (EPSG:32610 — UTM zone 10N)
