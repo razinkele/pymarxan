@@ -183,7 +183,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 ),
                 ui.tags.p(
                     f"Version {__version__}",
-                    style="text-align: center; color: var(--ocean-teal); font-weight: 600; margin-bottom: 1rem;",
+                    style=(
+                        "text-align: center; color: var(--ocean-teal); "
+                        "font-weight: 600; margin-bottom: 1rem;"
+                    ),
                 ),
                 ui.tags.hr(style="border-color: rgba(15, 163, 177, 0.15);"),
                 ui.tags.p(
@@ -311,7 +314,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     summary_table_server("summary_table", problem=problem, solution=current_solution)
     target_met_server("target_met", problem=problem, solution=current_solution)
     convergence_server("convergence", all_solutions=all_solutions)
-    scenario_compare_server("scenario_compare", solution=current_solution, solver_config=solver_config)
+    scenario_compare_server(
+        "scenario_compare",
+        solution=current_solution,
+        solver_config=solver_config,
+    )
     export_server("export", problem=problem, solution=current_solution)
     spatial_export_server(
         "spatial_export",

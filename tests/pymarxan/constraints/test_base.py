@@ -150,7 +150,6 @@ class MockIncrementalZonalConstraint(IncrementalZonalConstraint):
 
     def compute_zone_delta(self, idx, old_zone, new_zone, assignment,
                            state, zone_cache) -> float:
-        old_n = state["n_unassigned"]
         # Moving to zone 0 adds an unassigned; moving from zone 0 removes one
         delta_n = 0
         if old_zone == 0 and new_zone != 0:

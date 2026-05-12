@@ -31,7 +31,11 @@ def calibrate_spf(
         config = SolverConfig(num_solutions=1)
 
     feat_ids = problem.features["id"].values
-    feat_spf = problem.features["spf"].values.astype(float) if "spf" in problem.features.columns else [1.0] * len(feat_ids)
+    feat_spf = (
+        problem.features["spf"].values.astype(float)
+        if "spf" in problem.features.columns
+        else [1.0] * len(feat_ids)
+    )
     spf_values = {int(feat_ids[k]): float(feat_spf[k]) for k in range(len(feat_ids))}
 
     history = []

@@ -431,7 +431,13 @@ class ZoneProblemCache:
         # --- Connectivity delta ---
         connectivity_delta = self._connectivity_delta(idx, old_zone, new_zone, assignment)
 
-        return float(cost_delta + blm * std_boundary_delta + zone_boundary_delta + penalty_delta + connectivity_delta)
+        return float(
+            cost_delta
+            + blm * std_boundary_delta
+            + zone_boundary_delta
+            + penalty_delta
+            + connectivity_delta
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -97,7 +97,10 @@ def check_targets(
     amount >= target * misslevel.
     """
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _achieved if _achieved is not None else _compute_achieved(problem, selected, pu_index)
+    achieved = (
+        _achieved if _achieved is not None
+        else _compute_achieved(problem, selected, pu_index)
+    )
 
     targets_met: dict[int, bool] = {}
     feat_ids = problem.features["id"].values
@@ -118,7 +121,10 @@ def compute_feature_shortfalls(
 ) -> dict[int, float]:
     """Compute the shortfall for each feature (target*misslevel - achieved, min 0)."""
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _achieved if _achieved is not None else _compute_achieved(problem, selected, pu_index)
+    achieved = (
+        _achieved if _achieved is not None
+        else _compute_achieved(problem, selected, pu_index)
+    )
 
     shortfalls: dict[int, float] = {}
     feat_ids = problem.features["id"].values
@@ -142,7 +148,11 @@ def compute_penalty(
 
     total = 0.0
     feat_ids = problem.features["id"].values
-    feat_spf = problem.features["spf"].values if "spf" in problem.features.columns else np.ones(len(feat_ids))
+    feat_spf = (
+        problem.features["spf"].values
+        if "spf" in problem.features.columns
+        else np.ones(len(feat_ids))
+    )
     for i in range(len(feat_ids)):
         fid = int(feat_ids[i])
         spf = float(feat_spf[i])

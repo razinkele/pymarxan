@@ -195,7 +195,11 @@ def compute_zone_penalty(
     # Pre-build SPF lookup
     spf_lookup: dict[int, float] = {}
     feat_ids = problem.features["id"].values
-    feat_spf = problem.features["spf"].values if "spf" in problem.features.columns else np.ones(len(feat_ids))
+    feat_spf = (
+        problem.features["spf"].values
+        if "spf" in problem.features.columns
+        else np.ones(len(feat_ids))
+    )
     for i in range(len(feat_ids)):
         spf_lookup[int(feat_ids[i])] = float(feat_spf[i])
 

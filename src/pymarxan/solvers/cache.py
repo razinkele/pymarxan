@@ -92,7 +92,6 @@ class ProblemCache:
         """
         pu_df = problem.planning_units
         feat_df = problem.features
-        puvspr_df = problem.pu_vs_features
 
         n_pu = len(pu_df)
         n_feat = len(feat_df)

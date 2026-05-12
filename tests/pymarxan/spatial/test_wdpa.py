@@ -224,9 +224,12 @@ class TestFetchWdpa:
         }
         pa_page3 = {"protected_areas": []}
 
-        resp1 = MagicMock(); resp1.json.return_value = pa_page1
-        resp2 = MagicMock(); resp2.json.return_value = pa_page2
-        resp3 = MagicMock(); resp3.json.return_value = pa_page3
+        resp1 = MagicMock()
+        resp1.json.return_value = pa_page1
+        resp2 = MagicMock()
+        resp2.json.return_value = pa_page2
+        resp3 = MagicMock()
+        resp3.json.return_value = pa_page3
         mock_get.side_effect = [resp1, resp2, resp3]
 
         gdf = fetch_wdpa(bounds=(0, 0, 1, 1), api_token="tok")

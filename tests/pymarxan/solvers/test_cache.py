@@ -77,7 +77,7 @@ class TestConstruction:
         assert len(cache.adj_start) == 7  # 6 PUs + 1
 
     def test_neighbors_symmetry(self, cache):
-        """If j in neighbors of i with weight w, then i must be in neighbors of j with same weight."""
+        """If j in neighbors of i with weight w, i must be in neighbors of j with same weight."""
         n = len(cache.adj_start) - 1
         for i in range(n):
             start_i = cache.adj_start[i]

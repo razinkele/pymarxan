@@ -218,7 +218,6 @@ class HeuristicSolver(Solver):
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
         feat_ids = problem.features["id"].values
         feat_targets = problem.features["target"].values.astype(float)
-        feat_spf = problem.features["spf"].values.astype(float) if "spf" in problem.features.columns else np.ones(len(feat_ids))
         remaining: dict[int, float] = {}
         for k in range(len(feat_ids)):
             remaining[int(feat_ids[k])] = float(feat_targets[k]) * misslevel

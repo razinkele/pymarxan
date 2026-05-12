@@ -136,7 +136,6 @@ def directory_browser_server(
         parts = cur.parts
         breadcrumbs = []
         for idx in range(len(parts)):
-            segment_path = str(Path(*parts[: idx + 1]))
             breadcrumbs.append(
                 ui.input_action_button(
                     f"bc_{idx}",

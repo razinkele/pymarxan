@@ -51,8 +51,16 @@ def export_summary_csv(
     )
 
     feat_ids = problem.features["id"].values
-    feat_names = problem.features["name"].values if "name" in problem.features.columns else [f"Feature {fid}" for fid in feat_ids]
-    feat_targets = problem.features["target"].values.astype(float) if "target" in problem.features.columns else np.zeros(len(feat_ids))
+    feat_names = (
+        problem.features["name"].values
+        if "name" in problem.features.columns
+        else [f"Feature {fid}" for fid in feat_ids]
+    )
+    feat_targets = (
+        problem.features["target"].values.astype(float)
+        if "target" in problem.features.columns
+        else np.zeros(len(feat_ids))
+    )
 
     rows = []
     for k in range(len(feat_ids)):

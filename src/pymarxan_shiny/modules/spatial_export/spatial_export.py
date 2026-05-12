@@ -99,7 +99,10 @@ def spatial_export_server(
         pu = p.planning_units
         return pu is not None and "geometry" in pu.columns
 
-    @render.download(filename=lambda: f"pymarxan_solution{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}")
+    def _solution_filename() -> str:
+        return f"pymarxan_solution{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}"
+
+    @render.download(filename=_solution_filename)
     def download_solution_spatial():
         p = problem()
         s = solution()
@@ -113,7 +116,10 @@ def spatial_export_server(
         export_solution_spatial(p.planning_units, s, tmp.name, driver=driver)
         return tmp.name
 
-    @render.download(filename=lambda: f"pymarxan_frequency{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}")
+    def _frequency_filename() -> str:
+        return f"pymarxan_frequency{FORMAT_EXTENSIONS.get(input.export_format(), '.gpkg')}"
+
+    @render.download(filename=_frequency_filename)
     def download_frequency_spatial():
         p = problem()
         sols = all_solutions()

@@ -71,7 +71,7 @@ class TestExportSummaryCSV:
         export_summary_csv(problem, sol, path)
         df = pd.read_csv(path)
         # achieved=7.0, target=10.0, MISSLEVEL=0.5 => effective_target=5.0 => met=True
-        assert df.iloc[0]["met"] is True or df.iloc[0]["met"] == True
+        assert bool(df.iloc[0]["met"]) is True
 
     def test_met_false_without_misslevel(self, tmp_path):
         """Without MISSLEVEL (default 1.0), 7.0 < 10.0 => met=False."""
@@ -89,7 +89,7 @@ class TestExportSummaryCSV:
         export_summary_csv(problem, sol, path)
         df = pd.read_csv(path)
         # achieved=7.0, target=10.0, no MISSLEVEL => met=False
-        assert df.iloc[0]["met"] == False
+        assert not df.iloc[0]["met"]
 
     def test_achieved_values_match_manual_sum(self, tmp_path):
         """Verify ``achieved`` is the actual sum of amounts for selected PUs.
