@@ -59,7 +59,7 @@ def spf_explorer_server(
     output: Outputs,
     session: Session,
     problem: reactive.Value,
-    solver: reactive.Calc,
+    solver: reactive.Calc,  # type: ignore[valid-type]  # shiny stubs treat Calc as var
 ):
     help_server_setup(input, "spf_explorer")
 

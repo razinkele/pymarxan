@@ -10,7 +10,7 @@ lint:  ## Run ruff linter
 	ruff check src/ tests/
 
 types:  ## Run mypy type checker
-	mypy src/pymarxan/ --ignore-missing-imports
+	mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports
 
 check:  ## Run all checks (lint + types + test)
 	$(MAKE) lint types test

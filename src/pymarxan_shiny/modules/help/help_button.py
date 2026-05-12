@@ -19,9 +19,10 @@ Usage inside a @module.ui / @module.server pair:
 from __future__ import annotations
 
 from shiny import reactive, ui
+from shiny.ui import CardItem
 
 
-def help_card_header(title: str) -> ui.Tag:
+def help_card_header(title: str) -> CardItem:
     """Return a card header containing *title* and a small Help button.
 
     The button has id ``"help_btn"`` which is automatically namespaced by

@@ -65,7 +65,7 @@ def blm_explorer_ui():
 def blm_explorer_server(
     input, output, session,
     problem: reactive.Value,
-    solver: reactive.Calc,
+    solver: reactive.Calc,  # type: ignore[valid-type]  # shiny stubs treat Calc as var
 ):
     help_server_setup(input, "blm_explorer")
 

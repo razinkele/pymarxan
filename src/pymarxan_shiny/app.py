@@ -229,7 +229,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     problem = reactive.Value(None)
     current_solution = reactive.Value(None)
     all_solutions = reactive.Value(None)
-    solver_config = reactive.Value({})
+    solver_config: reactive.Value[dict] = reactive.Value({})
     connectivity_matrix = reactive.Value(None)
     connectivity_pu_ids = reactive.Value(None)
     gadm_boundary = reactive.Value(None)

@@ -50,7 +50,7 @@ def run_panel_server(
     output: Outputs,
     session: Session,
     problem: reactive.Value,
-    solver: reactive.Calc,
+    solver: reactive.Calc,  # type: ignore[valid-type]  # shiny stubs treat Calc as var
     solver_config: reactive.Value,
     current_solution: reactive.Value,
     all_solutions: reactive.Value,
