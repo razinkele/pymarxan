@@ -36,12 +36,45 @@ from pymarxan.models.problem import ConservationProblem, has_geometry
 
 __all__ = [
     "PUCoordinatesUnavailableError",
+    "SepState",
     "compute_sep_penalty",
     "compute_sep_penalty_from_scratch",
     "count_separation",
     "evaluate_solution_separation",
     "get_pu_coordinates",
+    "is_separation_active",
+    "raise_if_separation_active",
 ]
+
+
+def is_separation_active(problem: ConservationProblem) -> bool:
+    """Return True iff any feature has ``sepdistance > 0 AND sepnum > 1``.
+
+    Used by zone solvers (round-3 H1) to refuse separation-active problems
+    rather than silently producing wrong-because-incomplete results.
+    """
+    feats = problem.features
+    if "sepnum" not in feats.columns or "sepdistance" not in feats.columns:
+        return False
+    return bool(((feats["sepnum"] > 1) & (feats["sepdistance"] > 0)).any())
+
+
+def raise_if_separation_active(
+    problem: ConservationProblem, solver_name: str,
+) -> None:
+    """Raise ``NotImplementedError`` if the problem is separation-active.
+
+    Used by zone solvers (round-3 H1) — per-zone SEPDISTANCE / SEPNUM
+    isn't implemented in Phase 20; v0.3 will close that gap if demand
+    materialises. For now this guard prevents silent no-ops.
+    """
+    if is_separation_active(problem):
+        raise NotImplementedError(
+            f"{solver_name} does not honour SEPDISTANCE/SEPNUM; per-zone "
+            "separation is deferred to v0.3. Use the non-zone solvers "
+            "(SASolver, IterativeImprovementSolver, MIPSolver, "
+            "HeuristicSolver) or set sepnum<=1 on all features."
+        )
 
 
 def compute_sep_penalty(count: int, sepnum: int) -> float:
@@ -311,6 +344,138 @@ def evaluate_solution_separation(
         if sepdistance[j] > 0 and sepnum[j] > 1:
             shortfalls[int(feat_ids[j])] = max(0, int(sepnum[j]) - int(counts[j]))
     return shortfalls, float(total)
+
+
+class SepState:
+    """Mutable companion to :class:`ProblemCache` for the SA / iterative-improvement
+    inner loop. Maintains per-feature separation counts and the total
+    separation penalty incrementally.
+
+    NOT thread-safe (round-3 F9). Lives entirely within a single solver's
+    call frame. Do NOT expose to progress observers without explicit
+    snapshotting.
+
+    v1 implementation: per-affected-feature full recompute via vectorised
+    :func:`count_separation`. The candidate sub-array pdist allocation is
+    bounded by selection footprint, not problem size (round-2 CR1).
+
+    Iteration uses ``cache.pu_to_sep_feats[idx]`` — the precomputed inverse
+    PU→feature index (round-3 H15) — so the outer loop is O(features-at-PU)
+    rather than O(n_feat) per flip.
+    """
+
+    def __init__(
+        self,
+        selected: np.ndarray,
+        sep_counts: np.ndarray,
+        sep_penalty_total: float,
+    ) -> None:
+        self.selected = selected
+        self.sep_counts = sep_counts  # (n_feat,) int — count per feature
+        self.sep_penalty_total = sep_penalty_total
+
+    @classmethod
+    def from_selection(cls, cache, selected: np.ndarray) -> SepState:
+        """One-time full build. Called once before the SA loop starts.
+
+        Computes the initial per-feature separation count and the total
+        penalty (baseline · SPF · hyperbolic-curve summed across active
+        features).
+        """
+        n_feat = cache.n_feat
+        sep_counts = np.zeros(n_feat, dtype=np.int64)
+        total = 0.0
+        sep_active = (cache.feat_sepdistance > 0) & (cache.feat_sepnum > 1)
+        for j in np.where(sep_active)[0]:
+            amounts = np.asarray(cache.pu_feat_matrix[:, j], dtype=np.float64)
+            c = count_separation(
+                selected=selected,
+                feat_amounts=amounts,
+                pu_coords=cache.pu_coords,
+                sepdistance=float(cache.feat_sepdistance[j]),
+                sepnum=int(cache.feat_sepnum[j]),
+            )
+            sep_counts[j] = c
+            total += (
+                compute_sep_penalty(int(c), int(cache.feat_sepnum[j]))
+                * float(cache.feat_baseline_penalty[j])
+                * float(cache.feat_spf[j])
+            )
+        return cls(
+            selected=selected.copy(),
+            sep_counts=sep_counts,
+            sep_penalty_total=float(total),
+        )
+
+    def penalty_total(self) -> float:
+        """Current total separation penalty."""
+        return self.sep_penalty_total
+
+    def delta_penalty(self, cache, idx: int, adding: bool) -> float:
+        """Δ(separation penalty) for flipping PU ``idx``. Does NOT mutate state.
+
+        Iterates only ``cache.pu_to_sep_feats[idx]`` — features sep-active
+        AND containing PU ``idx`` (round-3 H15 inverse index). Features
+        whose count would not be affected by the flip are skipped.
+        """
+        affected_features = cache.pu_to_sep_feats[idx]
+        if len(affected_features) == 0:
+            return 0.0
+
+        # Synthesise the post-flip selection without mutating self.selected
+        sel_after = self.selected.copy()
+        sel_after[idx] = adding
+
+        total_delta = 0.0
+        for j in affected_features:
+            j_int = int(j)
+            amounts = np.asarray(cache.pu_feat_matrix[:, j_int], dtype=np.float64)
+            new_count = count_separation(
+                selected=sel_after,
+                feat_amounts=amounts,
+                pu_coords=cache.pu_coords,
+                sepdistance=float(cache.feat_sepdistance[j_int]),
+                sepnum=int(cache.feat_sepnum[j_int]),
+            )
+            old_count = int(self.sep_counts[j_int])
+            sepnum = int(cache.feat_sepnum[j_int])
+            old_pen = compute_sep_penalty(old_count, sepnum)
+            new_pen = compute_sep_penalty(int(new_count), sepnum)
+            total_delta += (
+                (new_pen - old_pen)
+                * float(cache.feat_baseline_penalty[j_int])
+                * float(cache.feat_spf[j_int])
+            )
+        return total_delta
+
+    def apply_flip(self, cache, idx: int, adding: bool) -> None:
+        """Commit the flip: update selected mask, per-feature counts, and
+        the running penalty total. Mirrors :meth:`delta_penalty`'s scan."""
+        affected_features = cache.pu_to_sep_feats[idx]
+        self.selected[idx] = adding
+        if len(affected_features) == 0:
+            return
+
+        for j in affected_features:
+            j_int = int(j)
+            amounts = np.asarray(cache.pu_feat_matrix[:, j_int], dtype=np.float64)
+            new_count = count_separation(
+                selected=self.selected,
+                feat_amounts=amounts,
+                pu_coords=cache.pu_coords,
+                sepdistance=float(cache.feat_sepdistance[j_int]),
+                sepnum=int(cache.feat_sepnum[j_int]),
+            )
+            old_count = int(self.sep_counts[j_int])
+            sepnum = int(cache.feat_sepnum[j_int])
+            old_pen = compute_sep_penalty(old_count, sepnum)
+            new_pen = compute_sep_penalty(int(new_count), sepnum)
+            self.sep_penalty_total += (
+                (new_pen - old_pen)
+                * float(cache.feat_baseline_penalty[j_int])
+                * float(cache.feat_spf[j_int])
+            )
+            self.sep_counts[j_int] = int(new_count)
 
 
 class PUCoordinatesUnavailableError(ValueError):

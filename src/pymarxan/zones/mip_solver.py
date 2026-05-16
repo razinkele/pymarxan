@@ -42,24 +42,41 @@ class ZoneMIPSolver(Solver):
         self,
         *,
         mip_clump_strategy: str = "drop",
+        mip_sep_strategy: str = "drop",
     ) -> None:
-        """Per-zone TARGET2 is out of scope for v0.2 (see Phase 19 design
-        §"What's NOT in scope"). The kwarg is accepted for API symmetry
-        with ``MIPSolver`` and to forward-compatibly reject ``"big_m"``;
-        the deterministic ``"drop"`` path is the only one wired today.
+        """Per-zone TARGET2 / SEPNUM are out of scope for v0.2 (see Phase
+        19/20 design §"What's NOT in scope"). The kwargs are accepted for
+        API symmetry with :class:`MIPSolver` and to forward-compatibly
+        reject ``"big_m"`` / ``"socp"``; the deterministic ``"drop"`` path
+        is the only one wired today.
         """
-        if mip_clump_strategy not in ("drop", "big_m"):
-            raise ValueError(
-                f"Unknown mip_clump_strategy {mip_clump_strategy!r}; "
-                "use 'drop' (default) or 'big_m' (deferred, NotImplementedError)."
-            )
+        # Use the shared MIPSolver validator for consistency.
+        from pymarxan.solvers.mip_solver import _validate_mip_strategy
+        _validate_mip_strategy(
+            "mip_clump_strategy", mip_clump_strategy, ("drop", "big_m"),
+        )
+        _validate_mip_strategy(
+            "mip_sep_strategy", mip_sep_strategy, ("drop", "big_m"),
+            rejected_with_reason={
+                "socp": (
+                    "separation is a combinatorial constraint (greedy "
+                    "maximum independent set), not a conic/probabilistic one. "
+                    "Use 'drop' (default) or 'big_m' (deferred)."
+                ),
+            },
+        )
         self.mip_clump_strategy = mip_clump_strategy
+        self.mip_sep_strategy = mip_sep_strategy
 
     def name(self) -> str:
         return "Zone MIP (PuLP)"
 
     def supports_zones(self) -> bool:
         return True
+
+    def supports_separation(self) -> bool:
+        # Per-zone SEPDISTANCE / SEPNUM deferred to v0.3 (round-3 H1).
+        return False
 
     def available(self) -> bool:
         return True
@@ -74,6 +91,8 @@ class ZoneMIPSolver(Solver):
             raise TypeError(
                 f"ZoneMIPSolver requires a ZonalProblem, got {type(problem).__name__}"
             )
+        from pymarxan.solvers.separation import raise_if_separation_active
+        raise_if_separation_active(problem, "ZoneMIPSolver")
         if config is None:
             config = SolverConfig()
 

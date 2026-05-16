@@ -15,6 +15,27 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
 
 
+def _validate_mip_strategy(
+    name: str,
+    value: str,
+    allowed: tuple[str, ...],
+    rejected_with_reason: dict[str, str] | None = None,
+) -> None:
+    """Validate a MIP strategy kwarg at __init__ time (round-3 M7).
+
+    ``rejected_with_reason`` is ``{strategy_name: explanation}`` for values
+    that ARE recognised but explicitly rejected with a different reason
+    than 'not in allowed set' (e.g. ``"socp"`` for separation, which is
+    combinatorial rather than conic).
+    """
+    if rejected_with_reason and value in rejected_with_reason:
+        raise ValueError(
+            f"{name}={value!r} is not valid — {rejected_with_reason[value]}"
+        )
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {allowed}, got {value!r}")
+
+
 class MIPSolver(Solver):
     """Solver that formulates the Marxan minimum-set problem as a MILP.
 
@@ -48,19 +69,29 @@ class MIPSolver(Solver):
         *,
         mip_chance_strategy: str = "drop",
         mip_clump_strategy: str = "drop",
+        mip_sep_strategy: str = "drop",
     ) -> None:
-        if mip_chance_strategy not in ("drop", "piecewise", "socp"):
-            raise ValueError(
-                f"Unknown mip_chance_strategy {mip_chance_strategy!r}; "
-                "use 'drop' (default), 'piecewise', or 'socp'."
-            )
-        if mip_clump_strategy not in ("drop", "big_m"):
-            raise ValueError(
-                f"Unknown mip_clump_strategy {mip_clump_strategy!r}; "
-                "use 'drop' (default) or 'big_m' (deferred, NotImplementedError)."
-            )
+        _validate_mip_strategy(
+            "mip_chance_strategy", mip_chance_strategy,
+            ("drop", "piecewise", "socp"),
+        )
+        _validate_mip_strategy(
+            "mip_clump_strategy", mip_clump_strategy, ("drop", "big_m"),
+        )
+        _validate_mip_strategy(
+            "mip_sep_strategy", mip_sep_strategy, ("drop", "big_m"),
+            rejected_with_reason={
+                "socp": (
+                    "separation is a combinatorial constraint (greedy "
+                    "maximum independent set), not a conic/probabilistic one. "
+                    "Use 'drop' (default; gap reported on "
+                    "Solution.sep_shortfalls) or 'big_m' (deferred)."
+                ),
+            },
+        )
         self.mip_chance_strategy = mip_chance_strategy
         self.mip_clump_strategy = mip_clump_strategy
+        self.mip_sep_strategy = mip_sep_strategy
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -109,6 +140,25 @@ class MIPSolver(Solver):
                 "(default; post-hoc gap reported on Solution.clump_shortfalls) "
                 "or the SA / iterative-improvement solvers for chance-"
                 "constrained-style clumping optimality."
+            )
+
+        # SEPDISTANCE / SEPNUM gating (Phase 20). MIP "drop" runs the
+        # deterministic relaxation and build_solution reports the
+        # separation gap on Solution.sep_shortfalls post-hoc.
+        has_sep_active = (
+            "sepnum" in problem.features.columns
+            and "sepdistance" in problem.features.columns
+            and (
+                (problem.features["sepnum"] > 1)
+                & (problem.features["sepdistance"] > 0)
+            ).any()
+        )
+        if has_sep_active and self.mip_sep_strategy == "big_m":
+            raise NotImplementedError(
+                "mip_sep_strategy='big_m' (pairwise-distance + big-M "
+                "formulation of separation in CBC) is deferred to v0.3. "
+                "Use 'drop' (default; post-hoc gap reported on "
+                "Solution.sep_shortfalls) or SA / iterative-improvement."
             )
 
         blm = float(problem.parameters.get("BLM", 0.0))

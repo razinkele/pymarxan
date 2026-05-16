@@ -129,8 +129,10 @@ class TestMIPChanceStrategy:
             MIPSolver(mip_chance_strategy="socp").solve(problem)
 
     def test_unknown_strategy_rejected_at_init(self):
+        # Phase 20 routed strategy validation through a shared helper;
+        # the error text now reads "mip_chance_strategy must be one of ...".
         from pymarxan.solvers.mip_solver import MIPSolver
-        with pytest.raises(ValueError, match="Unknown mip_chance_strategy"):
+        with pytest.raises(ValueError, match="mip_chance_strategy"):
             MIPSolver(mip_chance_strategy="bogus")
 
     def test_mip_under_probmode0_unaffected(self):

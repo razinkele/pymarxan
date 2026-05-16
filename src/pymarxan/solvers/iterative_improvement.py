@@ -193,6 +193,12 @@ class IterativeImprovementSolver(Solver):
         if cache.clumping_active:
             from pymarxan.solvers.clumping import ClumpState
             clump_state = ClumpState.from_selection(cache, selected)
+        # Phase 20: SepState mirrors the same wiring for separation-active
+        # features (sepdistance > 0 AND sepnum > 1).
+        sep_state = None
+        if cache.separation_active:
+            from pymarxan.solvers.separation import SepState
+            sep_state = SepState.from_selection(cache, selected)
 
         improved = True
         while improved:
@@ -206,6 +212,8 @@ class IterativeImprovementSolver(Solver):
                 )
                 if clump_state is not None:
                     delta += clump_state.delta_penalty(cache, i, adding=False)
+                if sep_state is not None:
+                    delta += sep_state.delta_penalty(cache, i, adding=False)
                 if delta < 0:
                     # Removing this PU improves the objective
                     selected[i] = False
@@ -213,6 +221,8 @@ class IterativeImprovementSolver(Solver):
                     total_cost -= cache.costs[i]
                     if clump_state is not None:
                         clump_state.apply_flip(cache, i, adding=False)
+                    if sep_state is not None:
+                        sep_state.apply_flip(cache, i, adding=False)
                     improved = True
 
         return build_solution(
@@ -265,6 +275,12 @@ class IterativeImprovementSolver(Solver):
         if cache.clumping_active:
             from pymarxan.solvers.clumping import ClumpState
             clump_state = ClumpState.from_selection(cache, selected)
+        # Phase 20: SepState mirrors the same wiring for separation-active
+        # features.
+        sep_state = None
+        if cache.separation_active:
+            from pymarxan.solvers.separation import SepState
+            sep_state = SepState.from_selection(cache, selected)
 
         improved = True
         while improved:
@@ -278,6 +294,8 @@ class IterativeImprovementSolver(Solver):
                 )
                 if clump_state is not None:
                     delta += clump_state.delta_penalty(cache, i, adding=True)
+                if sep_state is not None:
+                    delta += sep_state.delta_penalty(cache, i, adding=True)
                 if delta < 0:
                     # Adding this PU improves the objective
                     selected[i] = True
@@ -285,6 +303,8 @@ class IterativeImprovementSolver(Solver):
                     total_cost += cache.costs[i]
                     if clump_state is not None:
                         clump_state.apply_flip(cache, i, adding=True)
+                    if sep_state is not None:
+                        sep_state.apply_flip(cache, i, adding=True)
                     improved = True
 
         return build_solution(

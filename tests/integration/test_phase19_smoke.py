@@ -152,8 +152,10 @@ class TestMIPClumpStrategy:
             MIPSolver(mip_clump_strategy="big_m").solve(problem)
 
     def test_unknown_strategy_rejected_at_init(self):
+        # Phase 20 routed strategy validation through a shared helper;
+        # the error text now reads "mip_clump_strategy must be one of ...".
         from pymarxan.solvers.mip_solver import MIPSolver
-        with pytest.raises(ValueError, match="Unknown mip_clump_strategy"):
+        with pytest.raises(ValueError, match="mip_clump_strategy"):
             MIPSolver(mip_clump_strategy="bogus")
 
 

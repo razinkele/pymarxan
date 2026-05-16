@@ -102,3 +102,18 @@ class Solver(ABC):
         ``ClumpState`` companion to ``ProblemCache``.
         """
         return True
+
+    def supports_separation(self) -> bool:
+        """Whether this solver supports SEPDISTANCE / SEPNUM (Marxan
+        geographic separation constraints).
+
+        Defaults to True. MIPSolver falls back via ``mip_sep_strategy='drop'``
+        (deterministic solve, post-hoc separation-shortfall reporting).
+        The heuristic stays separation-blind during scoring but reports
+        the gap post-hoc through ``Solution.sep_shortfalls`` /
+        ``sep_penalty``. SA and iterative-improvement honour separation
+        natively via the ``SepState`` companion to ``ProblemCache``. Zone
+        solvers override this to False (per-zone separation deferred to
+        v0.3).
+        """
+        return True

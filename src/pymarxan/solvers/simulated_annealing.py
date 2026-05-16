@@ -160,6 +160,17 @@ class SimulatedAnnealingSolver(Solver):
                 )
                 current_obj += init_clump_pen
 
+            # Phase 20: spin up SepState when any feature is separation-active
+            # (sepdistance > 0 AND sepnum > 1). The cache's _det_spf mask
+            # already excludes sep-active features from the deterministic
+            # penalty path, so adding SepState's contribution here gives
+            # the correct full objective.
+            sep_state = None
+            if cache.separation_active:
+                from pymarxan.solvers.separation import SepState
+                sep_state = SepState.from_selection(cache, selected)
+                current_obj += sep_state.penalty_total()
+
             # Determine initial temperature
             if start_temp_param is not None:
                 initial_temp = max(float(start_temp_param), 0.001)
@@ -174,6 +185,10 @@ class SimulatedAnnealingSolver(Solver):
                     )
                     if clump_state is not None:
                         delta += clump_state.delta_penalty(
+                            cache, idx, adding=not selected[idx],
+                        )
+                    if sep_state is not None:
+                        delta += sep_state.delta_penalty(
                             cache, idx, adding=not selected[idx],
                         )
                     if delta > 0:
@@ -233,6 +248,8 @@ class SimulatedAnnealingSolver(Solver):
                 )
                 if clump_state is not None:
                     delta += clump_state.delta_penalty(cache, idx, adding)
+                if sep_state is not None:
+                    delta += sep_state.delta_penalty(cache, idx, adding)
 
                 # Acceptance criterion
                 if delta <= 0 or (
@@ -246,6 +263,8 @@ class SimulatedAnnealingSolver(Solver):
                     current_obj += delta
                     if clump_state is not None:
                         clump_state.apply_flip(cache, idx, adding)
+                    if sep_state is not None:
+                        sep_state.apply_flip(cache, idx, adding)
 
                     # Track best
                     if current_obj < best_obj:

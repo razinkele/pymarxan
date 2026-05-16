@@ -3,9 +3,28 @@
 Converts ConservationProblem DataFrames into dense NumPy arrays once,
 then provides O(degree + features_per_pu) delta computation for
 single-PU flips.
+
+Inverse-index discipline
+------------------------
+When adding a new constraint type (Phase 21 importance, Phase 22 boundary,
+etc.) precompute the inverse PU→feature index at ``from_problem`` time as
+a frozen-dataclass field. DO NOT do ``np.where(pu_feat_matrix[idx] > 0)``
+per flip in the SA hot loop — it is O(n_feat) per flip and silently blows
+the performance budget. Pattern: see ``feat_uses_pu`` (Phase 19 clumping)
+and ``pu_to_sep_feats`` (Phase 20 separation).
+
+Deterministic penalty mask
+--------------------------
+The deterministic-path SPF mask excludes features handled by constraint
+states (Phase 19 ClumpState for ``target2 > 0``; Phase 20 SepState for
+``sepnum > 1``) to prevent double-counting. The compound mask is
+precomputed as ``_det_spf`` and consumed by both ``compute_full_objective``
+and ``compute_delta_objective``. When adding a new constraint type, edit
+the single mask definition in ``from_problem`` — not the call sites.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -94,6 +113,24 @@ class ProblemCache:
     # so ClumpState can iterate only the participating PUs per feature.
     feat_uses_pu: list[np.ndarray] = field(default_factory=list)
     clumping_active: bool = False
+    # Phase 20 separation distance (SEPDISTANCE / SEPNUM). Disabled when no
+    # feature is sep-active (sepdistance > 0 AND sepnum > 1) so non-sep
+    # problems pay zero per-flip cost.
+    feat_sepdistance: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    feat_sepnum: np.ndarray = field(default_factory=lambda: np.ones(0, dtype=np.int32))
+    # pu_coords[i] = (x, y) for PU i. Built only when separation_active —
+    # otherwise an empty (0, 2) array.
+    pu_coords: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    separation_active: bool = False
+    # pu_to_sep_feats[i] = column indices of sep-active features that
+    # include PU i (round-3 H15 inverse-index discipline). SepState.delta_penalty
+    # iterates this for O(features-at-PU) outer cost instead of O(n_feat).
+    pu_to_sep_feats: list[np.ndarray] = field(default_factory=list)
+    # Precomputed deterministic-penalty SPF mask: feat_spf * (target2 <= 0) *
+    # (sepnum <= 1). Single source of truth (round-3 H14) — both compute_full_objective
+    # and compute_delta_objective read this rather than reconstructing the
+    # mask. Falls back to feat_spf when neither constraint is active.
+    _det_spf: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     @classmethod
     def from_problem(cls, problem: ConservationProblem) -> ProblemCache:
@@ -243,9 +280,20 @@ class ProblemCache:
         clumping_active = bool(np.any(feat_target2 > 0))
 
         # Greedy "cost to meet target" baseline penalty per feature.
-        # Computed lazily — only when clumping is active — to keep the
-        # cold path zero-cost.
-        if clumping_active:
+        # Computed when EITHER clumping OR separation is active (both reuse
+        # the same per-feature scale). Cold-path zero-cost when neither.
+        # Note: `separation_active` is computed further down; we use the
+        # sepdistance/sepnum columns directly here to avoid a forward
+        # reference. The mask is identical to the one used to set
+        # `separation_active` later.
+        if "sepdistance" in feat_df.columns and "sepnum" in feat_df.columns:
+            _sep_active_pre = bool(np.any(
+                (np.asarray(feat_df["sepdistance"].values, dtype=np.float64) > 0)
+                & (np.asarray(feat_df["sepnum"].values, dtype=np.int32) > 1)
+            ))
+        else:
+            _sep_active_pre = False
+        if clumping_active or _sep_active_pre:
             from pymarxan.solvers.clumping import compute_baseline_penalty
             feat_baseline_penalty = compute_baseline_penalty(problem)
         else:
@@ -258,6 +306,85 @@ class ProblemCache:
         for j in range(n_feat):
             participating = np.where(pu_feat_matrix[:, j] > 0)[0].astype(np.int32)
             feat_uses_pu.append(participating)
+
+        # Phase 20 separation precompute. Defaults match read_spec's legacy
+        # fill (sepdistance=0, sepnum=1). A feature is sep-active iff BOTH
+        # sepdistance > 0 AND sepnum > 1 (matches Marxan's "sepnum<=1 is
+        # disabled" convention from CountSeparation2).
+        if "sepdistance" in feat_df.columns:
+            feat_sepdistance = np.asarray(
+                feat_df["sepdistance"].values, dtype=np.float64,
+            )
+        else:
+            feat_sepdistance = np.zeros(n_feat, dtype=np.float64)
+        if "sepnum" in feat_df.columns:
+            feat_sepnum = np.asarray(feat_df["sepnum"].values, dtype=np.int32)
+        else:
+            feat_sepnum = np.ones(n_feat, dtype=np.int32)
+        sep_active_mask = (feat_sepdistance > 0) & (feat_sepnum > 1)
+        separation_active = bool(np.any(sep_active_mask))
+
+        # Round-2 CR2 / round-3 CR4: emit warnings here rather than in
+        # validate(), since validate() only fires on Shiny upload. These
+        # warnings replay via run_panel.warnings.catch_warnings hooks.
+        if separation_active:
+            # (a) geographic CRS + sepdistance > 0 → distance in degrees,
+            # nearly meaningless.
+            crs = getattr(pu_df, "crs", None)
+            if crs is not None and getattr(crs, "is_geographic", False):
+                warnings.warn(
+                    "Separation distance specified on a geographic CRS "
+                    f"(EPSG:{getattr(crs, 'to_epsg', lambda: '?')()}); "
+                    "distances will be in degrees, not metres. Reproject "
+                    "planning_units to a projected CRS before solving.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        if np.any((feat_sepnum > 1) & (feat_sepdistance == 0)):
+            # (b) sepnum > 1 with sepdistance == 0 — constraint trivially
+            # satisfied (every pair is ≥ 0 apart).
+            bad_ids = feat_ids[
+                ((feat_sepnum > 1) & (feat_sepdistance == 0))
+            ].tolist()
+            warnings.warn(
+                f"Feature(s) {bad_ids} have sepnum > 1 but sepdistance == 0; "
+                "the constraint is trivially satisfied and the SEPNUM "
+                "setting has no effect. Set sepdistance > 0 for actual "
+                "geographic separation.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # PU coordinates — only resolved when separation is active; raises
+        # PUCoordinatesUnavailableError otherwise. Cold-path zero-cost for
+        # non-separation problems.
+        if separation_active:
+            from pymarxan.solvers.separation import get_pu_coordinates
+            pu_coords = get_pu_coordinates(problem)
+        else:
+            pu_coords = np.zeros((n_pu, 2), dtype=np.float64)
+
+        # Inverse PU→sep-active-feature index (round-3 H15). Computed only
+        # when separation_active; otherwise an empty list keeps the cold
+        # path cheap.
+        pu_to_sep_feats: list[np.ndarray] = []
+        if separation_active:
+            sep_col_ids = np.where(sep_active_mask)[0].astype(np.int32)
+            for i in range(n_pu):
+                mask_at_pu = pu_feat_matrix[i, sep_col_ids] > 0
+                pu_to_sep_feats.append(sep_col_ids[mask_at_pu])
+        else:
+            pu_to_sep_feats = [np.zeros(0, dtype=np.int32)] * n_pu
+
+        # Round-3 H14: precompute the deterministic-penalty mask. Excludes
+        # features handled by ClumpState (target2 > 0) and SepState (sepnum
+        # > 1) to prevent double-counting. Single source of truth — both
+        # compute_full_objective and compute_delta_objective consume this.
+        det_spf = feat_spf.copy()
+        if clumping_active:
+            det_spf = det_spf * (feat_target2 <= 0).astype(np.float64)
+        if separation_active:
+            det_spf = det_spf * (feat_sepnum <= 1).astype(np.float64)
 
         return cls(
             n_pu=n_pu,
@@ -287,6 +414,12 @@ class ProblemCache:
             feat_baseline_penalty=feat_baseline_penalty,
             feat_uses_pu=feat_uses_pu,
             clumping_active=clumping_active,
+            feat_sepdistance=feat_sepdistance,
+            feat_sepnum=feat_sepnum,
+            pu_coords=pu_coords,
+            separation_active=separation_active,
+            pu_to_sep_feats=pu_to_sep_feats,
+            _det_spf=det_spf,
         )
 
     # ------------------------------------------------------------------
@@ -370,16 +503,12 @@ class ProblemCache:
         boundary = self._compute_boundary(selected)
 
         # Penalty: SPF * max(0, target*misslevel - held) for each feature.
-        # Type-4 features (target2 > 0) are EXCLUDED from this path because
-        # their penalty uses the Marxan-faithful `baseline · SPF · fractional`
-        # form on `held_eff` instead, computed externally via ClumpState.
+        # Features handled by ClumpState (target2 > 0) and SepState (sepnum > 1)
+        # are EXCLUDED via the precomputed self._det_spf compound mask
+        # (round-3 H14 — single source of truth across full + delta).
         effective_targets = self.feat_targets * self.misslevel
         shortfalls = np.maximum(0.0, effective_targets - held)
-        if self.clumping_active:
-            det_spf = self.feat_spf * (self.feat_target2 <= 0)
-        else:
-            det_spf = self.feat_spf
-        penalty = float(np.dot(det_spf, shortfalls))
+        penalty = float(np.dot(self._det_spf, shortfalls))
 
         obj = total_cost + blm * boundary + penalty
 
@@ -472,19 +601,16 @@ class ProblemCache:
 
         # --- Penalty delta ---
         # Only features present in this PU can change their shortfall.
-        # Type-4 features (target2 > 0) are excluded — their penalty delta
-        # is supplied externally by ClumpState.delta_penalty.
+        # Features handled by ClumpState (target2 > 0) and SepState (sepnum > 1)
+        # are excluded via the precomputed self._det_spf compound mask
+        # (round-3 H14 — same mask as compute_full_objective).
         pu_amounts = self.pu_feat_matrix[idx]
         effective_targets = self.feat_targets * self.misslevel
         old_shortfalls = np.maximum(0.0, effective_targets - held)
         new_held = held + sign * pu_amounts
         new_shortfalls = np.maximum(0.0, effective_targets - new_held)
-        if self.clumping_active:
-            det_spf = self.feat_spf * (self.feat_target2 <= 0)
-        else:
-            det_spf = self.feat_spf
         penalty_delta = float(
-            np.dot(det_spf, new_shortfalls - old_shortfalls)
+            np.dot(self._det_spf, new_shortfalls - old_shortfalls)
         )
 
         delta = cost_delta + blm * boundary_delta + penalty_delta

@@ -34,6 +34,10 @@ class ZoneIISolver(Solver):
     def supports_zones(self) -> bool:
         return True
 
+    def supports_separation(self) -> bool:
+        # Per-zone SEPDISTANCE / SEPNUM deferred to v0.3 (round-3 H1).
+        return False
+
     def solve(
         self,
         problem: ConservationProblem,
@@ -41,6 +45,8 @@ class ZoneIISolver(Solver):
     ) -> list[Solution]:
         if not isinstance(problem, ZonalProblem):
             raise TypeError("ZoneIISolver requires a ZonalProblem")
+        from pymarxan.solvers.separation import raise_if_separation_active
+        raise_if_separation_active(problem, "ZoneIISolver")
         if config is None:
             config = SolverConfig()
 
