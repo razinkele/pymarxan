@@ -7,8 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Target: v0.2.0 — "full Marxan-classic parity". Remaining work: Phase 20
-(separation distance / SEPDISTANCE / SEPNUM).
+## [0.2.0] — 2026-05-16
+
+The v0.2.0 milestone closes "full Marxan-classic parity" for the
+single-zone solver suite. Builds on v0.2.0a1 (PROBMODE 3) and v0.2.0a2
+(TARGET2 / CLUMPTYPE) by adding Phase 20 (SEPDISTANCE / SEPNUM).
+
+### Added
+
+- **Phase 20 — SEPDISTANCE / SEPNUM (separation distance).** Per-feature
+  geographic-spread constraints, validated line-by-line against Marxan v4
+  ``computation.hpp::computeSepPenalty`` and ``clumping.cpp::CountSeparation2``
+  via three rounds of multi-agent design review.
+  - Optional ``sepdistance`` (float ≥ 0, default 0) and ``sepnum`` (int ≥ 1,
+    default 1) columns on ``spec.dat``. A feature is separation-active iff
+    ``sepdistance > 0 AND sepnum > 1``. Writers omit both when all-default,
+    so legacy projects round-trip byte-identical.
+  - PU coordinates resolve via three-tier fallback: GeoDataFrame
+    ``.geometry.centroid`` → ``pu.dat`` ``xloc``/``yloc`` columns →
+    ``PUCoordinatesUnavailableError`` at ``ProblemCache.from_problem``
+    (only when separation-active). NaN guard prevents silent
+    under-counting from empty geometries.
+  - New ``pymarxan.solvers.separation`` module exposes ``compute_sep_penalty``
+    (Marxan hyperbolic curve ``1/(7·fval + 0.2) − 1/7.2`` with the count==0
+    bump), ``count_separation`` (greedy admission in ascending PU-id order,
+    capped at ``sepnum``), ``compute_sep_penalty_from_scratch``,
+    ``evaluate_solution_separation``, ``get_pu_coordinates``, the mutable
+    ``SepState`` companion to ``ProblemCache``, ``is_separation_active`` /
+    ``raise_if_separation_active`` guard helpers, and the
+    ``PUCoordinatesUnavailableError`` exception class.
+  - ``MIPSolver`` and ``ZoneMIPSolver`` gain ``mip_sep_strategy`` kwarg
+    (default ``"drop"``). ``"socp"`` rejected at ``__init__`` (separation
+    is combinatorial, not conic); ``"big_m"`` raises
+    ``NotImplementedError`` at solve time. All three MIP strategy kwargs
+    (``mip_chance_strategy``, ``mip_clump_strategy``, ``mip_sep_strategy``)
+    now route through a shared ``_validate_mip_strategy`` helper.
+  - New ``Solver.supports_separation()`` capability method (default
+    ``True``). Zone solvers (``ZoneSASolver``, ``ZoneIterativeImprovementSolver``,
+    ``ZoneHeuristicSolver``, ``ZoneMIPSolver``) override to ``False`` and
+    raise ``NotImplementedError`` on separation-active problems
+    (previously would silently no-op). Per-zone SEPDISTANCE deferred to
+    v0.3.
+  - ``Solution`` gains ``sep_shortfalls: dict[int, int] | None`` and
+    ``sep_penalty: float | None`` attributes (purely additive — all
+    existing keyword-only construction patterns unchanged).
+  - ``ProblemCache`` precomputes a ``pu_to_sep_feats`` inverse PU→feature
+    index so ``SepState.delta_penalty`` is O(features-at-PU) rather than
+    O(n_feat) per flip. The compound deterministic-penalty mask
+    (``feat_target2 <= 0`` × ``feat_sepnum <= 1``) is centralised as a
+    cached ``_det_spf`` field — single source of truth across
+    ``compute_full_objective`` and ``compute_delta_objective``.
+  - ``write_mvbest`` now emits ``Separation_Count`` / ``Separation_Met``
+    columns when separation-active, plus ``Clump_Short`` (Phase 19
+    backport) and ``Prob_Gap`` (Phase 18 backport) when those constraint
+    paths are active.
+  - Shiny UI: ``sepdistance`` / ``sepnum`` editable in ``feature_table``
+    (split int-validator — ``sepnum >= 0``, distinct from ``clumptype ∈
+    {0,1,2}``); ``target_met`` shows ``sep_short`` column when active;
+    ``help_content`` documents the hyperbolic penalty curve with
+    citations.
+  - ``ScenarioSet`` ``_OVERRIDABLE_FIELDS`` extended to include
+    ``sepdistance``, ``sepnum`` (plus ``target2``, ``clumptype``,
+    ``ptarget`` backports — Phase 18 + 19 coverage gap).
+  - References: Watts et al. (2009). *Environmental Modelling & Software*
+    24(12): 1513–1521. https://doi.org/10.1016/j.envsoft.2009.06.005.
+    Watts, Stewart & Martin (2017). *Learning landscape ecology*, 211–227.
+    https://doi.org/10.1007/978-1-4939-6374-4_13
+
+### Changed
+
+- ``ProblemCache.from_problem`` emits ``UserWarning`` for two no-op
+  separation configurations (``sepdistance > 0`` on a geographic CRS;
+  ``sepnum > 1`` with ``sepdistance == 0``) so users editing in the
+  Shiny grid actually see them (the previous ``validate()`` warnings
+  only fired on Shiny upload).
+- ``read_spec`` emits ``UserWarning`` for unrecognised columns in
+  ``spec.dat`` — catches typos like ``sepnnum``, ``targt2``, ``ptraget``,
+  ``clumptpe`` across the Phase 18 + 19 + 20 column whitelist in one
+  shot.
+- When any feature has a non-default ``sepdistance`` or ``sepnum``, the
+  column is written for *all* features in ``spec.dat`` (same behaviour
+  as Phase 18 ``ptarget`` and Phase 19 ``target2`` / ``clumptype``).
+
+### Notes
+
+- ``Solution`` and ``ProblemCache`` serialized state produced under
+  v0.2.0 cannot be deserialized by v0.2.0a2 or earlier (one-way forward
+  compatibility). Same shape as Phase 18 / 19 alpha bumps.
+- Users running with ``python -W error`` or pytest ``filterwarnings =
+  error::UserWarning`` should filter pymarxan warnings explicitly:
+  ``warnings.filterwarnings("always", category=UserWarning,
+  module="pymarxan")``.
+- ``Solution.all_targets_met`` remains amount-only (consistent with
+  Phases 18 + 19). Per-constraint completeness is exposed on
+  ``Solution.prob_shortfalls`` / ``clump_shortfalls`` / ``sep_shortfalls``
+  individually; the ``SolutionMetrics`` named-tuple refactor that
+  collapses these is on the v0.3 backlog.
+
+### Quality and infrastructure
+
+- 1303 tests (+91 vs v0.2.0a2). Coverage stays ≥91 %.
+- 0 lint, 0 mypy errors across 128 source files.
+- Plan / review documents: three rounds of multi-agent design review
+  caught two parity-critical Marxan-source bugs (hyperbolic penalty
+  curve, PU-id greedy ordering), two performance blockers (per-flip
+  O(n²) memory allocation, validate() warnings fire in the wrong place),
+  one zone-solver silent-no-op risk, and the cross-phase typo-warning
+  observability gap. See ``docs/plans/2026-05-16-phase20-{design,
+  implementation,review,review-round2,review-round3}.md``.
 
 ## [0.2.0a2] — 2026-05-16
 
@@ -212,7 +318,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.2.0a2...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0
 [0.2.0a2]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a2
 [0.2.0a1]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a1
 [0.1.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.1.0
