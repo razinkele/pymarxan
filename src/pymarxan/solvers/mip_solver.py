@@ -532,6 +532,27 @@ class MIPSolver(Solver):
                 else:
                     model += amount_expr >= target, f"target_{fid}"
 
+        # Phase 25: no-good cuts for portfolio generation. Each forbidden
+        # selection vector contributes one constraint forcing at least
+        # one binary variable to differ from it. Passed through
+        # config.metadata["forbidden_selections"] as a list of bool arrays
+        # indexed by pu_id_arr order.
+        forbidden_selections = (
+            config.metadata.get("forbidden_selections", [])
+            if config.metadata else []
+        )
+        for forbid_idx, forbidden in enumerate(forbidden_selections):
+            # diff_expr = Σ_{i: s_i=1} (1 - x_i) + Σ_{i: s_i=0} x_i
+            # Must be ≥ 1 to ensure at least one variable flipped.
+            diff_terms = []
+            for k in range(len(pu_id_arr)):
+                pid = int(pu_id_arr[k])
+                if bool(forbidden[k]):
+                    diff_terms.append(1 - x[pid])
+                else:
+                    diff_terms.append(x[pid])
+            model += pulp.lpSum(diff_terms) >= 1, f"nogood_cut_{forbid_idx}"
+
         # Solve
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
         gap = float(problem.parameters.get("MIP_GAP", 0.0))

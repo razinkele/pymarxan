@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 25 — Solution portfolios + Cohon Pareto filter.** Two
+  pieces, both solver-agnostic (work on any PuLP backend).
+  - ``analysis.portfolio_cuts.generate_portfolio_cuts(problem, *,
+    solver=None, k, config=None)`` — generates up to ``k`` distinct
+    high-quality MIP solutions by iteratively solving and adding
+    no-good cuts of the form ``Σ_{i: s_i=1} (1 - x_i) + Σ_{i: s_i=0}
+    x_i ≥ 1`` (at least one variable must flip from the previous
+    solution). Returns the partial list when fewer than ``k``
+    distinct feasible solutions exist. Each solution's metadata
+    records its ``"portfolio_iteration"``.
+  - ``calibration.pareto.pareto_frontier(BLMResult)`` — drops
+    dominated points from a BLM calibration sweep so users see only
+    the Pareto-optimal cost–boundary trade-offs. Named after Cohon
+    (1978) *Multiobjective Programming and Planning*.
+  - ``MIPSolver`` learns the ``forbidden_selections`` key in
+    ``config.metadata`` so external code can add no-good cuts without
+    rebuilding the model — the mechanism powering ``portfolio_cuts``.
+  - Gurobi-dependent strategies (``top_k``, ``gap``, ``extra``)
+    deferred — they need solution-pool features absent in CBC/HiGHS.
+
 - **Phase 24 — Connectivity metric expansion + post-hoc clustering.**
   Closes the MarxanConnect feature gap.
   - ``connectivity.metrics.compute_pagerank_centrality`` — networkx
