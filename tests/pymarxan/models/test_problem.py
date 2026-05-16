@@ -266,3 +266,18 @@ def test_validate_accepts_phase18_probability_columns():
     )
     errors = problem.validate()
     assert errors == [], f"validate() flagged Phase 18 columns: {errors}"
+
+
+def test_validate_accepts_phase19_clumping_columns():
+    """ConservationProblem.validate() must not flag target2 / clumptype.
+
+    Same set-membership-based forgiveness as the Phase 18 smoke test;
+    pins the behaviour so future tightening doesn't break Phase 19.
+    """
+    problem = _make_simple_problem()
+    features = problem.features.copy()
+    features["target2"] = 5.0
+    features["clumptype"] = 1
+    problem = problem.copy_with(features=features)
+    errors = problem.validate()
+    assert errors == [], f"validate() flagged Phase 19 columns: {errors}"

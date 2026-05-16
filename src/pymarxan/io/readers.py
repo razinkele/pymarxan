@@ -77,7 +77,7 @@ def read_spec(path: str | Path) -> pd.DataFrame:
     """
     df = _read_dat(path)
     df["id"] = df["id"].astype(int)
-    for col in ("target", "prop", "spf", "ptarget"):
+    for col in ("target", "prop", "spf", "ptarget", "target2"):
         if col in df.columns:
             df[col] = df[col].astype(float)
     if "target" not in df.columns:
@@ -89,6 +89,20 @@ def read_spec(path: str | Path) -> pd.DataFrame:
     if "ptarget" not in df.columns:
         # -1 is Marxan's "no probability target" sentinel.
         df["ptarget"] = -1.0
+    if "target2" not in df.columns:
+        # 0 disables clumping for the feature (Marxan TARGET2 convention).
+        df["target2"] = 0.0
+    if "clumptype" in df.columns:
+        df["clumptype"] = df["clumptype"].astype(int)
+        invalid = ~df["clumptype"].isin([0, 1, 2])
+        if invalid.any():
+            bad = df.loc[invalid, "clumptype"].tolist()
+            raise ValueError(
+                f"Invalid clumptype values {bad} in spec.dat — must be 0, 1, or 2. "
+                "See Marxan v4 clumping.cpp::PartialPen4 for semantics."
+            )
+    else:
+        df["clumptype"] = 0
     return df
 
 

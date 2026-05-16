@@ -30,10 +30,12 @@ def write_pu(df: pd.DataFrame, path: str | Path) -> None:
 def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     """Write a species/features DataFrame to a CSV file.
 
-    The optional ``ptarget`` column (Marxan PTARGET2D — per-feature
-    probability target) is omitted from the output when every value is
-    the disabled sentinel ``-1``, so legacy projects round-trip
-    byte-identical.
+    Optional Marxan columns are omitted from the output when every value
+    is at its disabled default, so legacy projects round-trip byte-identical:
+
+    - ``ptarget`` (Marxan PTARGET2D, default ``-1``) — Phase 18.
+    - ``target2`` (Marxan TARGET2 minimum patch occupancy, default ``0``) — Phase 19.
+    - ``clumptype`` (Marxan CLUMPTYPE 0/1/2, default ``0`` binary) — Phase 19.
 
     Parameters
     ----------
@@ -44,6 +46,10 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     """
     if "ptarget" in df.columns and (df["ptarget"] == -1).all():
         df = df.drop(columns=["ptarget"])
+    if "target2" in df.columns and (df["target2"] == 0).all():
+        df = df.drop(columns=["target2"])
+    if "clumptype" in df.columns and (df["clumptype"] == 0).all():
+        df = df.drop(columns=["clumptype"])
     df.to_csv(path, index=False)
 
 
