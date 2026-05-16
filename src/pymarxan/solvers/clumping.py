@@ -1,7 +1,11 @@
 """Marxan-faithful clumping math (Phase 19 — TARGET2 / CLUMPTYPE).
 
-This is the pure-functional layer: no problem objects mutated, no solver state
-maintained.  The math mirrors Marxan v4's ``clumping.cpp::PartialPen4`` and
+Pure-functional helpers (`partial_pen4`, `compute_feature_components`,
+`compute_baseline_penalty`, `compute_clump_penalty_from_scratch`,
+`evaluate_solution_clumping`) plus the mutable `ClumpState` companion to
+`ProblemCache` for the SA inner loop.
+
+The math mirrors Marxan v4's ``clumping.cpp::PartialPen4`` and
 ``score_change.cpp::computeChangePenalty`` line-for-line, with the formulas
 validated against the C++ source by the multi-agent design review.
 
@@ -357,3 +361,176 @@ def evaluate_solution_clumping(
         shortfalls[int(fid)] = raw_shortfall
 
     return shortfalls, penalty
+
+
+# ----------------------------------------------------------------------
+# ClumpState — mutable companion to ProblemCache for the SA inner loop
+# ----------------------------------------------------------------------
+
+
+def _build_components_for_feature(
+    cache, selected: np.ndarray, j: int,
+) -> tuple[np.ndarray, dict[int, float]]:
+    """Build (comp_id_per_pu, comp_occ) for feature j under `selected`.
+
+    Uses the cache's CSR adjacency, restricted to PUs that both have the
+    feature and are selected. PUs that lack the feature do NOT bridge
+    components (Marxan ``rtnClumpSpecAtPu`` convention).
+
+    Returns
+    -------
+    comp_id_per_pu
+        (n_pu,) int32 — component id for each PU, or -1 if the PU is not
+        a participant.
+    comp_occ
+        dict mapping component id → total occupancy of the feature in that
+        component (Σ amount_ij over participating PUs in the component).
+    """
+    n_pu = cache.n_pu
+    feat_amounts = cache.pu_feat_matrix[:, j]
+    components = compute_feature_components(
+        selected, feat_amounts, cache.adj_indices, cache.adj_start,
+    )
+    comp_id_per_pu = np.full(n_pu, -1, dtype=np.int32)
+    comp_occ: dict[int, float] = {}
+    for cid, comp in enumerate(components):
+        comp_id_per_pu[comp] = cid
+        comp_occ[cid] = float(feat_amounts[comp].sum())
+    return comp_id_per_pu, comp_occ
+
+
+def _held_eff_for_feature(
+    cache, j: int, comp_occ: dict[int, float],
+) -> float:
+    """Σ partial_pen4(occ, target2_j, clumptype_j) over components of feature j."""
+    target2 = float(cache.feat_target2[j])
+    clumptype = int(cache.feat_clumptype[j])
+    if target2 <= 0:
+        return 0.0  # non-clumping path uses raw amount sum elsewhere
+    return sum(
+        partial_pen4(occ, target2, clumptype) for occ in comp_occ.values()
+    )
+
+
+class ClumpState:
+    """Mutable companion to ``ProblemCache`` for the SA / iterative-improvement
+    inner loop. Maintains per-feature connected-component bookkeeping and the
+    effective held amount under clumping rules.
+
+    The v1 implementation does a per-affected-feature full recompute on each
+    flip (using ``scipy.sparse.csgraph.connected_components`` on the
+    participant subgraph). Cost per flip: ``O(n_features_with_target2 ·
+    (edges_in_participant_subgraph + n_components))``. The fully-incremental
+    union-find / bounded-local-BFS optimisation from the architect review is
+    an opt-in future patch — adopted only if benchmarks show the v1
+    full-recompute is too slow on a realistic 1k+-PU problem.
+    """
+
+    def __init__(
+        self,
+        selected: np.ndarray,
+        comp_id_per_pu: list[np.ndarray],
+        comp_occ: list[dict[int, float]],
+        held_eff: np.ndarray,
+    ) -> None:
+        self.selected = selected
+        self.comp_id_per_pu = comp_id_per_pu
+        self.comp_occ = comp_occ
+        self.held_eff = held_eff
+
+    @classmethod
+    def from_selection(cls, cache, selected: np.ndarray) -> ClumpState:
+        """One-time full build. Called once before the SA loop starts."""
+        n_feat = cache.n_feat
+        comp_id_per_pu: list[np.ndarray] = []
+        comp_occ: list[dict[int, float]] = []
+        held_eff = np.zeros(n_feat, dtype=np.float64)
+        for j in range(n_feat):
+            if float(cache.feat_target2[j]) > 0:
+                ids, occs = _build_components_for_feature(cache, selected, j)
+                comp_id_per_pu.append(ids)
+                comp_occ.append(occs)
+                held_eff[j] = _held_eff_for_feature(cache, j, occs)
+            else:
+                # Non-clumping feature: held_eff is raw amount sum so callers
+                # can treat held_effective() as a single source of truth.
+                comp_id_per_pu.append(np.full(cache.n_pu, -1, dtype=np.int32))
+                comp_occ.append({})
+                held_eff[j] = float(
+                    cache.pu_feat_matrix[selected, j].sum()
+                )
+        return cls(
+            selected=selected.copy(),
+            comp_id_per_pu=comp_id_per_pu,
+            comp_occ=comp_occ,
+            held_eff=held_eff,
+        )
+
+    def held_effective(self) -> np.ndarray:
+        """Return the current per-feature effective held amount."""
+        return self.held_eff
+
+    def delta_penalty(self, cache, idx: int, adding: bool) -> float:
+        """Δ(clumping penalty) for flipping PU ``idx``. Does NOT mutate state.
+
+        Only features with ``target2_j > 0`` AND ``amount_ij > 0`` are
+        recomputed — others can't be affected by the flip.
+        """
+        n_feat = cache.n_feat
+        # Synthesise the post-flip selection without mutating self.selected
+        sel_after = self.selected.copy()
+        sel_after[idx] = adding
+        misslevel = float(cache.misslevel)
+        total_delta = 0.0
+        for j in range(n_feat):
+            target2 = float(cache.feat_target2[j])
+            if target2 <= 0:
+                continue
+            target = float(cache.feat_targets[j])
+            if target <= 0:
+                continue
+            # Cheap path: if PU idx doesn't carry this feature, the flip
+            # can't change the feature's clumps — skip.
+            if cache.pu_feat_matrix[idx, j] == 0:
+                continue
+            _, new_occs = _build_components_for_feature(cache, sel_after, j)
+            new_held_j = _held_eff_for_feature(cache, j, new_occs)
+            old_held_j = float(self.held_eff[j])
+            old_frac = max(
+                0.0, (target * misslevel - old_held_j) / target,
+            )
+            new_frac = max(
+                0.0, (target * misslevel - new_held_j) / target,
+            )
+            total_delta += (
+                float(cache.feat_baseline_penalty[j])
+                * float(cache.feat_spf[j])
+                * (new_frac - old_frac)
+            )
+        return total_delta
+
+    def apply_flip(self, cache, idx: int, adding: bool) -> None:
+        """Commit the flip: update selected mask, component bookkeeping, and
+        held_eff for all affected features.
+
+        Non-clumping features only need their raw-sum cached value updated
+        when ``amount_ij != 0``; clumping features go through the full
+        component rebuild for now.
+        """
+        sign = 1.0 if adding else -1.0
+        self.selected[idx] = adding
+        for j in range(cache.n_feat):
+            amt = float(cache.pu_feat_matrix[idx, j])
+            target2 = float(cache.feat_target2[j])
+            if target2 <= 0:
+                # Non-clumping: keep held_eff as the raw selected-amount sum
+                # so callers can compare against compute_held().
+                if amt != 0:
+                    self.held_eff[j] += sign * amt
+                continue
+            if amt == 0:
+                continue  # flip doesn't touch feature j's clumps
+            ids, occs = _build_components_for_feature(cache, self.selected, j)
+            self.comp_id_per_pu[j] = ids
+            self.comp_occ[j] = occs
+            self.held_eff[j] = _held_eff_for_feature(cache, j, occs)

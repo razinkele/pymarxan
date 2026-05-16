@@ -137,6 +137,29 @@ class SimulatedAnnealingSolver(Solver):
             total_cost = float(np.sum(cache.costs[selected]))
             current_obj = cache.compute_full_objective(selected, held, blm)
 
+            # Phase 19: spin up ClumpState when any feature has target2 > 0.
+            # The cache's compute_full_objective excludes type-4 features
+            # from the deterministic penalty (they get the Marxan-faithful
+            # `baseline · SPF · fractional` form instead, supplied here).
+            clump_state = None
+            if cache.clumping_active:
+                from pymarxan.solvers.clumping import ClumpState
+                clump_state = ClumpState.from_selection(cache, selected)
+                # The cache returned the deterministic objective; add the
+                # initial clumping contribution so current_obj is correct.
+                # delta_penalty(idx=0, adding=selected[0]) returns the gap
+                # of a no-op flip, which is always 0 — but the existing
+                # clump contribution is the initial penalty under empty-flip
+                # semantics. Compute it via compute_clump_penalty_from_scratch
+                # for correctness.
+                from pymarxan.solvers.clumping import (
+                    compute_clump_penalty_from_scratch,
+                )
+                _, init_clump_pen = compute_clump_penalty_from_scratch(
+                    problem, selected,
+                )
+                current_obj += init_clump_pen
+
             # Determine initial temperature
             if start_temp_param is not None:
                 initial_temp = max(float(start_temp_param), 0.001)
@@ -149,6 +172,10 @@ class SimulatedAnnealingSolver(Solver):
                     delta = cache.compute_delta_objective(
                         idx, selected, held, total_cost, blm
                     )
+                    if clump_state is not None:
+                        delta += clump_state.delta_penalty(
+                            cache, idx, adding=not selected[idx],
+                        )
                     if delta > 0:
                         deltas.append(delta)
 
@@ -198,11 +225,14 @@ class SimulatedAnnealingSolver(Solver):
             for _ in range(num_iterations):
                 # Pick random swappable PU
                 idx = int(swappable_arr[rng.integers(n_swappable)])
+                adding = not selected[idx]
 
                 # Compute delta without flipping
                 delta = cache.compute_delta_objective(
                     idx, selected, held, total_cost, blm
                 )
+                if clump_state is not None:
+                    delta += clump_state.delta_penalty(cache, idx, adding)
 
                 # Acceptance criterion
                 if delta <= 0 or (
@@ -214,6 +244,8 @@ class SimulatedAnnealingSolver(Solver):
                     held += sign * cache.pu_feat_matrix[idx]
                     total_cost += sign * cache.costs[idx]
                     current_obj += delta
+                    if clump_state is not None:
+                        clump_state.apply_flip(cache, idx, adding)
 
                     # Track best
                     if current_obj < best_obj:

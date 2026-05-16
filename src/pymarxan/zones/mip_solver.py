@@ -38,6 +38,23 @@ class ZoneMIPSolver(Solver):
         zone costs + BLM * standard boundary + zone boundary costs + penalty
     """
 
+    def __init__(
+        self,
+        *,
+        mip_clump_strategy: str = "drop",
+    ) -> None:
+        """Per-zone TARGET2 is out of scope for v0.2 (see Phase 19 design
+        §"What's NOT in scope"). The kwarg is accepted for API symmetry
+        with ``MIPSolver`` and to forward-compatibly reject ``"big_m"``;
+        the deterministic ``"drop"`` path is the only one wired today.
+        """
+        if mip_clump_strategy not in ("drop", "big_m"):
+            raise ValueError(
+                f"Unknown mip_clump_strategy {mip_clump_strategy!r}; "
+                "use 'drop' (default) or 'big_m' (deferred, NotImplementedError)."
+            )
+        self.mip_clump_strategy = mip_clump_strategy
+
     def name(self) -> str:
         return "Zone MIP (PuLP)"
 

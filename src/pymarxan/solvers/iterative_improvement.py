@@ -185,6 +185,15 @@ class IterativeImprovementSolver(Solver):
         held = cache.compute_held(selected)
         total_cost = float(np.sum(cache.costs[selected]))
 
+        # Phase 19: spin up ClumpState if any feature has target2 > 0 so
+        # the delta seen by the removal pass includes the clumping
+        # contribution (otherwise the pass would happily remove a PU that
+        # breaks a clump, since cache delta alone excludes type-4 features).
+        clump_state = None
+        if cache.clumping_active:
+            from pymarxan.solvers.clumping import ClumpState
+            clump_state = ClumpState.from_selection(cache, selected)
+
         improved = True
         while improved:
             improved = False
@@ -195,11 +204,15 @@ class IterativeImprovementSolver(Solver):
                 delta = cache.compute_delta_objective(
                     i, selected, held, total_cost, blm
                 )
+                if clump_state is not None:
+                    delta += clump_state.delta_penalty(cache, i, adding=False)
                 if delta < 0:
                     # Removing this PU improves the objective
                     selected[i] = False
                     held -= cache.pu_feat_matrix[i]
                     total_cost -= cache.costs[i]
+                    if clump_state is not None:
+                        clump_state.apply_flip(cache, i, adding=False)
                     improved = True
 
         return build_solution(
@@ -246,6 +259,13 @@ class IterativeImprovementSolver(Solver):
         held = cache.compute_held(selected)
         total_cost = float(np.sum(cache.costs[selected]))
 
+        # Phase 19: ClumpState if clumping is active so the addition pass
+        # correctly values PUs that extend an existing clump over target2.
+        clump_state = None
+        if cache.clumping_active:
+            from pymarxan.solvers.clumping import ClumpState
+            clump_state = ClumpState.from_selection(cache, selected)
+
         improved = True
         while improved:
             improved = False
@@ -256,11 +276,15 @@ class IterativeImprovementSolver(Solver):
                 delta = cache.compute_delta_objective(
                     i, selected, held, total_cost, blm
                 )
+                if clump_state is not None:
+                    delta += clump_state.delta_penalty(cache, i, adding=True)
                 if delta < 0:
                     # Adding this PU improves the objective
                     selected[i] = True
                     held += cache.pu_feat_matrix[i]
                     total_cost += cache.costs[i]
+                    if clump_state is not None:
+                        clump_state.apply_flip(cache, i, adding=True)
                     improved = True
 
         return build_solution(

@@ -494,6 +494,20 @@ def build_solution(
             problem, selected,
         )
 
+    # Phase 19 TARGET2 / clumping: populate per-feature clump shortfall gap
+    # and total penalty when any feature has target2 > 0. Same shape as
+    # PROBMODE 3 — single source of truth, every solver path inherits.
+    clump_shortfalls: dict[int, float] | None = None
+    clump_penalty_val: float | None = None
+    if (
+        "target2" in problem.features.columns
+        and (problem.features["target2"] > 0).any()
+    ):
+        from pymarxan.solvers.clumping import evaluate_solution_clumping
+        clump_shortfalls, clump_penalty_val = evaluate_solution_clumping(
+            problem, selected,
+        )
+
     return Solution(
         selected=selected.copy(),
         cost=total_cost,
@@ -505,4 +519,6 @@ def build_solution(
         metadata=metadata or {},
         prob_shortfalls=prob_shortfalls,
         prob_penalty=prob_penalty_val,
+        clump_shortfalls=clump_shortfalls,
+        clump_penalty=clump_penalty_val,
     )

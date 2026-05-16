@@ -84,6 +84,16 @@ class ProblemCache:
     var_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     # feat_ptarget[j] = per-feature probability target; ≤0 means disabled.
     feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # Phase 19 clumping (TARGET2 / CLUMPTYPE / type-4 species). All-zero /
+    # inactive when no feature has target2 > 0, so non-clumping problems
+    # pay zero per-flip cost.
+    feat_target2: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    feat_clumptype: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int8))
+    feat_baseline_penalty: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # feat_uses_pu[j] = sorted PU indices where amount_ij > 0; precomputed
+    # so ClumpState can iterate only the participating PUs per feature.
+    feat_uses_pu: list[np.ndarray] = field(default_factory=list)
+    clumping_active: bool = False
 
     @classmethod
     def from_problem(cls, problem: ConservationProblem) -> ProblemCache:
@@ -215,6 +225,40 @@ class ProblemCache:
         else:
             feat_ptarget = np.full(n_feat, -1.0, dtype=np.float64)
 
+        # Phase 19 clumping precompute (target2, clumptype, baseline_penalty,
+        # feat_uses_pu). Defaults match read_spec's legacy fill: target2=0
+        # disables clumping for the feature.
+        if "target2" in feat_df.columns:
+            feat_target2 = np.asarray(
+                feat_df["target2"].values, dtype=np.float64,
+            )
+        else:
+            feat_target2 = np.zeros(n_feat, dtype=np.float64)
+        if "clumptype" in feat_df.columns:
+            feat_clumptype = np.asarray(
+                feat_df["clumptype"].values, dtype=np.int8,
+            )
+        else:
+            feat_clumptype = np.zeros(n_feat, dtype=np.int8)
+        clumping_active = bool(np.any(feat_target2 > 0))
+
+        # Greedy "cost to meet target" baseline penalty per feature.
+        # Computed lazily — only when clumping is active — to keep the
+        # cold path zero-cost.
+        if clumping_active:
+            from pymarxan.solvers.clumping import compute_baseline_penalty
+            feat_baseline_penalty = compute_baseline_penalty(problem)
+        else:
+            feat_baseline_penalty = np.zeros(n_feat, dtype=np.float64)
+
+        # Sparse participation index per feature: PUs where amount > 0.
+        # Built unconditionally because it's cheap and ClumpState relies
+        # on it for both add and remove paths.
+        feat_uses_pu: list[np.ndarray] = []
+        for j in range(n_feat):
+            participating = np.where(pu_feat_matrix[:, j] > 0)[0].astype(np.int32)
+            feat_uses_pu.append(participating)
+
         return cls(
             n_pu=n_pu,
             n_feat=n_feat,
@@ -238,6 +282,11 @@ class ProblemCache:
             expected_matrix=expected_matrix,
             var_matrix=var_matrix,
             feat_ptarget=feat_ptarget,
+            feat_target2=feat_target2,
+            feat_clumptype=feat_clumptype,
+            feat_baseline_penalty=feat_baseline_penalty,
+            feat_uses_pu=feat_uses_pu,
+            clumping_active=clumping_active,
         )
 
     # ------------------------------------------------------------------
@@ -320,10 +369,17 @@ class ProblemCache:
         # Boundary
         boundary = self._compute_boundary(selected)
 
-        # Penalty: SPF * max(0, target*misslevel - held) for each feature
+        # Penalty: SPF * max(0, target*misslevel - held) for each feature.
+        # Type-4 features (target2 > 0) are EXCLUDED from this path because
+        # their penalty uses the Marxan-faithful `baseline · SPF · fractional`
+        # form on `held_eff` instead, computed externally via ClumpState.
         effective_targets = self.feat_targets * self.misslevel
         shortfalls = np.maximum(0.0, effective_targets - held)
-        penalty = float(np.dot(self.feat_spf, shortfalls))
+        if self.clumping_active:
+            det_spf = self.feat_spf * (self.feat_target2 <= 0)
+        else:
+            det_spf = self.feat_spf
+        penalty = float(np.dot(det_spf, shortfalls))
 
         obj = total_cost + blm * boundary + penalty
 
@@ -415,14 +471,20 @@ class ProblemCache:
             boundary_delta += np.dot(weights, multipliers)
 
         # --- Penalty delta ---
-        # Only features present in this PU can change their shortfall
+        # Only features present in this PU can change their shortfall.
+        # Type-4 features (target2 > 0) are excluded — their penalty delta
+        # is supplied externally by ClumpState.delta_penalty.
         pu_amounts = self.pu_feat_matrix[idx]
         effective_targets = self.feat_targets * self.misslevel
         old_shortfalls = np.maximum(0.0, effective_targets - held)
         new_held = held + sign * pu_amounts
         new_shortfalls = np.maximum(0.0, effective_targets - new_held)
+        if self.clumping_active:
+            det_spf = self.feat_spf * (self.feat_target2 <= 0)
+        else:
+            det_spf = self.feat_spf
         penalty_delta = float(
-            np.dot(self.feat_spf, new_shortfalls - old_shortfalls)
+            np.dot(det_spf, new_shortfalls - old_shortfalls)
         )
 
         delta = cost_delta + blm * boundary_delta + penalty_delta

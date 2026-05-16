@@ -43,13 +43,24 @@ class MIPSolver(Solver):
       Phase 21.
     """
 
-    def __init__(self, *, mip_chance_strategy: str = "drop") -> None:
+    def __init__(
+        self,
+        *,
+        mip_chance_strategy: str = "drop",
+        mip_clump_strategy: str = "drop",
+    ) -> None:
         if mip_chance_strategy not in ("drop", "piecewise", "socp"):
             raise ValueError(
                 f"Unknown mip_chance_strategy {mip_chance_strategy!r}; "
                 "use 'drop' (default), 'piecewise', or 'socp'."
             )
+        if mip_clump_strategy not in ("drop", "big_m"):
+            raise ValueError(
+                f"Unknown mip_clump_strategy {mip_clump_strategy!r}; "
+                "use 'drop' (default) or 'big_m' (deferred, NotImplementedError)."
+            )
         self.mip_chance_strategy = mip_chance_strategy
+        self.mip_clump_strategy = mip_clump_strategy
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -82,6 +93,23 @@ class MIPSolver(Solver):
                     "Gurobi/CPLEX) lands in Phase 21 when those backends "
                     "are wired in. Use 'drop' (default) or SA for now."
                 )
+
+        # TARGET2 / clumping gating (Phase 19). Like PROBMODE 3, the chance-
+        # constrained-style CLUMPTYPE math is non-trivial in MILP; the
+        # default "drop" strategy solves the deterministic relaxation and
+        # build_solution reports the clump-shortfall gap post-hoc.
+        has_target2 = (
+            "target2" in problem.features.columns
+            and (problem.features["target2"] > 0).any()
+        )
+        if has_target2 and self.mip_clump_strategy == "big_m":
+            raise NotImplementedError(
+                "mip_clump_strategy='big_m' (network-flow + big-M formulation "
+                "of TARGET2 in CBC) is deferred to a later phase. Use 'drop' "
+                "(default; post-hoc gap reported on Solution.clump_shortfalls) "
+                "or the SA / iterative-improvement solvers for chance-"
+                "constrained-style clumping optimality."
+            )
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
@@ -293,5 +321,7 @@ class MIPSolver(Solver):
         meta = {"solver": self.name(), "status": pulp.LpStatus[model.status]}
         if probmode == 3:
             meta["mip_chance_strategy"] = self.mip_chance_strategy
+        if has_target2:
+            meta["mip_clump_strategy"] = self.mip_clump_strategy
         sol = build_solution(problem, selected, blm, metadata=meta)
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
