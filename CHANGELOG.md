@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shiny connectivity metrics dashboard.** New
+  ``pymarxan_shiny.modules.connectivity.metrics_dashboard`` surfaces all
+  seven Phase 24 connectivity metrics (in/out-degree, betweenness,
+  eigenvector centrality, PageRank, donor/recipient flags) in a single
+  sortable table — one row per PU. Was originally listed in the
+  Phase 24 plan but deferred from the v0.4.0 release because it's a
+  pure UI addition; landing it here in [Unreleased] for the next minor.
+
 ## [0.4.0] — 2026-05-17
 
 The v0.4.0 milestone closes "Connectivity + portfolios". Combines Phase
