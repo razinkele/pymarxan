@@ -52,8 +52,10 @@ all = ["pymarxan[shiny,dev,spatial]"]
 packages = ["src/pymarxan", "src/pymarxan_shiny", "src/pymarxan_app"]
 
 [project.urls]
-Repository = "https://github.com/pymarxan/pymarxan"
-Documentation = "https://github.com/pymarxan/pymarxan"
+Repository = "https://github.com/razinkele/pymarxan"
+Documentation = "https://github.com/razinkele/pymarxan"
+Issues = "https://github.com/razinkele/pymarxan/issues"
+Changelog = "https://github.com/razinkele/pymarxan/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
