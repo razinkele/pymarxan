@@ -1,10 +1,13 @@
-.PHONY: test test-fast lint types check app docker docs
+.PHONY: test test-fast lint types check bench app docker docs
 
-test:  ## Run full test suite with coverage
-	pytest tests/ -v --cov --cov-report=term-missing
+test:  ## Run full test suite with coverage (skips perf-budget benches)
+	pytest tests/ -v -m "not bench" --cov --cov-report=term-missing
 
-test-fast:  ## Run fast tests only (skip slow SA/zone tests)
-	pytest tests/ -v -m "not slow" --cov --cov-report=term-missing
+test-fast:  ## Run fast tests only (skip slow SA/zone tests + benches)
+	pytest tests/ -v -m "not slow and not bench" --cov --cov-report=term-missing
+
+bench:  ## Run perf-budget benchmarks (Phase 18/19/20 SA inner-loop costs)
+	pytest tests/ -v -m bench
 
 lint:  ## Run ruff linter
 	ruff check src/ tests/

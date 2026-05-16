@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
 from tests.benchmarks.conftest import make_problem
+
+pytestmark = pytest.mark.bench
 
 
 class TestSAPerformance:

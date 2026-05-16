@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI / Makefile cleanup.** Perf-budget benchmarks
+  (``tests/benchmarks/bench_*.py``) are now skipped by default in
+  ``make test`` and CI to avoid spurious failures on slower CI
+  runners. Run them manually via the new ``make bench`` target. All
+  11 bench tests (Phase 18 / 19 / 20 inner-loop costs + the
+  pre-existing SA / Zone SA full-run gates) carry the new
+  ``pytest.mark.bench`` marker. CI also extends ``mypy`` to cover
+  ``src/pymarxan_shiny/`` so the Shiny layer can't drift
+  type-unsafe between releases (the Makefile already did this; CI
+  is now in sync).
+
 ### Added
 
 - **End-to-end Python API tutorial.** New ``docs/TUTORIAL.md`` walks

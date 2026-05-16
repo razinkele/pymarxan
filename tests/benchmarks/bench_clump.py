@@ -15,10 +15,13 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.clumping import ClumpState
+
+pytestmark = pytest.mark.bench
 
 
 def _make_clumping_problem(

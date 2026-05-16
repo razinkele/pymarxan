@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.solver import ZoneSASolver
 from tests.benchmarks.conftest import make_zone_problem
+
+pytestmark = pytest.mark.bench
 
 
 class TestZoneSAPerformance:

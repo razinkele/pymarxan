@@ -65,6 +65,7 @@ markers = [
     "slow: marks tests as slow (SA-heavy, zone solver, run_mode pipelines)",
     "integration: marks phase integration tests",
     "spatial: marks tests requiring geopandas/spatial features",
+    "bench: perf-budget benchmarks (per-flip cost gates). Skipped by `make test` and CI; run via `make bench`. Budgets sized for the development machine and may fail on slower CI runners.",
 ]
 
 [tool.ruff]

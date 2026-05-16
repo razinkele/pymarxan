@@ -14,9 +14,12 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.cache import ProblemCache
+
+pytestmark = pytest.mark.bench
 
 
 def _make_probmode3_problem(
