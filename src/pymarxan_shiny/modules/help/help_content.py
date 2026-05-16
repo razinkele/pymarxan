@@ -903,6 +903,48 @@ HELP_CONTENT: dict[str, ui.TagList] = {
             "Conservation Biology 29(6): 1615–1625.",
             class_="text-muted small",
         ),
+        _section("SEPDISTANCE / SEPNUM columns (Phase 20)"),
+        ui.p(
+            "When any feature has ``sepdistance > 0 AND sepnum > 1`` (Marxan "
+            "geographic separation constraints), three additional columns "
+            "appear in the target achievement table:"
+        ),
+        _param_table([
+            ("sepdistance", "Minimum pairwise distance between PUs containing the feature (in the planning_units' CRS units — metres for projected CRS)."),
+            ("sepnum", "Number of geographically separated PUs required for the feature to count as fully met. Marxan treats sepnum ≤ 1 as disabled."),
+            ("sep_short", "Integer shortfall: max(0, sepnum − achieved separation count). Non-zero means the reserve fails the spatial-spread requirement."),
+        ]),
+        ui.p(
+            "The penalty curve is hyperbolic, not linear: ",
+            ui.tags.code("1/(7·fval + 0.2) − 1/7.2"),
+            " with ",
+            ui.tags.code("fval = max(count, 1)/sepnum"),
+            ". The greedy admission walks selected PUs in ascending PU-id "
+            "order and admits each that is ≥ sepdistance from every "
+            "already-admitted PU. Verified line-for-line against Marxan v4 "
+            "``computation.hpp::computeSepPenalty`` and ``clumping.cpp::CountSeparation2``.",
+            class_="small mb-2",
+        ),
+        _tip(
+            "If MIP was the solver, sep_short is computed post-hoc on the "
+            "deterministic solution — the default ``mip_sep_strategy='drop'`` "
+            "doesn't optimise against SEPNUM directly. For separation-aware "
+            "optimality, use SA or iterative-improvement. The greedy "
+            "heuristic also stays separation-blind during scoring."
+        ),
+        _tip(
+            "Unit mismatch warning (round-3 L3): ``sep_short`` is an integer "
+            "count (PUs), ``clump_short`` is a float amount, ``prob_gap`` is "
+            "a float probability. Comparing the three side-by-side requires "
+            "unit awareness."
+        ),
+        ui.tags.p(
+            "References: Watts et al. (2009), Environmental Modelling & "
+            "Software 24(12): 1513–1521; Watts, Stewart & Martin (2017), "
+            "Learning landscape ecology, 211–227. Marxan v4 source: "
+            "github.com/Marxan-source-code/marxan.",
+            class_="text-muted small",
+        ),
     ),
 
     # -----------------------------------------------------------------

@@ -45,8 +45,8 @@ def target_met_server(
         # Show probability-target columns only when PROBMODE 3 is active
         # and the solution actually carries a Z-score evaluation. Show
         # clumping columns only when any feature has target2 > 0 and the
-        # solution carries a clump evaluation. Keeps the table tidy for
-        # legacy runs.
+        # solution carries a clump evaluation. Same for separation when
+        # any feature is sep-active. Keeps the table tidy for legacy runs.
         is_probmode3 = (
             int(p.parameters.get("PROBMODE", 0)) == 3
             and s.prob_shortfalls is not None
@@ -55,6 +55,14 @@ def target_met_server(
             "target2" in p.features.columns
             and (p.features["target2"] > 0).any()
             and s.clump_shortfalls is not None
+        )
+        has_separation = (
+            "sepnum" in p.features.columns
+            and "sepdistance" in p.features.columns
+            and (
+                (p.features["sepnum"] > 1) & (p.features["sepdistance"] > 0)
+            ).any()
+            and s.sep_shortfalls is not None
         )
 
         rows = []
@@ -96,5 +104,17 @@ def target_met_server(
                     r["target2"] = "—"
                     r["clumptype"] = "—"
                     r["clump_short"] = "—"
+            if has_separation:
+                sd = float(row.get("sepdistance", 0.0))
+                sn = int(row.get("sepnum", 1))
+                if sd > 0 and sn > 1:
+                    sep_short = s.sep_shortfalls.get(fid, 0)
+                    r["sepdistance"] = sd
+                    r["sepnum"] = sn
+                    r["sep_short"] = int(sep_short)
+                else:
+                    r["sepdistance"] = "—"
+                    r["sepnum"] = "—"
+                    r["sep_short"] = "—"
             rows.append(r)
         return pd.DataFrame(rows)

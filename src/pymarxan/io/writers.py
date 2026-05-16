@@ -213,6 +213,14 @@ def write_mvbest(
     feat_names = problem.features["name"].values
     feat_targets = problem.features["target"].values.astype(float)
 
+    # Phase 18/19/20 backport (round-3 H7): emit constraint-specific columns
+    # when the matching analytics dict is populated on the Solution. Legacy
+    # solutions (no PROBMODE 3 / TARGET2 / SEPNUM) get the original 6 columns
+    # only — byte-identical to pre-Phase-18 mvbest output.
+    prob_short_map = solution.prob_shortfalls
+    clump_short_map = solution.clump_shortfalls
+    sep_short_map = solution.sep_shortfalls
+
     rows = []
     for k in range(len(feat_ids)):
         fid = int(feat_ids[k])
@@ -220,14 +228,28 @@ def write_mvbest(
         amount_held = achieved_map.get(fid, 0.0)
         shortfall = shortfalls.get(fid, 0.0)
         target_met = amount_held >= target * misslevel
-        rows.append({
+        row = {
             "Feature_ID": fid,
             "Feature_Name": feat_names[k],
             "Target": target,
             "Amount_Held": amount_held,
             "Target_Met": target_met,
             "Shortfall": shortfall,
-        })
+        }
+        if prob_short_map is not None:
+            row["Prob_Gap"] = float(prob_short_map.get(fid, 0.0))
+        if clump_short_map is not None:
+            row["Clump_Short"] = float(clump_short_map.get(fid, 0.0))
+        if sep_short_map is not None:
+            sep_short = int(sep_short_map.get(fid, 0))
+            row["Separation_Count"] = (
+                int(problem.features.loc[
+                    problem.features["id"] == fid, "sepnum"
+                ].iloc[0]) - sep_short
+                if "sepnum" in problem.features.columns else 0
+            )
+            row["Separation_Met"] = sep_short == 0
+        rows.append(row)
 
     pd.DataFrame(rows).to_csv(path, index=False)
 

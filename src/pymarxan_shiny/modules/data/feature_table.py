@@ -7,20 +7,34 @@ from shiny import module, reactive, render, ui
 
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
-_COLUMN_ORDER = ["id", "name", "target", "spf", "ptarget", "target2", "clumptype"]
-_EDITABLE_FLOAT_COLUMNS = ("target", "spf", "target2")
-_EDITABLE_INT_COLUMNS = ("clumptype",)
+_COLUMN_ORDER = [
+    "id", "name", "target", "spf",
+    "ptarget", "target2", "clumptype",
+    "sepdistance", "sepnum",
+]
+_EDITABLE_FLOAT_COLUMNS = ("target", "spf", "target2", "sepdistance")
+_EDITABLE_INT_COLUMNS = ("clumptype", "sepnum")
+# Per-column int validator overrides. Columns not listed here use the
+# default `>= 0` int rule (round-3 H9 — clumptype's {0,1,2} rule must
+# NOT apply to sepnum, which is any non-negative int).
+_INT_VALIDATORS: dict[str, tuple[int, ...]] = {
+    "clumptype": (0, 1, 2),
+}
 
 
 def validate_feature_edit(column: str, value: str) -> float | int | None:
     """Validate an edit to a feature table cell.
 
-    Returns the validated value (float for target/spf/target2, int for
-    clumptype), or None if the edit should be rejected.
+    Returns the validated value (float for target/spf/target2/sepdistance,
+    int for clumptype/sepnum), or None if the edit should be rejected.
 
     Phase 19 columns:
       - target2 : float ≥ 0  (0 disables clumping for this feature)
       - clumptype : int ∈ {0, 1, 2}  (Marxan PartialPen4 semantics)
+
+    Phase 20 columns:
+      - sepdistance : float ≥ 0  (0 disables separation for this feature)
+      - sepnum : int ≥ 0  (≤1 disables separation; Marxan sentinel)
     """
     if column in _EDITABLE_FLOAT_COLUMNS:
         try:
@@ -35,9 +49,11 @@ def validate_feature_edit(column: str, value: str) -> float | int | None:
             ival = int(value)
         except (ValueError, TypeError):
             return None
-        if ival not in (0, 1, 2):
-            return None
-        return ival
+        allowed = _INT_VALIDATORS.get(column)
+        if allowed is not None:
+            return ival if ival in allowed else None
+        # Default int rule for other columns (sepnum): >= 0.
+        return ival if ival >= 0 else None
     return None
 
 
@@ -56,6 +72,10 @@ def feature_table_ui():
             "require the feature in a contiguous patch of at least that occupancy, "
             "scored by CLUMPTYPE 0 (binary), 1 (half-amount sub-target), or 2 "
             "(quadratic sub-target). Leave target2 = 0 to disable clumping. ",
+            ui.tags.strong("sepdistance / sepnum"),
+            " are optional Marxan SEPDISTANCE / SEPNUM columns: require N "
+            "geographically separated PUs (≥ sepdistance apart in CRS units) "
+            "to count toward the feature's target. Leave sepnum = 1 to disable. ",
             "Click a cell to edit, then Save Changes to apply.",
             class_="text-muted small mb-3",
         ),
@@ -64,9 +84,9 @@ def feature_table_ui():
             ui.input_action_button(
                 "save_changes", "Save Changes", class_="btn-warning w-100 mt-2"
             ),
-            "Write edited target / SPF / ptarget / target2 / clumptype values back "
-            "to the conservation problem. Changes take effect immediately for "
-            "subsequent solver runs.",
+            "Write edited target / SPF / ptarget / target2 / clumptype / sepdistance / "
+            "sepnum values back to the conservation problem. Changes take effect "
+            "immediately for subsequent solver runs.",
         ),
     )
 
@@ -89,7 +109,7 @@ def feature_table_server(
         # columns when they exist on the problem, so legacy projects without
         # ptarget / target2 / clumptype don't see empty columns in the editor.
         cols = ["id", "name", "target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype"):
+        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
             if opt in p.features.columns:
                 cols.append(opt)
         df = p.features[cols].copy()
@@ -105,7 +125,7 @@ def feature_table_server(
         if p is None:
             return patch["value"]
         cols = ["id", "name", "target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype"):
+        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
             if opt in p.features.columns:
                 cols.append(opt)
         col = cols[col_idx] if col_idx < len(cols) else ""
@@ -125,7 +145,7 @@ def feature_table_server(
         # Edited columns: target, spf, plus any of ptarget/target2/clumptype
         # that are present on the data view (which mirrors p.features).
         edit_cols = ["target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype"):
+        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
             if opt in df.columns:
                 edit_cols.append(opt)
         # Join on id to handle user-sorted/filtered views correctly
@@ -133,7 +153,7 @@ def feature_table_server(
         for fid in edits.index:
             mask = updated.features["id"] == fid
             for col in edit_cols:
-                if col == "clumptype":
+                if col in _EDITABLE_INT_COLUMNS:
                     updated.features.loc[mask, col] = int(edits.at[fid, col])
                 else:
                     updated.features.loc[mask, col] = float(edits.at[fid, col])
