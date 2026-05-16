@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 22 — Importance scores (Ferrier, Jung rank, replacement-cost).**
+  Three new ``pymarxan.analysis`` modules complement the existing
+  ``compute_irreplaceability`` to give pymarxan prioritizr-parity on
+  per-PU prioritisation metrics.
+  - ``analysis.ferrier_importance.compute_ferrier_importance(problem)`` —
+    closed-form SPF-weighted contribution-to-target. No MIP re-solves.
+    Reference: Ferrier, Pressey & Barrett (2000) *Biological Conservation*
+    93(3): 303-325. https://doi.org/10.1016/S0006-3207(99)00149-4
+  - ``analysis.rank_importance.compute_rank_importance(problem, solution)``
+    — Jung 2021 sequential-removal ranking. Repeatedly removes the
+    least-damaging PU and records the order; later-removed PUs rank
+    higher (more important). Reference: Jung et al. (2021) *Methods in
+    Ecology and Evolution* 12(5): 869-877.
+    https://doi.org/10.1111/2041-210X.13578
+  - ``analysis.replacement_cost.compute_replacement_cost(problem)`` —
+    for each PU in the MIP optimum, lock it out, re-solve, report the
+    objective gap. ``n_selected + 1`` MIP solves total; pair with
+    ``MIPSolver(mip_backend="highs")`` from Phase 21 on large problems.
+    Returns ``+inf`` when lock-out is infeasible. Reference: Ferrier et
+    al. (2000); Cabeza & Moilanen (2006) *Operations Research* 53(1):
+    174-191. https://doi.org/10.1287/opre.1040.0167
+
 - **Phase 21 — HiGHS / Gurobi MIP backends.** ``MIPSolver`` and
   ``ZoneMIPSolver`` now dispatch through a shared backend factory.
   - New ``mip_backend`` kwarg (default ``"auto"``). Values: ``"auto"``,
