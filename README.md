@@ -27,6 +27,17 @@ make app
 
 Then open http://localhost:8000 in your browser.
 
+## Documentation
+
+- **`docs/TUTORIAL.md`** — end-to-end Python API tutorial covering the
+  v0.3 / v0.4 features (HiGHS backend, importance scores, alternative
+  MIP objectives, connectivity metrics, portfolios, Pareto BLM
+  calibration). Every code block runs in
+  `tests/test_tutorial_examples.py`.
+- **`docs/USER_MANUAL.md`** — Shiny app user manual.
+- **`CHANGELOG.md`** — release history.
+- **`docs/plans/`** — phase-by-phase design + multi-agent review docs.
+
 ## Architecture
 
 ```

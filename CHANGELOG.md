@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **End-to-end Python API tutorial.** New ``docs/TUTORIAL.md`` walks
+  through the v0.3 / v0.4 surface in a single coherent workflow:
+  build a problem, solve with the default min-set objective, choose
+  the MIP backend, compute importance scores, try alternative
+  objectives, work with connectivity metrics, generate a no-good-cut
+  portfolio, and view a Pareto-filtered BLM sweep. Every code block
+  has a parallel runnable test in
+  ``tests/test_tutorial_examples.py`` so the doc can't silently rot
+  when the API changes — if a snippet breaks, that test fails and
+  forces a same-commit doc fix.
+
 - **Phase 18 + 19 benchmark coverage.** Two new
   ``tests/benchmarks/`` files mirror the Phase 20 ``bench_sep.py``
   perf gate:
