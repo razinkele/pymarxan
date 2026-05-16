@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-17
+
+The v0.3.0 milestone closes "prioritizr-parity" for pymarxan's MIP path.
+Combines Phase 21 (HiGHS / Gurobi backends), Phase 22 (Ferrier + Jung
+rank + replacement-cost importance scores), and Phase 23 (extended MIP
+objectives) into a single release.
+
 ### Added
 
 - **Phase 23 — Extended MIP objectives.** ``MIPSolver`` gains an
@@ -381,7 +388,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.3.0
 [0.2.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0
 [0.2.0a2]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a2
 [0.2.0a1]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a1
