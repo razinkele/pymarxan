@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from shiny import App, Inputs, Outputs, Session, reactive, ui
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 
 # ---------------------------------------------------------------------------
 # Static assets
