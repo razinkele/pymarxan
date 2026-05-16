@@ -30,6 +30,11 @@ def write_pu(df: pd.DataFrame, path: str | Path) -> None:
 def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     """Write a species/features DataFrame to a CSV file.
 
+    The optional ``ptarget`` column (Marxan PTARGET2D — per-feature
+    probability target) is omitted from the output when every value is
+    the disabled sentinel ``-1``, so legacy projects round-trip
+    byte-identical.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -37,11 +42,17 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     path : str | Path
         Output file path.
     """
+    if "ptarget" in df.columns and (df["ptarget"] == -1).all():
+        df = df.drop(columns=["ptarget"])
     df.to_csv(path, index=False)
 
 
 def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
     """Write a planning-unit-vs-species DataFrame to a CSV file.
+
+    The optional ``prob`` column (Marxan PROB2D — per-cell Bernoulli
+    probability) is omitted from the output when every value is zero,
+    so legacy deterministic projects round-trip byte-identical.
 
     Parameters
     ----------
@@ -50,6 +61,8 @@ def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
     path : str | Path
         Output file path.
     """
+    if "prob" in df.columns and (df["prob"] == 0).all():
+        df = df.drop(columns=["prob"])
     df.to_csv(path, index=False)
 
 

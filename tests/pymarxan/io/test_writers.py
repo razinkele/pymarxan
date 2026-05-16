@@ -29,6 +29,10 @@ class TestWriteSpec:
         out_path = tmp_path / "spec.dat"
         write_spec(original, out_path)
         loaded = read_spec(out_path)
+        # Phase 18: read_spec adds ptarget=-1 (disabled) for legacy specs.
+        # Drop it for byte-identical round-trip equality.
+        assert (loaded["ptarget"] == -1.0).all()
+        loaded = loaded.drop(columns=["ptarget"])
         pd.testing.assert_frame_equal(original, loaded)
 
 class TestWriteInputDat:

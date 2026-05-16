@@ -243,3 +243,26 @@ def test_build_pu_feature_matrix_sums_duplicate_rows():
     matrix_totals = matrix.sum(axis=0)
     for j, fid in enumerate(feat_ids):
         assert matrix_totals[j] == pytest.approx(totals[int(fid)])
+
+
+def test_validate_accepts_phase18_probability_columns():
+    """ConservationProblem.validate() must not flag the optional prob /
+    ptarget columns introduced in Phase 18.
+
+    Smoke test — validate() already permits extra columns by virtue of
+    set-membership checks on required columns only. This test pins the
+    behaviour so future tightening doesn't accidentally break Phase 18
+    data flow.
+    """
+    problem = _make_simple_problem()
+    # Inject Phase 18 optional columns
+    pu_vs_features = problem.pu_vs_features.copy()
+    pu_vs_features["prob"] = 0.1
+    features = problem.features.copy()
+    features["ptarget"] = 0.95
+    problem = problem.copy_with(
+        pu_vs_features=pu_vs_features,
+        features=features,
+    )
+    errors = problem.validate()
+    assert errors == [], f"validate() flagged Phase 18 columns: {errors}"

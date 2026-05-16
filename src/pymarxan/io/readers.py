@@ -77,7 +77,7 @@ def read_spec(path: str | Path) -> pd.DataFrame:
     """
     df = _read_dat(path)
     df["id"] = df["id"].astype(int)
-    for col in ("target", "prop", "spf"):
+    for col in ("target", "prop", "spf", "ptarget"):
         if col in df.columns:
             df[col] = df[col].astype(float)
     if "target" not in df.columns:
@@ -86,6 +86,9 @@ def read_spec(path: str | Path) -> pd.DataFrame:
         df["spf"] = 1.0
     if "name" not in df.columns:
         df["name"] = [f"Feature_{fid}" for fid in df["id"]]
+    if "ptarget" not in df.columns:
+        # -1 is Marxan's "no probability target" sentinel.
+        df["ptarget"] = -1.0
     return df
 
 
