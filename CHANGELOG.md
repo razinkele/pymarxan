@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 24 — Connectivity metric expansion + post-hoc clustering.**
+  Closes the MarxanConnect feature gap.
+  - ``connectivity.metrics.compute_pagerank_centrality`` — networkx
+    PageRank with configurable damping factor; sum normalised to 1.
+  - ``connectivity.metrics.compute_donors`` /
+    ``compute_recipients`` — boolean masks for nodes whose
+    out/in-degree exceeds the opposite by ``threshold`` (thresholded
+    in/out-degree variants).
+  - ``connectivity.io.connectivity_to_boundary`` — convert a
+    connectivity edge list to a ``bound.dat``-compatible DataFrame
+    with optional ``scale`` factor. Lets users feed connectivity into
+    the BLM penalty without a manual rename. Zero-value rows dropped.
+  - ``connectivity.temporal.compute_temporal_connectivity`` — reduce
+    a ``(T, n, n)`` stack of per-timestep connectivity matrices to an
+    ``(n, n)`` summary via ``"mean"`` / ``"max"`` / ``"weighted"``.
+  - ``connectivity.resistance.habitat_resistance_to_matrix`` —
+    least-cost-path connectivity from a 2D habitat-resistance raster.
+    Uses networkx Dijkstra on a 4-neighbour grid graph (avoids the
+    scikit-image dependency that ``route_through_array`` would
+    introduce).
+  - ``analysis.posthoc_clusters.compute_solution_clusters`` —
+    partitions a Solution's selected PUs into connected components
+    using the problem's boundary graph; returns ``n_clusters``,
+    sorted ``cluster_sizes``, ``max_cluster_fraction``, and a
+    ``pu_to_cluster`` dict for map colour-coding.
+
 ### Changed
 
 - **Phase 20 round-3 backlog cleanup.** Three deferred items from the
