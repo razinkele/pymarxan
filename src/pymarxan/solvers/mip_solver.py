@@ -161,6 +161,7 @@ class MIPSolver(Solver):
         mip_clump_strategy: str = "drop",
         mip_sep_strategy: str = "drop",
         mip_backend: str = "auto",
+        objective: str = "min_set",
     ) -> None:
         _validate_mip_strategy(
             "mip_chance_strategy", mip_chance_strategy,
@@ -185,10 +186,15 @@ class MIPSolver(Solver):
                 f"mip_backend must be one of {_MIP_BACKEND_NAMES}, got "
                 f"{mip_backend!r}."
             )
+        _validate_mip_strategy(
+            "objective", objective,
+            ("min_set", "max_features", "min_largest_shortfall", "min_penalties"),
+        )
         self.mip_chance_strategy = mip_chance_strategy
         self.mip_clump_strategy = mip_clump_strategy
         self.mip_sep_strategy = mip_sep_strategy
         self.mip_backend = mip_backend
+        self.objective = objective
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -385,10 +391,78 @@ class MIPSolver(Solver):
                     for k in range(len(pu_id_arr))
                 )
 
-        model += (
-            cost_expr + blm * boundary_expr + conn_expr + prob_expr,
-            "objective",
-        )
+        # Phase 23: select objective formulation. Default "min_set" preserves
+        # pre-Phase-23 behaviour.
+        feat_met: dict[int, pulp.LpVariable] = {}
+        slack: dict[int, pulp.LpVariable] = {}
+        t_var: pulp.LpVariable | None = None
+        feat_ids_init = problem.features["id"].values
+        if self.objective == "max_features":
+            # Binary z_j per feature; relaxed target ≥ target · z_j; cost
+            # cap from COSTBUDGET. Maximise Σ z_j (LpMinimize → negate).
+            cost_budget = problem.parameters.get("COSTBUDGET")
+            if cost_budget is None:
+                raise ValueError(
+                    "objective='max_features' requires a COSTBUDGET parameter "
+                    "on the problem (problem.parameters['COSTBUDGET'] = ...). "
+                    "Without a budget the formulation is degenerate — every "
+                    "feature target is trivially met by selecting all PUs."
+                )
+            cost_budget = float(cost_budget)
+            for fi in range(len(feat_ids_init)):
+                fid = int(feat_ids_init[fi])
+                feat_met[fid] = pulp.LpVariable(f"feat_met_{fid}", cat="Binary")
+            model += (
+                -pulp.lpSum(feat_met[fid] for fid in feat_met),
+                "objective",
+            )
+            model += cost_expr <= cost_budget, "cost_budget"
+        elif self.objective == "min_largest_shortfall":
+            # Auxiliary slack_j ≥ 0, slack_j ≥ target_j - Σ amount·x;
+            # t ≥ slack_j for every feature. Minimise t.
+            cost_budget = problem.parameters.get("COSTBUDGET")
+            if cost_budget is None:
+                raise ValueError(
+                    "objective='min_largest_shortfall' requires a COSTBUDGET "
+                    "parameter (problem.parameters['COSTBUDGET'] = ...). "
+                    "Without a budget the objective is degenerate (buying "
+                    "every PU drives every shortfall to 0)."
+                )
+            cost_budget = float(cost_budget)
+            t_var = pulp.LpVariable("max_shortfall", lowBound=0)
+            for fi in range(len(feat_ids_init)):
+                fid = int(feat_ids_init[fi])
+                slack[fid] = pulp.LpVariable(f"slack_{fid}", lowBound=0)
+                # Coupling slack ≤ t handled below via t ≥ slack.
+            model += (t_var, "objective")
+            model += cost_expr <= cost_budget, "cost_budget"
+        elif self.objective == "min_penalties":
+            # Hierarchical: minimise Σ SPF_j · slack_j first, cost second.
+            # Implemented via weighted scalarisation
+            #     min  M · Σ SPF_j · slack_j  +  Σ cost_i · x_i
+            # with M chosen large enough that any non-zero penalty term
+            # dominates the worst-case cost (sum of all costs + 1).
+            feat_spf_arr = problem.features["spf"].values.astype(float)
+            spf_by_id = {
+                int(feat_ids_init[fi]): float(feat_spf_arr[fi])
+                for fi in range(len(feat_ids_init))
+            }
+            for fi in range(len(feat_ids_init)):
+                fid = int(feat_ids_init[fi])
+                slack[fid] = pulp.LpVariable(f"slack_{fid}", lowBound=0)
+            penalty_expr = pulp.lpSum(
+                spf_by_id[fid] * slack[fid] for fid in slack
+            )
+            total_cost_upper = sum(float(c) for c in pu_cost_arr) + 1.0
+            model += (
+                total_cost_upper * penalty_expr + cost_expr,
+                "objective",
+            )
+        else:
+            model += (
+                cost_expr + blm * boundary_expr + conn_expr + prob_expr,
+                "objective",
+            )
 
         # Constraints: feature targets
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
@@ -431,7 +505,32 @@ class MIPSolver(Solver):
                         float(amt) * x[int(pu)]
                         for pu, amt in zip(pus, amounts)
                     )
-                model += amount_expr >= target, f"target_{fid}"
+                if self.objective == "max_features":
+                    # Relaxed target: only enforced when feat_met_j = 1.
+                    # Maximising Σ feat_met_j therefore picks as many
+                    # features as the cost budget will pay for.
+                    model += (
+                        amount_expr >= target * feat_met[fid],
+                        f"target_{fid}",
+                    )
+                elif self.objective == "min_largest_shortfall":
+                    # slack_j ≥ target_j − amount; t ≥ slack_j.
+                    model += (
+                        slack[fid] >= target - amount_expr,
+                        f"slack_{fid}",
+                    )
+                    assert t_var is not None  # for mypy: set in init block above
+                    model += t_var >= slack[fid], f"max_shortfall_{fid}"
+                elif self.objective == "min_penalties":
+                    # slack_j ≥ target_j − amount; the objective minimises
+                    # Σ SPF_j · slack_j (already added above), so slack_j
+                    # is pulled to 0 whenever it can be.
+                    model += (
+                        slack[fid] >= target - amount_expr,
+                        f"slack_{fid}",
+                    )
+                else:
+                    model += amount_expr >= target, f"target_{fid}"
 
         # Solve
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
@@ -480,6 +579,7 @@ class MIPSolver(Solver):
             "solver": self.name(),
             "status": pulp.LpStatus[model.status],
             "mip_backend": resolved_backend,
+            "objective": self.objective,
         }
         if probmode == 3:
             meta["mip_chance_strategy"] = self.mip_chance_strategy

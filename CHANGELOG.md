@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 23 — Extended MIP objectives.** ``MIPSolver`` gains an
+  ``objective`` kwarg with four choices:
+  - ``"min_set"`` (default, pre-Phase-23 behaviour) — minimise
+    ``cost + BLM·boundary + connectivity + probability + penalty``
+    subject to ``amount ≥ target·MISSLEVEL``.
+  - ``"max_features"`` — maximise the count of feature targets met
+    under a cost cap. Adds binary ``feat_met_j`` per feature; relaxes
+    ``amount ≥ target`` to ``amount ≥ target·feat_met_j``; requires
+    ``problem.parameters["COSTBUDGET"]``.
+  - ``"min_largest_shortfall"`` — minimax over per-feature shortfalls.
+    Auxiliary ``slack_j ≥ 0`` and ``t ≥ slack_j`` for every feature;
+    objective is ``min t``. Useful when one feature is at risk of being
+    abandoned by other formulations; requires ``COSTBUDGET``.
+  - ``"min_penalties"`` — hierarchical: minimise SPF-weighted shortfall
+    first, cost second. Implemented as weighted scalarisation
+    ``M · Σ SPF·slack + cost`` with ``M = sum_of_costs + 1`` so any
+    non-zero penalty term dominates the worst-case cost.
+  - Unknown objective names rejected at ``__init__`` time (fail-fast,
+    matching the Phase 20/21 strategy/backend validation pattern).
+  - ``Solution.metadata["objective"]`` records the formulation used.
+
 - **Phase 22 — Importance scores (Ferrier, Jung rank, replacement-cost).**
   Three new ``pymarxan.analysis`` modules complement the existing
   ``compute_irreplaceability`` to give pymarxan prioritizr-parity on
