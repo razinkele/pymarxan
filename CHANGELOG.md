@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-17
+
+The v0.4.0 milestone closes "Connectivity + portfolios". Combines Phase
+24 (MarxanConnect feature gap — PageRank, donors, recipients, temporal
+connectivity, habitat-resistance LCP, post-hoc clustering) and Phase 25
+(solver-agnostic no-good-cut portfolios + Cohon Pareto filter on BLM
+sweeps), plus a round of polish items deferred from the Phase 20
+multi-agent review process.
+
 ### Added
 
 - **Phase 25 — Solution portfolios + Cohon Pareto filter.** Two
@@ -461,7 +470,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.4.0
 [0.3.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.3.0
 [0.2.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0
 [0.2.0a2]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a2
