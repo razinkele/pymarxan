@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-17
+
+Pure UI patch — closes the last item deferred from the Phase 24 plan.
+
 ### Added
 
 - **Shiny connectivity metrics dashboard.** New
@@ -15,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eigenvector centrality, PageRank, donor/recipient flags) in a single
   sortable table — one row per PU. Was originally listed in the
   Phase 24 plan but deferred from the v0.4.0 release because it's a
-  pure UI addition; landing it here in [Unreleased] for the next minor.
+  pure UI addition; lands cleanly in a patch.
 
 ## [0.4.0] — 2026-05-17
 
@@ -480,7 +484,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.4.1
 [0.4.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.4.0
 [0.3.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.3.0
 [0.2.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0
