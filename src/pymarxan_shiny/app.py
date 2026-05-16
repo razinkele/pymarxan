@@ -13,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from shiny import App, Inputs, Outputs, Session, reactive, ui
 
-__version__ = "0.1.0"
+# Reuse pymarxan core's version (read from installed metadata, with a
+# PEP 440 local-version fallback for source-checkout dev runs).
+from pymarxan import __version__
 
 # ---------------------------------------------------------------------------
 # Static assets
