@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Target: v0.2.0 — "full Marxan-classic parity" (Phases 18-20).
+Target: v0.2.0 — "full Marxan-classic parity". Remaining work: Phase 19
+(clumping / TARGET2) and Phase 20 (separation distance).
+
+## [0.2.0a1] — 2026-05-16
+
+First alpha of the v0.2.0 "full Marxan-classic parity" release line.
+Ships Phase 18 (Z-score chance constraints) ahead of the full v0.2.0
+so the citable feature is dated; Phases 19 + 20 ship in v0.2.0b1 and
+v0.2.0 final.
 
 ### Added
 
@@ -153,4 +161,6 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.2.0a1...HEAD
+[0.2.0a1]: https://github.com/razinkele/pymarxan/releases/tag/v0.2.0a1
 [0.1.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.1.0
