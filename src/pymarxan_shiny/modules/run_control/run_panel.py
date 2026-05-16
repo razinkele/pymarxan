@@ -22,6 +22,12 @@ def run_panel_ui():
             "After the run completes, explore results in the Results and Maps tabs.",
             class_="text-muted small mb-3",
         ),
+        # PROBMODE 3 notice — dynamically shown when MIP is selected on
+        # a PROBMODE=3 problem. The MIP solver's "drop" strategy solves
+        # the deterministic relaxation and reports the chance-constraint
+        # gap post-hoc; users should know the MIP answer isn't the
+        # chance-constraint optimum.
+        ui.output_ui("probmode3_mip_notice"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.tooltip(
@@ -206,3 +212,34 @@ def run_panel_server(
             else:
                 lines.append(f"  {k}: {v}")
         return "\n".join(lines)
+
+    @render.ui
+    def probmode3_mip_notice():
+        """Inform the user when MIP + PROBMODE 3 are about to be combined.
+
+        The MIP solver under PROBMODE 3 drops the chance-constraint term
+        (CBC can't handle SOCP) and reports the gap post-hoc. Without this
+        banner the user sees a deterministic solution and may not realise
+        the probability target wasn't actually enforced.
+        """
+        p = problem()
+        if p is None:
+            return ui.tags.div()
+        if int(p.parameters.get("PROBMODE", 0)) != 3:
+            return ui.tags.div()
+        try:
+            active = solver()
+        except Exception:
+            return ui.tags.div()
+        if active is None or "MIP" not in active.name():
+            return ui.tags.div()
+        return ui.tags.div(
+            ui.tags.strong("PROBMODE 3 + MIP: "),
+            "the chance-constraint term is dropped from the MIP objective "
+            "(CBC can't solve √Σσ²·x). The MIP solves the deterministic "
+            "relaxation; the chance-constraint gap is reported post-hoc on "
+            "the Solution. For chance-constraint optimality, use SA, "
+            "heuristic, or iterative-improvement.",
+            class_="alert alert-warning small",
+            role="alert",
+        )

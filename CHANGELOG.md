@@ -5,6 +5,42 @@ All notable changes to **pymarxan** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Target: v0.2.0 — "full Marxan-classic parity" (Phases 18-20).
+
+### Added
+
+- **PROBMODE 3 — Z-score chance constraints (Phase 18).** Marxan v4
+  PROB2D + PTARGET2D support across all solvers, with the formulation
+  validated against the reference C++ source (`probability.cpp::computeProbMeasures`)
+  via a multi-agent design review.
+  - Optional `prob` column on `puvspr.dat`: per-cell Bernoulli probability.
+    Variance is derived internally as `amount² · p · (1-p)` (Marxan-faithful).
+  - Optional `ptarget` column on `spec.dat`: per-feature probability target.
+    Default `-1` matches Marxan's "disabled" sentinel.
+  - Writers omit both columns when all values are at default, so legacy
+    deterministic projects round-trip byte-identical.
+  - SA, heuristic, and iterative-improvement solvers handle PROBMODE 3
+    natively via the existing `ProblemCache` infrastructure (new
+    `expected_matrix`, `var_matrix`, `feat_ptarget` fields).
+  - `MIPSolver` gains a `mip_chance_strategy` kwarg (default `"drop"`):
+    the deterministic relaxation is solved and the chance-constraint gap
+    is reported post-hoc on `Solution.prob_shortfalls` /
+    `Solution.prob_penalty`. Strategies `"piecewise"` (Phase 18.5) and
+    `"socp"` (Phase 21) raise `NotImplementedError` with phase pointers.
+  - New module `pymarxan.solvers.probability` exposes
+    `compute_zscore_per_feature`, `compute_zscore_penalty`, and
+    `evaluate_solution_chance` for direct use.
+  - New `Solver.supports_probmode3()` capability method (default `True`).
+  - Shiny UI: PROBMODE radio in `probability_config` extended with mode 3;
+    `target_met` table shows `ptarget` / `P(met)` / `prob_gap` columns
+    when active; `run_panel` shows a banner when MIP + PROBMODE 3 are
+    combined explaining the drop-and-report-gap behaviour.
+  - References: Game et al. 2008 (`10.1890/07-1027.1`), Tulloch et al.
+    2013 (`10.1016/j.biocon.2013.01.003`), Carvalho et al. 2011
+    (`10.1016/j.biocon.2011.04.024`).
+
 ## [0.1.0] — 2026-05-16
 
 First public release. A modular Python toolkit for systematic conservation

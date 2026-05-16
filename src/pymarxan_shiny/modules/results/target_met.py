@@ -42,14 +42,40 @@ def target_met_server(
         if p is None or s is None:
             return None
 
+        # Show probability-target columns only when PROBMODE 3 is active
+        # and the solution actually carries a Z-score evaluation. This
+        # makes the table self-explanatory without clutter for legacy runs.
+        is_probmode3 = (
+            int(p.parameters.get("PROBMODE", 0)) == 3
+            and s.prob_shortfalls is not None
+        )
+
         rows = []
         for _, row in p.features.iterrows():
             fid = int(row["id"])
             met = s.targets_met.get(fid, False)
-            rows.append({
+            r = {
                 "feature_id": fid,
                 "name": row["name"],
                 "target": float(row["target"]),
                 "met": "Yes" if met else "No",
-            })
+            }
+            if is_probmode3:
+                ptarget = (
+                    float(row["ptarget"])
+                    if "ptarget" in p.features.columns
+                    else -1.0
+                )
+                if ptarget > 0:
+                    shortfall = s.prob_shortfalls.get(fid, 0.0)
+                    # P(target met) = ptarget - shortfall (clamped at 0)
+                    prob_met = max(0.0, ptarget - shortfall)
+                    r["ptarget"] = ptarget
+                    r["P(met)"] = round(prob_met, 4)
+                    r["prob_gap"] = round(shortfall, 4)
+                else:
+                    r["ptarget"] = "—"
+                    r["P(met)"] = "—"
+                    r["prob_gap"] = "—"
+            rows.append(r)
         return pd.DataFrame(rows)

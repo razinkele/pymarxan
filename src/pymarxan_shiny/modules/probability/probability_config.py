@@ -56,12 +56,17 @@ def probability_config_ui():
                         choices={
                             "1": "Mode 1 — Expected value (risk premium)",
                             "2": "Mode 2 — Probability threshold",
+                            "3": "Mode 3 — Z-score chance constraints (PROB2D)",
                         },
                         selected="1",
                     ),
                     "Mode 1: adds a risk premium to cost based on probability × "
-                    "cost × weight. Mode 2: treats probability as a threshold "
-                    "constraint (PUs below threshold are penalised).",
+                    "cost × weight. Mode 2: persistence-adjusted amounts. "
+                    "Mode 3: per-(PU, feature) Bernoulli probability via the "
+                    "optional `prob` column on puvspr.dat and a per-feature "
+                    "`ptarget` on spec.dat; SA / heuristic / iterative-improvement "
+                    "solve the chance constraint natively, MIP drops the term "
+                    "and reports the gap post-hoc.",
                 ),
                 width=350,
             ),

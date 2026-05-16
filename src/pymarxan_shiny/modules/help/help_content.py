@@ -862,6 +862,23 @@ HELP_CONTENT: dict[str, ui.TagList] = {
             "that are hardest to meet. These may need higher SPF values "
             "or revised targets."
         ),
+        _section("PROBMODE 3 columns"),
+        ui.p(
+            "When the active problem has PROBMODE=3 and the current "
+            "Solution carries a Z-score evaluation, three additional "
+            "columns appear:"
+        ),
+        _param_table([
+            ("ptarget", "Required probability of meeting the deterministic target (set on spec.dat)."),
+            ("P(met)", "Actual probability the reserve meets the target, computed from per-cell Bernoulli variance via the Marxan Z-score formulation (Game 2008, Tulloch 2013)."),
+            ("prob_gap", "ptarget − P(met), clamped at 0. Non-zero means the reserve falls short of the chance constraint; the solver objective penalises this."),
+        ]),
+        _tip(
+            "If MIP was the solver, ptarget / P(met) / prob_gap are "
+            "computed post-hoc on the deterministic solution — the MIP "
+            "doesn't optimise against them directly. For chance-constraint "
+            "optimality, use SA, heuristic, or iterative-improvement."
+        ),
     ),
 
     # -----------------------------------------------------------------
