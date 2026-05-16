@@ -43,15 +43,22 @@ class ZoneMIPSolver(Solver):
         *,
         mip_clump_strategy: str = "drop",
         mip_sep_strategy: str = "drop",
+        mip_backend: str = "auto",
     ) -> None:
         """Per-zone TARGET2 / SEPNUM are out of scope for v0.2 (see Phase
         19/20 design §"What's NOT in scope"). The kwargs are accepted for
         API symmetry with :class:`MIPSolver` and to forward-compatibly
         reject ``"big_m"`` / ``"socp"``; the deterministic ``"drop"`` path
         is the only one wired today.
+
+        Phase 21: ``mip_backend`` lets users select between CBC (default),
+        HiGHS, and Gurobi (when installed). Same factory as ``MIPSolver``.
         """
         # Use the shared MIPSolver validator for consistency.
-        from pymarxan.solvers.mip_solver import _validate_mip_strategy
+        from pymarxan.solvers.mip_solver import (
+            _MIP_BACKEND_NAMES,
+            _validate_mip_strategy,
+        )
         _validate_mip_strategy(
             "mip_clump_strategy", mip_clump_strategy, ("drop", "big_m"),
         )
@@ -65,8 +72,14 @@ class ZoneMIPSolver(Solver):
                 ),
             },
         )
+        if mip_backend not in _MIP_BACKEND_NAMES:
+            raise ValueError(
+                f"mip_backend must be one of {_MIP_BACKEND_NAMES}, got "
+                f"{mip_backend!r}."
+            )
         self.mip_clump_strategy = mip_clump_strategy
         self.mip_sep_strategy = mip_sep_strategy
+        self.mip_backend = mip_backend
 
     def name(self) -> str:
         return "Zone MIP (PuLP)"
@@ -169,11 +182,18 @@ class ZoneMIPSolver(Solver):
         # --- Feature target constraints ---
         _add_zone_target_constraints(problem, x, pu_ids, zone_ids, model)
 
-        # Solve
+        # Solve via the Phase 21 backend factory.
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
         gap = float(problem.parameters.get("MIP_GAP", 0.0))
-        solver = pulp.PULP_CBC_CMD(
-            msg=int(config.verbose), timeLimit=time_limit, gapRel=gap
+        from pymarxan.solvers.mip_solver import _make_pulp_solver
+        solver = _make_pulp_solver(
+            self.mip_backend,
+            time_limit=time_limit, gap=gap, verbose=config.verbose,
+        )
+        resolved_backend = (
+            "highs" if isinstance(solver, pulp.HiGHS_CMD)
+            else "gurobi" if isinstance(solver, pulp.GUROBI_CMD)
+            else "cbc"
         )
         model.solve(solver)
 
@@ -204,6 +224,7 @@ class ZoneMIPSolver(Solver):
         sol.metadata = {
             "solver": self.name(),
             "status": pulp.LpStatus[model.status],
+            "mip_backend": resolved_backend,
         }
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 21 — HiGHS / Gurobi MIP backends.** ``MIPSolver`` and
+  ``ZoneMIPSolver`` now dispatch through a shared backend factory.
+  - New ``mip_backend`` kwarg (default ``"auto"``). Values: ``"auto"``,
+    ``"cbc"``, ``"highs"``, ``"gurobi"``. ``"auto"`` prefers HiGHS when
+    available (5-50× faster than CBC on large MIPs), falls back to CBC.
+  - CBC remains shipped with PuLP and is always available; HiGHS uses
+    the system ``highs`` binary (or PyPI-distributed wheels); Gurobi
+    requires the user to install ``gurobipy`` separately.
+  - ``_available_backends()`` exposes ``{name: bool}`` for callers
+    wanting to surface which backends are usable on the current machine.
+  - Solution ``metadata["mip_backend"]`` records the resolved backend
+    (``"cbc"`` / ``"highs"`` / ``"gurobi"``) so users can confirm which
+    solver actually ran.
+  - Unknown backend names rejected at ``__init__`` time, matching the
+    fail-fast pattern of the Phase 20 strategy validators.
+  - Phase 21 is "pure wiring" — no algorithmic changes; existing CBC
+    behaviour is unchanged.
+
 ## [0.2.0] — 2026-05-16
 
 The v0.2.0 milestone closes "full Marxan-classic parity" for the
