@@ -28,7 +28,28 @@ class MIPSolver(Solver):
         x_i = 1                            for locked-in PUs (status=2)
         x_i = 0                            for locked-out PUs (status=3)
         x_i in {0, 1}
+
+    Under PROBMODE 3 (Z-score chance constraints, Phase 18) the Z-score
+    constraint involves ``√Σ σ²·x`` which is SOCP/QCP territory and not
+    solvable by the default CBC backend. The ``mip_chance_strategy``
+    knob controls behaviour:
+
+    - ``"drop"`` (default): solve the deterministic relaxation; populate
+      ``Solution.prob_shortfalls`` and ``Solution.prob_penalty`` from a
+      post-hoc Z-score evaluation. User sees the gap.
+    - ``"piecewise"``: tangent-line approximation of the chance constraint
+      in CBC. Deferred to Phase 18.5.
+    - ``"socp"``: exact SOCP formulation via Gurobi/CPLEX. Deferred to
+      Phase 21.
     """
+
+    def __init__(self, *, mip_chance_strategy: str = "drop") -> None:
+        if mip_chance_strategy not in ("drop", "piecewise", "socp"):
+            raise ValueError(
+                f"Unknown mip_chance_strategy {mip_chance_strategy!r}; "
+                "use 'drop' (default), 'piecewise', or 'socp'."
+            )
+        self.mip_chance_strategy = mip_chance_strategy
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -44,6 +65,23 @@ class MIPSolver(Solver):
     ) -> list[Solution]:
         if config is None:
             config = SolverConfig()
+
+        # PROBMODE 3 gating — see class docstring for rationale.
+        probmode = int(problem.parameters.get("PROBMODE", 0))
+        if probmode == 3:
+            if self.mip_chance_strategy == "piecewise":
+                raise NotImplementedError(
+                    "mip_chance_strategy='piecewise' (piecewise-linear "
+                    "approximation of the chance constraint in CBC) is "
+                    "planned for Phase 18.5. Use 'drop' (default) or one "
+                    "of the SA / heuristic / iterative-improvement solvers."
+                )
+            if self.mip_chance_strategy == "socp":
+                raise NotImplementedError(
+                    "mip_chance_strategy='socp' (exact SOCP formulation via "
+                    "Gurobi/CPLEX) lands in Phase 21 when those backends "
+                    "are wired in. Use 'drop' (default) or SA for now."
+                )
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
@@ -248,10 +286,12 @@ class MIPSolver(Solver):
             dtype=bool,
         )
 
-        sol = build_solution(
-            problem,
-            selected,
-            blm,
-            metadata={"solver": self.name(), "status": pulp.LpStatus[model.status]},
-        )
+        # build_solution populates Solution.prob_shortfalls + prob_penalty
+        # automatically when PROBMODE==3. Under the 'drop' strategy, the
+        # MIP solved the deterministic relaxation; the chance-constraint
+        # gap is what build_solution reports post-hoc.
+        meta = {"solver": self.name(), "status": pulp.LpStatus[model.status]}
+        if probmode == 3:
+            meta["mip_chance_strategy"] = self.mip_chance_strategy
+        sol = build_solution(problem, selected, blm, metadata=meta)
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]

@@ -23,6 +23,10 @@ class Solution:
     shortfall: float = 0.0  # Total raw feature shortfall (sum of max(0, target - achieved))
     metadata: dict = field(default_factory=dict)
     zone_assignment: np.ndarray | None = None
+    # PROBMODE 3 outputs — populated when the problem has PROBMODE=3 (and
+    # any feature with ptarget > 0). Always None otherwise.
+    prob_shortfalls: dict[int, float] | None = None  # feature_id -> max(0, ptarget − P)
+    prob_penalty: float | None = None  # γ · Σ SPF · (ptarget − P) / ptarget
 
     @property
     def all_targets_met(self) -> bool:
@@ -61,4 +65,15 @@ class Solver(ABC):
         ...
 
     def available(self) -> bool:
+        return True
+
+    def supports_probmode3(self) -> bool:
+        """Whether this solver supports PROBMODE 3 (Z-score chance constraints).
+
+        Defaults to True. Solvers that genuinely cannot run under PROBMODE 3
+        (no native or fallback path) override to False so dispatchers and UI
+        can pre-filter. MIPSolver/ZoneMIPSolver keep this True because they
+        fall back to ``mip_chance_strategy='drop'`` (deterministic solve,
+        post-hoc chance-constraint reporting).
+        """
         return True

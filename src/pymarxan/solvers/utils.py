@@ -483,6 +483,17 @@ def build_solution(
         problem, selected, pu_index, blm, _achieved=achieved,
     )
 
+    # PROBMODE 3: populate per-feature Z-score gap on the Solution so the
+    # UI can display it. The penalty itself is already part of terms["objective"]
+    # via compute_probability_penalty.
+    prob_shortfalls: dict[int, float] | None = None
+    prob_penalty_val: float | None = None
+    if int(problem.parameters.get("PROBMODE", 0)) == 3:
+        from pymarxan.solvers.probability import evaluate_solution_chance
+        prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
+            problem, selected,
+        )
+
     return Solution(
         selected=selected.copy(),
         cost=total_cost,
@@ -492,4 +503,6 @@ def build_solution(
         penalty=terms["penalty"],
         shortfall=total_shortfall,
         metadata=metadata or {},
+        prob_shortfalls=prob_shortfalls,
+        prob_penalty=prob_penalty_val,
     )

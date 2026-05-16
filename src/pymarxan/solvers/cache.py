@@ -6,7 +6,7 @@ single-PU flips.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -73,6 +73,17 @@ class ProblemCache:
     cost_thresh: float
     thresh_pen1: float
     thresh_pen2: float
+    # PROBMODE 3 (Z-score chance constraints) — populated for all problems
+    # but only used when probmode == 3. See solvers/probability.py for the math.
+    probmode: int = 0
+    prob_weight: float = 1.0
+    # expected_matrix[i, j] = amount_ij · (1 − p_ij); collapses to amount when
+    # there is no `prob` column or when prob == 0.
+    expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    # var_matrix[i, j] = amount_ij² · p_ij · (1 − p_ij); all-zero when no `prob`.
+    var_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    # feat_ptarget[j] = per-feature probability target; ≤0 means disabled.
+    feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     @classmethod
     def from_problem(cls, problem: ConservationProblem) -> ProblemCache:
@@ -169,6 +180,41 @@ class ProblemCache:
         thresh_pen1 = float(params.get("THRESHPEN1", 0.0))
         thresh_pen2 = float(params.get("THRESHPEN2", 0.0))
 
+        # PROBMODE 3 state (zero-cost when probmode != 3)
+        probmode = int(params.get("PROBMODE", 0))
+        prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
+
+        # Per-cell Bernoulli probability — read once into a dense matrix.
+        # The expected and variance matrices are derived from amount + prob
+        # so they can be summed via boolean indexing exactly like
+        # pu_feat_matrix during full / delta objective evaluation.
+        prob_matrix = np.zeros_like(pu_feat_matrix)
+        if (
+            problem.pu_vs_features is not None
+            and "prob" in problem.pu_vs_features.columns
+        ):
+            pv_pu = problem.pu_vs_features["pu"].values
+            pv_sp = problem.pu_vs_features["species"].values
+            pv_pr = problem.pu_vs_features["prob"].values
+            for k in range(len(pv_pu)):
+                pi = pu_id_to_idx.get(int(pv_pu[k]))
+                fj = feat_id_to_col.get(int(pv_sp[k]))
+                if pi is not None and fj is not None:
+                    prob_matrix[pi, fj] = float(pv_pr[k])
+
+        # Marxan PROB2D math:
+        #   E[T_j contribution from i] = amount_ij * (1 - p_ij)
+        #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
+        expected_matrix = pu_feat_matrix * (1.0 - prob_matrix)
+        var_matrix = (pu_feat_matrix ** 2) * prob_matrix * (1.0 - prob_matrix)
+
+        # Per-feature probability target; default -1 (disabled sentinel) for
+        # legacy specs without a ptarget column (read_spec already fills this).
+        if "ptarget" in feat_df.columns:
+            feat_ptarget = np.asarray(feat_df["ptarget"].values, dtype=np.float64)
+        else:
+            feat_ptarget = np.full(n_feat, -1.0, dtype=np.float64)
+
         return cls(
             n_pu=n_pu,
             n_feat=n_feat,
@@ -187,6 +233,11 @@ class ProblemCache:
             cost_thresh=cost_thresh,
             thresh_pen1=thresh_pen1,
             thresh_pen2=thresh_pen2,
+            probmode=probmode,
+            prob_weight=prob_weight,
+            expected_matrix=expected_matrix,
+            var_matrix=var_matrix,
+            feat_ptarget=feat_ptarget,
         )
 
     # ------------------------------------------------------------------
@@ -208,6 +259,36 @@ class ProblemCache:
         """
         result: np.ndarray = self.pu_feat_matrix[selected].sum(axis=0)
         return result
+
+    def _compute_zscore_penalty(
+        self, held_expected: np.ndarray, held_variance: np.ndarray,
+    ) -> float:
+        """Marxan-faithful Z-score chance-constraint penalty.
+
+        Active only when ``self.probmode == 3``; returns 0 otherwise (the
+        caller's hot path can skip this branch entirely via the probmode
+        check).  Features with ptarget ≤ 0 are skipped.  Features with
+        zero variance contribute 0 (Marxan's "degenerate → P=1").
+        """
+        if self.probmode != 3 or self.n_feat == 0:
+            return 0.0
+        from scipy.stats import norm  # local import keeps cold path cheap
+        total = 0.0
+        for j in range(self.n_feat):
+            ptarget = float(self.feat_ptarget[j])
+            if ptarget <= 0:
+                continue
+            var = float(held_variance[j])
+            if var <= 0:
+                # Degenerate / no uncertainty — deterministic path handles miss
+                continue
+            mean = float(held_expected[j])
+            target = float(self.feat_targets[j])
+            z = (target - mean) / np.sqrt(var)
+            prob_met = float(norm.sf(z))
+            shortfall = max(0.0, (ptarget - prob_met) / ptarget)
+            total += float(self.feat_spf[j]) * shortfall
+        return self.prob_weight * total
 
     def compute_full_objective(
         self,
@@ -251,6 +332,12 @@ class ProblemCache:
             obj += compute_cost_threshold_penalty(
                 total_cost, self.cost_thresh, self.thresh_pen1, self.thresh_pen2
             )
+
+        # PROBMODE 3 chance-constraint penalty (additive; no-op when probmode!=3)
+        if self.probmode == 3:
+            held_expected = self.expected_matrix[selected].sum(axis=0)
+            held_variance = self.var_matrix[selected].sum(axis=0)
+            obj += self._compute_zscore_penalty(held_expected, held_variance)
 
         return obj
 
@@ -356,6 +443,27 @@ class ProblemCache:
                 self.thresh_pen2,
             )
             delta += new_ct_penalty - old_ct_penalty
+
+        # --- PROBMODE 3 chance-constraint delta ---
+        # Recompute the Z-score penalty before and after the flip from the
+        # full selection mask. This is O(n_feat) per flip — heavier than
+        # the deterministic delta but cheap relative to the SA outer loop.
+        # The future optimisation (sparse per-PU feature index) lands in a
+        # later patch if benchmarks demand it.
+        if self.probmode == 3:
+            held_exp_before = self.expected_matrix[selected].sum(axis=0)
+            held_var_before = self.var_matrix[selected].sum(axis=0)
+            held_exp_after = held_exp_before + sign * self.expected_matrix[idx]
+            held_var_after = held_var_before + sign * self.var_matrix[idx]
+            # Underflow guard — held_var must be non-negative
+            np.clip(held_var_after, 0.0, None, out=held_var_after)
+            prob_before = self._compute_zscore_penalty(
+                held_exp_before, held_var_before,
+            )
+            prob_after = self._compute_zscore_penalty(
+                held_exp_after, held_var_after,
+            )
+            delta += prob_after - prob_before
 
         return float(delta)
 

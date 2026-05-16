@@ -121,3 +121,82 @@ def compute_zscore_penalty(
         shortfall = max(0.0, (ptarget - prob) / ptarget)
         total += spf_j * shortfall
     return float(weight * total)
+
+
+def evaluate_solution_chance(
+    problem,  # ConservationProblem — typed loosely to avoid circular import
+    selected,  # np.ndarray
+) -> tuple[dict[int, float], float]:
+    """Post-hoc Z-score evaluation of a fully-formed solution.
+
+    Used by the MIP "drop" strategy: the MIP returns a solution against
+    the deterministic problem; this evaluator computes the
+    chance-constraint gap so the Solution can carry
+    ``prob_shortfalls`` and ``prob_penalty``.
+
+    Returns
+    -------
+    (shortfalls, penalty)
+        ``shortfalls`` is a feature_id → ``max(0, ptarget − P)`` dict
+        (per-feature absolute gap in probability space, NOT normalised
+        by ptarget — easier to interpret in the UI).
+        ``penalty`` is the weighted normalised total that would have been
+        added to the objective under PROBMODE 3.
+    """
+
+    if "ptarget" not in problem.features.columns:
+        return {}, 0.0
+    feat_ids = problem.features["id"].astype(int).values
+    feat_target = problem.features["target"].astype(float).values
+    feat_spf = problem.features["spf"].astype(float).values
+    feat_ptarget = problem.features["ptarget"].astype(float).values
+
+    if not any(pt > 0 for pt in feat_ptarget):
+        return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
+
+    pu_ids = problem.planning_units["id"].values
+    selected_pu_ids = {
+        int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]
+    }
+
+    puvspr = problem.pu_vs_features
+    has_prob = "prob" in puvspr.columns
+    achieved_mean: dict[int, float] = {}
+    achieved_var: dict[int, float] = {}
+    pv_pu = puvspr["pu"].values
+    pv_sp = puvspr["species"].values
+    pv_am = puvspr["amount"].values
+    pv_pr = puvspr["prob"].values if has_prob else None
+    for k in range(len(pv_pu)):
+        pid = int(pv_pu[k])
+        if pid not in selected_pu_ids:
+            continue
+        fid = int(pv_sp[k])
+        amt = float(pv_am[k])
+        p = float(pv_pr[k]) if pv_pr is not None else 0.0
+        achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amt * (1.0 - p)
+        achieved_var[fid] = achieved_var.get(fid, 0.0) + amt * amt * p * (1.0 - p)
+
+    targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
+    spf = {int(feat_ids[j]): float(feat_spf[j]) for j in range(len(feat_ids))}
+    ptargets = {int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))}
+
+    # Ensure every feature is keyed (E=Var=0 → sentinel Z)
+    for fid in targets:
+        achieved_mean.setdefault(fid, 0.0)
+        achieved_var.setdefault(fid, 0.0)
+
+    z_per = compute_zscore_per_feature(achieved_mean, achieved_var, targets)
+    weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
+    penalty = compute_zscore_penalty(z_per, ptargets, spf, weight=weight)
+
+    shortfalls: dict[int, float] = {}
+    for fid, z in z_per.items():
+        pt = ptargets.get(fid, -1.0)
+        if pt <= 0 or z == _MARXAN_ZERO_VARIANCE_SENTINEL:
+            shortfalls[fid] = 0.0
+        else:
+            prob_met = float(norm.sf(z))
+            shortfalls[fid] = max(0.0, pt - prob_met)
+
+    return shortfalls, penalty
