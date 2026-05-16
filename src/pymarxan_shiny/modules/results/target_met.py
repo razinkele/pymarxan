@@ -43,11 +43,18 @@ def target_met_server(
             return None
 
         # Show probability-target columns only when PROBMODE 3 is active
-        # and the solution actually carries a Z-score evaluation. This
-        # makes the table self-explanatory without clutter for legacy runs.
+        # and the solution actually carries a Z-score evaluation. Show
+        # clumping columns only when any feature has target2 > 0 and the
+        # solution carries a clump evaluation. Keeps the table tidy for
+        # legacy runs.
         is_probmode3 = (
             int(p.parameters.get("PROBMODE", 0)) == 3
             and s.prob_shortfalls is not None
+        )
+        has_clumping = (
+            "target2" in p.features.columns
+            and (p.features["target2"] > 0).any()
+            and s.clump_shortfalls is not None
         )
 
         rows = []
@@ -77,5 +84,17 @@ def target_met_server(
                     r["ptarget"] = "—"
                     r["P(met)"] = "—"
                     r["prob_gap"] = "—"
+            if has_clumping:
+                t2 = float(row.get("target2", 0.0))
+                ct = int(row.get("clumptype", 0))
+                if t2 > 0:
+                    clump_short = s.clump_shortfalls.get(fid, 0.0)
+                    r["target2"] = t2
+                    r["clumptype"] = ct
+                    r["clump_short"] = round(clump_short, 4)
+                else:
+                    r["target2"] = "—"
+                    r["clumptype"] = "—"
+                    r["clump_short"] = "—"
             rows.append(r)
         return pd.DataFrame(rows)

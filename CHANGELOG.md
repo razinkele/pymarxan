@@ -7,8 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Target: v0.2.0 — "full Marxan-classic parity". Remaining work: Phase 19
-(clumping / TARGET2) and Phase 20 (separation distance).
+Target: v0.2.0 — "full Marxan-classic parity". Remaining work: Phase 20
+(separation distance).
+
+### Added
+
+- **Phase 19 — TARGET2 / CLUMPTYPE / clumping ("type-4 species").** Marxan
+  v4 minimum-patch-size constraints, validated line-by-line against
+  ``clumping.cpp::PartialPen4`` and ``score_change.cpp::computeChangePenalty``
+  via a multi-agent design review.
+  - Optional ``target2`` column on ``spec.dat``: minimum amount per
+    contiguous patch for the feature to count toward its target.
+    ``target2 <= 0`` (default) disables clumping for the feature.
+  - Optional ``clumptype`` column: 0 = binary (sub-target contributes 0),
+    1 = half (``occ / 2``, "nicer step"), 2 = quadratic
+    (``occ² / target2``, NOT linear despite the User Manual phrasing).
+  - Writers omit both columns when at default, so legacy non-clumping
+    projects round-trip byte-identical.
+  - New ``pymarxan.solvers.clumping`` module exposes the pure-functional
+    Marxan-faithful math (``partial_pen4``, ``compute_feature_components``
+    via ``scipy.sparse.csgraph``, ``compute_baseline_penalty``,
+    ``compute_clump_penalty_from_scratch``, ``evaluate_solution_clumping``)
+    plus the mutable ``ClumpState`` companion to ``ProblemCache`` for
+    the SA / iterative-improvement inner loops.
+  - SA and iterative-improvement (removal + addition passes) honour
+    clumping natively: ``ClumpState.delta_penalty`` supplies the
+    type-4 penalty delta alongside the cache's deterministic delta
+    (cache excludes type-4 features from its raw-amount penalty path).
+  - ``MIPSolver`` gains ``mip_clump_strategy`` kwarg (default ``"drop"``):
+    deterministic relaxation solved; chance-constraint-style clump
+    shortfall reported post-hoc on ``Solution.clump_shortfalls`` /
+    ``Solution.clump_penalty``. ``"big_m"`` raises ``NotImplementedError``
+    pointing at a future phase.
+  - ``ZoneMIPSolver`` gains an ``__init__`` for API symmetry; per-zone
+    TARGET2 is explicitly out of scope.
+  - The heuristic stays clumping-blind during scoring; ``build_solution``
+    reports the gap post-hoc through the same Solution attrs.
+  - New ``Solver.supports_clumping()`` capability method (default True).
+  - Shiny UI: ``target2`` and ``clumptype`` columns editable in
+    ``feature_table``; ``target_met`` table shows ``target2`` /
+    ``clumptype`` / ``clump_short`` columns when active; help content
+    documents the Marxan source-of-truth and cites Ball-Possingham-Watts
+    (2009) and Metcalfe et al. (2015).
+  - References: Ball, Possingham, & Watts (2009). *Spatial Conservation
+    Prioritization*, Oxford University Press.
+    https://doi.org/10.1093/oso/9780199547760.003.0014. Metcalfe et al.
+    (2015). *Conservation Biology* 29(6): 1615–1625.
+    https://doi.org/10.1111/cobi.12571
 
 ## [0.2.0a1] — 2026-05-16
 

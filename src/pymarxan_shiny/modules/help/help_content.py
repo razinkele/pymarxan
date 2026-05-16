@@ -879,6 +879,30 @@ HELP_CONTENT: dict[str, ui.TagList] = {
             "doesn't optimise against them directly. For chance-constraint "
             "optimality, use SA, heuristic, or iterative-improvement."
         ),
+        _section("TARGET2 / clumping columns (Phase 19)"),
+        ui.p(
+            "When any feature has ``target2 > 0`` (Marxan \"type-4 species\" / "
+            "minimum-patch-size constraints), three additional columns appear:"
+        ),
+        _param_table([
+            ("target2", "Minimum amount of the feature required within a single contiguous clump for the clump to count toward the deterministic target."),
+            ("clumptype", "How sub-target clumps are scored: 0=binary (no credit), 1=half (occ/2), 2=quadratic (occ²/target2). Verified line-for-line against Marxan v4 clumping.cpp::PartialPen4."),
+            ("clump_short", "Raw shortfall: max(0, target·MISSLEVEL − held_eff), where held_eff applies the CLUMPTYPE rule per component. Non-zero means the reserve fails the patch-size requirement; the solver objective penalises this."),
+        ]),
+        _tip(
+            "If MIP was the solver, clump_short is computed post-hoc on the "
+            "deterministic solution — the MIP \"drop\" strategy doesn't "
+            "optimise against TARGET2 directly. For clumping-aware "
+            "optimality, use SA or iterative-improvement. The greedy "
+            "heuristic also stays clumping-blind during scoring and only "
+            "reports the gap post-hoc."
+        ),
+        ui.tags.p(
+            "References: Ball, Possingham & Watts (2009), Spatial Conservation "
+            "Prioritization, Oxford University Press; Metcalfe et al. (2015), "
+            "Conservation Biology 29(6): 1615–1625.",
+            class_="text-muted small",
+        ),
     ),
 
     # -----------------------------------------------------------------
