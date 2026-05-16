@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Release automation script (``scripts/release.sh``).** Captures the
+  manual workflow run for v0.2.0 / v0.3.0 / v0.4.0 / v0.4.1:
+  pre-flight safety checks → ``make check`` → bump pyproject.toml →
+  promote CHANGELOG ``[Unreleased]`` to ``[VERSION] — DATE`` → commit
+  → build wheel + sdist → tag → push → ``gh release`` with the
+  just-promoted CHANGELOG section as the release notes (no separate
+  copy to maintain). Supports ``--dry-run`` for verifying every step
+  before any side effect lands. Pre-flight refuses: dirty tree,
+  non-main branch, out-of-sync origin, existing tag, empty
+  ``[Unreleased]`` section. Smoke-tested via
+  ``tests/test_release_script.py`` (14 tests, ~3s with shared
+  dry-run fixture).
+
 ### Changed
 
 - **CI / Makefile cleanup.** Perf-budget benchmarks
