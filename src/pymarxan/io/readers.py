@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
+
+# Whitelist of recognised columns on spec.dat across Phases 18 (ptarget),
+# 19 (target2, clumptype), and 20 (sepdistance, sepnum). Anything else is
+# either a Marxan-classic column we don't support or — more likely — a typo
+# in the user's spec.dat that would silently default the real column to its
+# disabled sentinel. Round-3 H10 cross-phase observability fix.
+_KNOWN_SPEC_COLS: frozenset[str] = frozenset({
+    "id", "name", "target", "prop", "spf",
+    "ptarget", "target2", "clumptype",
+    "sepdistance", "sepnum",
+})
 
 
 def _read_dat(path: str | Path) -> pd.DataFrame:
@@ -76,8 +88,21 @@ def read_spec(path: str | Path) -> pd.DataFrame:
         Features data.
     """
     df = _read_dat(path)
+
+    # Round-3 H10: warn on unrecognised columns BEFORE we add our own
+    # defaults. Catches typos like `sepnnum`, `targt2`, `ptraget`, `clumptpe`
+    # across Phases 18+19+20 in one shot.
+    extra = set(df.columns) - _KNOWN_SPEC_COLS
+    if extra:
+        warnings.warn(
+            f"spec.dat has unrecognised columns {sorted(extra)} — these will "
+            f"be ignored. Did you mean one of {sorted(_KNOWN_SPEC_COLS)}?",
+            UserWarning,
+            stacklevel=2,
+        )
+
     df["id"] = df["id"].astype(int)
-    for col in ("target", "prop", "spf", "ptarget", "target2"):
+    for col in ("target", "prop", "spf", "ptarget", "target2", "sepdistance"):
         if col in df.columns:
             df[col] = df[col].astype(float)
     if "target" not in df.columns:
@@ -103,6 +128,40 @@ def read_spec(path: str | Path) -> pd.DataFrame:
             )
     else:
         df["clumptype"] = 0
+
+    # Phase 20 separation distance columns. Distinct validation from
+    # clumptype's {0,1,2} set-membership check.
+    if "sepdistance" in df.columns:
+        if (df["sepdistance"] < 0).any():
+            bad = df.loc[df["sepdistance"] < 0, "sepdistance"].tolist()
+            raise ValueError(
+                f"Invalid sepdistance values {bad} in spec.dat — must be >= 0."
+            )
+    else:
+        df["sepdistance"] = 0.0
+
+    if "sepnum" in df.columns:
+        # Catch non-integer floats BEFORE astype(int) truncates silently
+        # (round-2 M6 / round-3 fix). E.g. `2.7` → reject, not → `2`.
+        if df["sepnum"].dtype.kind == "f":
+            int_cast = df["sepnum"].astype(int)
+            mismatched = df["sepnum"] != int_cast.astype(df["sepnum"].dtype)
+            if mismatched.any():
+                bad = df.loc[mismatched, "sepnum"].tolist()
+                raise ValueError(
+                    f"Invalid sepnum values {bad} in spec.dat — must be integer."
+                )
+        df["sepnum"] = df["sepnum"].astype(int)
+        if (df["sepnum"] < 0).any():
+            bad = df.loc[df["sepnum"] < 0, "sepnum"].tolist()
+            raise ValueError(
+                f"Invalid sepnum values {bad} in spec.dat — must be >= 0."
+            )
+    else:
+        # 1 is Marxan's "separation disabled" sentinel (CountSeparation2
+        # trivially returns >=1 for any represented feature).
+        df["sepnum"] = 1
+
     return df
 
 

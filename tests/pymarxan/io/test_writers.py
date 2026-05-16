@@ -30,13 +30,17 @@ class TestWriteSpec:
         write_spec(original, out_path)
         loaded = read_spec(out_path)
         # read_spec adds disabled-sentinel defaults for the optional
-        # Phase 18 (ptarget=-1) and Phase 19 (target2=0, clumptype=0)
-        # columns. Drop them for byte-identical round-trip equality with
-        # the legacy 4-column spec.
+        # Phase 18 (ptarget=-1), Phase 19 (target2=0, clumptype=0), and
+        # Phase 20 (sepdistance=0, sepnum=1) columns. Drop them for
+        # byte-identical round-trip equality with the legacy 4-column spec.
         assert (loaded["ptarget"] == -1.0).all()
         assert (loaded["target2"] == 0.0).all()
         assert (loaded["clumptype"] == 0).all()
-        loaded = loaded.drop(columns=["ptarget", "target2", "clumptype"])
+        assert (loaded["sepdistance"] == 0.0).all()
+        assert (loaded["sepnum"] == 1).all()
+        loaded = loaded.drop(
+            columns=["ptarget", "target2", "clumptype", "sepdistance", "sepnum"]
+        )
         pd.testing.assert_frame_equal(original, loaded)
 
 class TestWriteInputDat:

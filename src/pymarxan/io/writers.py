@@ -36,6 +36,8 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     - ``ptarget`` (Marxan PTARGET2D, default ``-1``) — Phase 18.
     - ``target2`` (Marxan TARGET2 minimum patch occupancy, default ``0``) — Phase 19.
     - ``clumptype`` (Marxan CLUMPTYPE 0/1/2, default ``0`` binary) — Phase 19.
+    - ``sepdistance`` (Marxan SEPDISTANCE, default ``0``) — Phase 20.
+    - ``sepnum`` (Marxan SEPNUM, default ``1`` — Marxan's "disabled" sentinel) — Phase 20.
 
     Parameters
     ----------
@@ -50,6 +52,10 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
         df = df.drop(columns=["target2"])
     if "clumptype" in df.columns and (df["clumptype"] == 0).all():
         df = df.drop(columns=["clumptype"])
+    if "sepdistance" in df.columns and (df["sepdistance"] == 0).all():
+        df = df.drop(columns=["sepdistance"])
+    if "sepnum" in df.columns and (df["sepnum"] <= 1).all():
+        df = df.drop(columns=["sepnum"])
     df.to_csv(path, index=False)
 
 
