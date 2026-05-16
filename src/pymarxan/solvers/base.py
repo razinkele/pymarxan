@@ -33,6 +33,12 @@ class Solution:
     # clump_penalty: Σ baseline · SPF · fractional_shortfall
     clump_shortfalls: dict[int, float] | None = None
     clump_penalty: float | None = None
+    # SEPDISTANCE / SEPNUM outputs (Phase 20) — populated when any feature
+    # is separation-active (sepdistance > 0 AND sepnum > 1). None otherwise.
+    # sep_shortfalls: feature_id -> max(0, sepnum - count); integer-valued.
+    # sep_penalty: Σ baseline · SPF · compute_sep_penalty(count, sepnum)
+    sep_shortfalls: dict[int, int] | None = None
+    sep_penalty: float | None = None
 
     @property
     def all_targets_met(self) -> bool:

@@ -508,6 +508,40 @@ def build_solution(
             problem, selected,
         )
 
+    # Phase 20 SEPDISTANCE/SEPNUM: populate per-feature separation gap and
+    # total penalty when any feature is sep-active. Round-3 M8: catch only
+    # PUCoordinatesUnavailableError so internal bugs in count_separation
+    # propagate; a heuristic-only user on a no-geometry problem who set
+    # sepnum>1 still gets a Solution with sep_shortfalls=None instead of
+    # losing their selection.
+    sep_shortfalls: dict[int, int] | None = None
+    sep_penalty_val: float | None = None
+    if (
+        "sepnum" in problem.features.columns
+        and "sepdistance" in problem.features.columns
+        and (
+            (problem.features["sepnum"] > 1)
+            & (problem.features["sepdistance"] > 0)
+        ).any()
+    ):
+        from pymarxan.solvers.separation import (
+            PUCoordinatesUnavailableError,
+            evaluate_solution_separation,
+        )
+        try:
+            sep_shortfalls, sep_penalty_val = evaluate_solution_separation(
+                problem, selected,
+            )
+        except PUCoordinatesUnavailableError as exc:
+            import warnings
+            warnings.warn(
+                f"Separation evaluation skipped: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            # sep_shortfalls / sep_penalty stay None; deterministic
+            # solution still returns.
+
     return Solution(
         selected=selected.copy(),
         cost=total_cost,
@@ -521,4 +555,6 @@ def build_solution(
         prob_penalty=prob_penalty_val,
         clump_shortfalls=clump_shortfalls,
         clump_penalty=clump_penalty_val,
+        sep_shortfalls=sep_shortfalls,
+        sep_penalty=sep_penalty_val,
     )
