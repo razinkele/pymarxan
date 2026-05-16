@@ -132,8 +132,15 @@ def run_panel_server(
                     progress.status = "done"
                     progress.message = "Solver returned no solutions."
             except Exception as e:
+                # Round-3 CR3: include the full traceback so users see the
+                # file + line where the crash happened, not just a bare
+                # str(e). Also set message so the progress card visually
+                # leaves the "running" state instead of stalling on its
+                # last percent.
+                import traceback
                 progress.status = "error"
-                progress.error = str(e)
+                progress.error = f"{e!r}\n{traceback.format_exc()}"
+                progress.message = "Solver failed (see error below)."
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()

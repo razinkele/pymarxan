@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 20 round-3 backlog cleanup.** Three deferred items from the
+  Phase 20 review process now land:
+  - **CR3 (Shiny run_panel crash traceback visibility):** when the
+    solver thread raises, ``progress.error`` now carries the full
+    ``traceback.format_exc()`` instead of a bare ``str(e)``, and
+    ``progress.message`` is updated so the progress card visually
+    leaves the running state. Users see file + line of the failure
+    instead of a stalled progress bar.
+  - **CR4 (warning visibility for non-Shiny users):** README now
+    documents that pymarxan emits ``UserWarning`` from
+    ``ProblemCache.from_problem`` and ``read_spec``, and that strict-mode
+    users (``python -W error`` or pytest ``filterwarnings =
+    error::UserWarning``) should filter via
+    ``warnings.filterwarnings("always", category=UserWarning,
+    module="pymarxan")``. All four ``warnings.warn`` call sites already
+    use ``stacklevel=2`` so source locations point to user code, not
+    pymarxan internals.
+  - **bench_sep.py (perf gate):** new ``tests/benchmarks/bench_sep.py``
+    pins the round-2 CR1 ``SepState`` memory-shape claim with an actual
+    measurement — per-flip ``delta_penalty`` median under 500 µs on a
+    500-PU × 5-sep-features problem; ``SepState.from_selection`` under
+    50 ms. Run via ``make bench``, not ``make check``.
+
 ## [0.3.0] — 2026-05-17
 
 The v0.3.0 milestone closes "prioritizr-parity" for pymarxan's MIP path.

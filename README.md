@@ -117,12 +117,28 @@ pymarxan (three-layer monorepo)
 ## Development
 
 ```bash
-make test        # Full test suite (1060 tests) with coverage
+make test        # Full test suite with coverage
 make test-fast   # Skip slow SA tests (~15s)
 make lint        # Ruff linter
 make types       # mypy type checker
 make check       # All of the above
 make docs        # Generate API docs with pdoc
+```
+
+### Warnings
+
+`pymarxan` emits `UserWarning` from `ProblemCache.from_problem` and from
+`read_spec` to flag no-op configurations (e.g. SEPDISTANCE on a
+geographic CRS, or `sepnum > 1` with `sepdistance == 0`) and `spec.dat`
+column typos (`sepnnum`, `targt2`, `ptraget`, `clumptpe`, ...).
+
+Users running with `python -W error` or pytest `filterwarnings =
+error::UserWarning` should filter pymarxan warnings explicitly so they
+surface as warnings rather than exceptions:
+
+```python
+import warnings
+warnings.filterwarnings("always", category=UserWarning, module="pymarxan")
 ```
 
 ## Docker
