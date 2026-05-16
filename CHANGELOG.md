@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 18 + 19 benchmark coverage.** Two new
+  ``tests/benchmarks/`` files mirror the Phase 20 ``bench_sep.py``
+  perf gate:
+  - ``bench_prob.py`` — per-flip ``compute_delta_objective`` under
+    PROBMODE 3 must run median < 2.5 ms on a 500-PU × 10-feature
+    problem. Catches accidental O(n_pu²) scans in the
+    ``_compute_zscore_penalty`` path.
+  - ``bench_clump.py`` — per-flip ``ClumpState.delta_penalty``
+    median < 5 ms on a 400-PU × 5-feature grid problem with
+    TARGET2 active. Catches regressions in the affected-features
+    short-circuit and the per-feature ``connected_components``
+    recompute.
+  - Budgets sized at ~2.5× the measured median on the development
+    machine so genuine regressions trip the gate without normal
+    cross-machine variance breaking CI. Run via ``make bench``.
+
 ## [0.4.1] — 2026-05-17
 
 Pure UI patch — closes the last item deferred from the Phase 24 plan.
