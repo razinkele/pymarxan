@@ -42,10 +42,16 @@ def test_relative_targets_are_fraction_of_total():
     assert targets == {1: pytest.approx(30.0), 2: pytest.approx(3.0)}
 
 
+def test_relative_targets_out_of_range_raises():
+    problem = _problem()
+    with pytest.raises(ValueError, match="fraction"):
+        relative_targets(problem, 1.5)
+
+
 def test_loglinear_clamps_below_lower_and_above_upper():
     problem = _problem()
-    # below lower_area (10 <= 10) -> upper_target fraction 1.0;
-    # above upper_area (100 >= 100) -> lower_target fraction 0.1
+    # rare total 10 is at lower_area -> gets lower_target fraction 1.0 -> 10.0;
+    # common total 100 is at upper_area -> gets upper_target fraction 0.1 -> 10.0
     targets = loglinear_targets(
         problem,
         lower_area=10.0,
@@ -53,9 +59,9 @@ def test_loglinear_clamps_below_lower_and_above_upper():
         upper_area=100.0,
         upper_target=0.1,
     )
-    # rare total 10 at/below lower_area -> 100% -> 10.0
+    # rare total 10 at/below lower_area -> lower_target 1.0 -> 100% -> 10.0
     assert targets[2] == pytest.approx(10.0)
-    # common total 100 at/above upper_area -> 10% -> 10.0
+    # common total 100 at/above upper_area -> upper_target 0.1 -> 10% -> 10.0
     assert targets[1] == pytest.approx(10.0)
 
 
@@ -84,6 +90,18 @@ def test_loglinear_interpolates_on_log_scale():
     assert targets[1] == pytest.approx(50.0)
 
 
+def test_loglinear_invalid_target_fraction_raises():
+    problem = _problem()
+    with pytest.raises(ValueError, match="target"):
+        loglinear_targets(
+            problem,
+            lower_area=10.0,
+            lower_target=5.0,
+            upper_area=100.0,
+            upper_target=0.1,
+        )
+
+
 def test_group_targets_apply_group_fraction_to_members():
     problem = _problem()
     groups = {1: "abundant", 2: "scarce"}
@@ -97,6 +115,14 @@ def test_group_targets_unknown_group_raises():
     problem = _problem()
     with pytest.raises(ValueError, match="group"):
         group_targets(problem, {1: "x", 2: "y"}, {"x": 0.1})
+
+
+def test_group_targets_negative_fraction_raises():
+    problem = _problem()
+    groups = {1: "abundant", 2: "scarce"}
+    fractions = {"abundant": -0.5, "scarce": 0.5}
+    with pytest.raises(ValueError, match="fraction"):
+        group_targets(problem, groups, fractions)
 
 
 def test_apply_targets_writes_targets_onto_features():
