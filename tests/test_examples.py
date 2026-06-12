@@ -33,6 +33,11 @@ def baltic():
     return _load("baltic_marine_planning.py")
 
 
+@pytest.fixture(scope="module")
+def validation():
+    return _load("validate_marxan_parity.py")
+
+
 def test_baltic_problem_shape(baltic):
     problem, grid = baltic.build_baltic_problem()
     assert problem.n_planning_units == 256
@@ -89,3 +94,30 @@ def test_gap_closes_after_reserve(baltic):
     assert gap["met_after"].all()
     # And protection strictly improves over the existing-reserve baseline.
     assert (gap["pct_after"] >= gap["pct_before"]).all()
+
+
+# --------------------------------------------------------------------
+# validate_marxan_parity.py
+# --------------------------------------------------------------------
+
+
+def test_validation_exact_optimum_is_ground_truth(validation):
+    """MIP finds the known optimum (35.0 on the six-unit project) and the
+    heuristics meet targets without ever beating it."""
+    problem = validation.load_simple_problem()
+    reports = validation.solve_all(problem)
+    by_name = {r.name: r for r in reports}
+
+    mip = by_name["MIP (exact)"]
+    assert mip.cost == pytest.approx(35.0)
+    assert mip.targets_met
+
+    for r in reports:
+        assert r.targets_met, f"{r.name} left a target unmet"
+        # No heuristic may come in below the exact optimum.
+        assert r.cost >= mip.cost - 1e-6, f"{r.name} beat the exact optimum"
+
+
+def test_validation_marxan_format_roundtrips(validation):
+    problem = validation.load_simple_problem()
+    assert validation.roundtrips_through_marxan_format(problem)

@@ -42,3 +42,16 @@ Things it demonstrates that the tutorial does not:
 - **Irreplaceability is about scarcity** — widespread habitats leave the
   map flexible, but the single concentrated spawning ground is critical at
   every target level.
+
+## `validate_marxan_parity.py`
+
+The runnable companion to [`docs/VALIDATION.md`](../docs/VALIDATION.md).
+Loads the bundled six-unit project in **native Marxan format**, solves it
+with every engine (exact MIP, simulated annealing, greedy), and checks
+that the heuristics meet all targets and never beat the exact optimum
+(35.0, verifiable by hand), then confirms the problem round-trips through
+the Marxan file format unchanged.
+
+```bash
+python examples/validate_marxan_parity.py
+```
