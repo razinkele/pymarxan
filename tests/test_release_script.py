@@ -82,9 +82,11 @@ def test_release_script_dry_run_reaches_done(dry_run_output):
     "Promote CHANGELOG",
     "Commit:",
     "Build wheel",
+    "twine check",
     "Tag v9.9.9",
     "Push main + tag",
     "GitHub Release",
+    "Publish to PyPI",
 ])
 def test_release_script_dry_run_announces_every_step(dry_run_output, step):
     """Each named step appears in the dry-run output — keeps the
@@ -95,3 +97,33 @@ def test_release_script_dry_run_announces_every_step(dry_run_output, step):
         f"step '{step}' missing from dry-run output:\n"
         f"{dry_run_output.stdout}"
     )
+
+
+def test_release_script_default_publishes_to_pypi(dry_run_output):
+    """Default (no flag) targets the real PyPI index, not TestPyPI."""
+    assert dry_run_output.returncode == 0
+    assert "--repository pypi" in dry_run_output.stdout
+    assert "testpypi" not in dry_run_output.stdout
+
+
+def test_release_script_no_pypi_skips_upload():
+    """--no-pypi reaches Done but never announces a PyPI publish step."""
+    result = _run("9.9.9", "--dry-run", "--no-pypi")
+    assert result.returncode == 0, result.stderr
+    assert "Done — v9.9.9 released" in result.stdout
+    assert "Publish to PyPI" not in result.stdout
+    assert "twine" not in result.stdout.lower()
+
+
+def test_release_script_test_pypi_targets_testpypi():
+    """--test-pypi routes the upload to the testpypi repository."""
+    result = _run("9.9.9", "--dry-run", "--test-pypi")
+    assert result.returncode == 0, result.stderr
+    assert "--repository testpypi" in result.stdout
+
+
+def test_release_script_rejects_unknown_option():
+    """An unrecognised flag is a usage error, not a silent no-op."""
+    result = _run("9.9.9", "--bogus")
+    assert result.returncode != 0
+    assert "unknown option" in result.stderr

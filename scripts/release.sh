@@ -7,12 +7,20 @@
 # GitHub Release with the just-promoted CHANGELOG section as the body.
 #
 # Usage:
-#   scripts/release.sh VERSION              # full release
-#   scripts/release.sh VERSION --dry-run    # show every step, change nothing
+#   scripts/release.sh VERSION                 # full release + publish to PyPI
+#   scripts/release.sh VERSION --dry-run       # show every step, change nothing
+#   scripts/release.sh VERSION --test-pypi     # publish to TestPyPI instead
+#   scripts/release.sh VERSION --no-pypi       # GitHub Release only, skip PyPI
 #
 # Examples:
 #   scripts/release.sh 0.4.2
 #   scripts/release.sh 0.5.0 --dry-run
+#   scripts/release.sh 0.4.2rc1 --test-pypi
+#
+# PyPI credentials: set the TWINE_PASSWORD env var to a PyPI API token
+# (TWINE_USERNAME defaults to __token__), or configure ~/.pypirc. The
+# pre-flight check refuses to start a publishing release without one, so
+# you never get a pushed tag + GitHub Release that then fails to upload.
 #
 # Pre-flight safety:
 #   - clean working tree (no uncommitted changes / untracked files in src/)
@@ -42,10 +50,21 @@ EOF
 fi
 
 VERSION="$1"
+shift
 DRY_RUN=0
-if [[ "${2:-}" == "--dry-run" ]]; then
-    DRY_RUN=1
-fi
+PUBLISH_PYPI=1
+PYPI_REPO="pypi"
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)   DRY_RUN=1 ;;
+        --test-pypi) PYPI_REPO="testpypi" ;;
+        --no-pypi)   PUBLISH_PYPI=0 ;;
+        *)
+            echo "error: unknown option '$arg'" >&2
+            exit 2
+            ;;
+    esac
+done
 
 # Refuse to take a leading `v` — the script adds it for the tag and
 # users should pass the bare PEP 440 version string for pyproject.toml.
@@ -120,6 +139,41 @@ if [[ -z "$UNRELEASED_BODY" ]]; then
     echo "error: [Unreleased] section in CHANGELOG.md is empty —" >&2
     echo "       nothing to ship in $TAG" >&2
     exit 1
+fi
+
+# If we're going to publish to PyPI, verify the tooling and credentials
+# are present NOW — before any irreversible commit/tag/push. Otherwise a
+# release could push a tag + GitHub Release and then fail at the very
+# last step with no way to retry the upload cleanly.
+# Default so `set -u` is safe even when PyPI publishing is off or the
+# real tooling check is skipped under --dry-run.
+TWINE=(python3 -m twine)
+if [[ $PUBLISH_PYPI -eq 1 ]]; then
+    step "Pre-flight: twine available + PyPI credentials present (target: $PYPI_REPO)"
+    if command -v twine >/dev/null 2>&1; then
+        TWINE=(twine)
+    elif python3 -m twine --version >/dev/null 2>&1; then
+        TWINE=(python3 -m twine)
+    elif [[ $DRY_RUN -eq 1 ]]; then
+        echo "  [dry-run] note: twine not installed — a real release would fail here"
+    else
+        echo "error: twine not found — install it (pip install twine) or pass --no-pypi" >&2
+        exit 1
+    fi
+    # Credentials come from TWINE_PASSWORD (an API token) or ~/.pypirc.
+    # We can't validate the token without uploading, but we can refuse to
+    # start if neither source exists. Dry-run only warns — it must stay
+    # runnable in CI without secrets.
+    if [[ -z "${TWINE_PASSWORD:-}" && ! -f "$HOME/.pypirc" ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            echo "  [dry-run] note: no PyPI credentials — a real release would fail here"
+        else
+            echo "error: no PyPI credentials found." >&2
+            echo "       set TWINE_PASSWORD to a PyPI API token (TWINE_USERNAME" >&2
+            echo "       defaults to __token__), configure ~/.pypirc, or pass --no-pypi" >&2
+            exit 1
+        fi
+    fi
 fi
 
 # --- run checks BEFORE making any changes -----------------------------
@@ -219,6 +273,20 @@ step "Build wheel + sdist"
 run rm -rf dist/
 run python -m build
 
+# Validate the artifacts BEFORE any irreversible push. `twine check`
+# catches malformed metadata / unrenderable README that PyPI would
+# reject — better to find out here than after the tag is public.
+if [[ $PUBLISH_PYPI -eq 1 ]]; then
+    step "Validate artifacts with \`twine check\`"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "  + ${TWINE[*]} check dist/pymarxan-${VERSION}-py3-none-any.whl dist/pymarxan-${VERSION}.tar.gz"
+    else
+        "${TWINE[@]}" check \
+            "dist/pymarxan-${VERSION}-py3-none-any.whl" \
+            "dist/pymarxan-${VERSION}.tar.gz"
+    fi
+fi
+
 step "Tag $TAG"
 run git tag -a "$TAG" -m "$TAG"
 
@@ -256,7 +324,27 @@ else
     echo "      --title '$TAG' --notes-file <extracted CHANGELOG section>"
 fi
 
+# --- publish to PyPI --------------------------------------------------
+
+if [[ $PUBLISH_PYPI -eq 1 ]]; then
+    step "Publish to PyPI ($PYPI_REPO)"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "  + ${TWINE[*]} upload --repository $PYPI_REPO dist/pymarxan-${VERSION}-py3-none-any.whl dist/pymarxan-${VERSION}.tar.gz"
+    else
+        "${TWINE[@]}" upload --repository "$PYPI_REPO" \
+            "dist/pymarxan-${VERSION}-py3-none-any.whl" \
+            "dist/pymarxan-${VERSION}.tar.gz"
+    fi
+fi
+
 step "Done — $TAG released"
 if [[ $DRY_RUN -eq 0 ]]; then
     echo "    https://github.com/razinkele/pymarxan/releases/tag/$TAG"
+    if [[ $PUBLISH_PYPI -eq 1 ]]; then
+        if [[ "$PYPI_REPO" == "testpypi" ]]; then
+            echo "    https://test.pypi.org/project/pymarxan/$VERSION/"
+        else
+            echo "    https://pypi.org/project/pymarxan/$VERSION/"
+        fi
+    fi
 fi
