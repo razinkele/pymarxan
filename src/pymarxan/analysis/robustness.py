@@ -98,16 +98,29 @@ def evaluate_plans_across_scenarios(
 ) -> tuple[np.ndarray, list[str], list[str]]:
     """Evaluate each plan's objective under every scenario problem.
 
+    All scenarios are assumed to share a common planning-unit set: each
+    solution's ``selected`` array must have one entry per planning unit, in
+    the same order, for every scenario problem. Scenarios that vary costs,
+    targets, or feature amounts over a fixed set of units are the intended
+    use; scenarios that add or drop planning units are not supported and
+    raise ``ValueError`` rather than mis-aligning silently.
+
     Args:
         problems: Mapping of scenario label to its :class:`ConservationProblem`.
         solutions: Mapping of plan label to a :class:`Solution` whose
-            ``selected`` array is re-evaluated under each scenario.
+            ``selected`` array is re-evaluated under each scenario. Its
+            length must equal ``len(problem.planning_units)`` for every
+            scenario.
         blm: Boundary-length modifier used for the objective.
 
     Returns:
         ``(cost_matrix, plan_labels, scenario_labels)`` where
         ``cost_matrix[i, j]`` is plan ``i`` evaluated under scenario ``j``.
         Feed it straight into :func:`minimax_regret`.
+
+    Raises:
+        ValueError: If a solution's selection length does not match a
+            scenario's planning-unit count.
     """
     plan_labels = list(solutions.keys())
     scenario_labels = list(problems.keys())
@@ -115,8 +128,15 @@ def evaluate_plans_across_scenarios(
 
     for j, slabel in enumerate(scenario_labels):
         problem = problems[slabel]
+        n_pu = len(problem.planning_units)
         pu_index = {int(pid): k for k, pid in enumerate(problem.planning_units["id"])}
         for i, plabel in enumerate(plan_labels):
             selected = np.asarray(solutions[plabel].selected, dtype=bool)
+            if selected.shape[0] != n_pu:
+                raise ValueError(
+                    f"plan {plabel!r} has {selected.shape[0]} selections but "
+                    f"scenario {slabel!r} has {n_pu} planning units; scenarios "
+                    "must share a common planning-unit set"
+                )
             matrix[i, j] = compute_objective(problem, selected, pu_index, blm)
     return matrix, plan_labels, scenario_labels

@@ -112,3 +112,19 @@ def test_non_2d_cost_matrix_raises():
 def test_empty_cost_matrix_raises():
     with pytest.raises(ValueError, match="empty"):
         minimax_regret(np.zeros((0, 3)))
+
+
+def test_evaluate_plans_mismatched_pu_count_raises():
+    # A plan sized for a 2-PU problem cannot be evaluated under a 3-PU one.
+    two_pu = _problem([10.0, 20.0])
+    three_pu = ConservationProblem(
+        pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]}),
+        pd.DataFrame({"id": [1], "name": ["sp"], "target": [1.0], "spf": [1.0]}),
+        pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]}),
+    )
+    plan = _sol([True, False])  # 2 selections
+    with pytest.raises(ValueError, match="planning-unit set"):
+        evaluate_plans_across_scenarios(
+            problems={"ok": two_pu, "bad": three_pu},
+            solutions={"plan": plan},
+        )
