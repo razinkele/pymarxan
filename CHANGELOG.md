@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JOSS paper draft (``paper/paper.md`` + ``paper/paper.bib``).** A Journal
+  of Open Source Software submission presenting pymarxan, positioned
+  against dormant Marxan (C++) and R-only prioritizr. All six references
+  verified against real literature; author ORCID left as a flagged TODO
+  for the maintainer to fill before submission.
+- **Validation harness + ``docs/VALIDATION.md``.**
+  ``examples/validate_marxan_parity.py`` loads the bundled six-unit project
+  in native Marxan format, solves it with exact MIP + simulated annealing +
+  greedy, and checks the heuristics meet every target without beating the
+  hand-verified exact optimum (cost 35.0, reserve ``{2, 4, 6}``), then
+  confirms a Marxan-format round-trip. ``docs/VALIDATION.md`` documents the
+  methodology and scopes the C++-binary comparison as opt-in via
+  ``MarxanBinarySolver``. +2 tests.
 - **PyPI publishing in ``scripts/release.sh``.** The release script now
   publishes to PyPI as its final step (after the GitHub Release), via
   ``twine``. Opt out with ``--no-pypi`` (GitHub-only, the previous
