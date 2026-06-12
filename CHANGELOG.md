@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Area-based representation reporting (``pymarxan.analysis.representation``).**
+  New ``compute_representation(problem, solution, threshold=0.30)`` reports,
+  per feature, the total amount, the amount represented by a solution, the
+  percentage represented, and whether it clears a uniform policy threshold
+  (default 30% for the Kunming-Montreal "30x30" / GBF Target 3), plus a
+  summary of how many features are met. Distinct from gap analysis (which
+  scores ``status==2`` protection against each feature's optimisation
+  target). Tier-A feature from the 2026-06-12 ecosystem survey. +9 tests.
 - **Distributional-equity analysis (``pymarxan.analysis.equity``).** New
   ``compute_equity(problem, solution, groups, value=...)`` reports how a
   reserve's value (cost burden, unit count, or a custom per-PU benefit)
