@@ -13,7 +13,15 @@ from pymarxan.connectivity.decay import negative_exponential
 
 
 def distance_matrix_from_points(coords: np.ndarray) -> np.ndarray:
-    """Euclidean pairwise distance matrix from an ``(n, 2)`` coordinate array."""
+    """Euclidean pairwise distance matrix from point coordinates.
+
+    Args:
+        coords: ``(n, 2)`` array of planning-unit coordinates (e.g. cell
+            centroids), in the units distances should be measured in.
+
+    Returns:
+        ``(n, n)`` symmetric matrix of Euclidean distances, zero diagonal.
+    """
     from scipy.spatial.distance import cdist
 
     coords = np.asarray(coords, dtype=float)
@@ -31,10 +39,11 @@ def smooth_distribution(
     """Smooth a per-unit feature distribution with a dispersal kernel.
 
     The kernel is ``K_ij = exp(-alpha * distance_ij)`` (so the diagonal is
-    1). With ``normalize=True`` the kernel is column-normalised so total
-    amount is conserved — each source unit's amount is redistributed across
-    units in proportion to the kernel. With ``normalize=False`` the result
-    is the raw ``K @ amounts`` accumulation (total grows).
+    1). With ``normalize=True`` the kernel is column-normalised
+    (``K / K.sum(axis=0)``): each destination unit's incoming kernel
+    weights sum to 1, so the redistribution conserves total amount
+    (``sum(output) == sum(input)``). With ``normalize=False`` the result is
+    the raw ``K @ amounts`` accumulation (total grows).
 
     Args:
         amounts: Length-``n`` array of per-unit amounts for one feature.
