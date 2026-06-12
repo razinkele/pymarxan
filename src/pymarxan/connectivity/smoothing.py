@@ -17,7 +17,8 @@ def distance_matrix_from_points(coords: np.ndarray) -> np.ndarray:
     from scipy.spatial.distance import cdist
 
     coords = np.asarray(coords, dtype=float)
-    return cdist(coords, coords)
+    result: np.ndarray = cdist(coords, coords)
+    return result
 
 
 def smooth_distribution(
