@@ -46,6 +46,7 @@ from modules.mapping.spatial_grid import spatial_grid_server, spatial_grid_ui
 from modules.probability.probability_config import probability_config_server, probability_config_ui
 from modules.results.convergence import convergence_server, convergence_ui
 from modules.results.export import export_server, export_ui
+from modules.results.representation import representation_server, representation_ui
 from modules.results.scenario_compare import scenario_compare_server, scenario_compare_ui
 from modules.results.summary_table import summary_table_server, summary_table_ui
 from modules.results.target_met import target_met_server, target_met_ui
@@ -146,6 +147,7 @@ app_ui = ui.page_navbar(
         ui.navset_tab(
             ui.nav_panel("Summary", summary_table_ui("summary_table")),
             ui.nav_panel("Targets", target_met_ui("target_met")),
+            ui.nav_panel("Representation", representation_ui("representation")),
             ui.nav_panel("Convergence", convergence_ui("convergence")),
             ui.nav_panel("Scenarios", scenario_compare_ui("scenario_compare")),
             ui.nav_panel("Export", export_ui("export")),
@@ -315,6 +317,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     # --- Results ---
     summary_table_server("summary_table", problem=problem, solution=current_solution)
     target_met_server("target_met", problem=problem, solution=current_solution)
+    representation_server("representation", problem=problem, solution=current_solution)
     convergence_server("convergence", all_solutions=all_solutions)
     scenario_compare_server(
         "scenario_compare",
