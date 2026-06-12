@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Automatic target-setting rules (``pymarxan.targets``).** ``relative_targets``
+  (fraction of each feature's total), ``loglinear_targets`` (IUCN-style
+  range-size, log-linear interpolation between two area thresholds),
+  ``group_targets`` (per-group relative target), and ``apply_targets`` to
+  write a ``{feature_id: target}`` mapping onto a problem. Tier-A feature
+  from the 2026-06-12 ecosystem survey (prioritizr ``add_auto_targets``
+  parity). +10 tests.
+- **Distribution smoothing (``pymarxan.connectivity.smoothing``).**
+  ``smooth_distribution`` spreads a feature's per-unit amounts to nearby
+  units via a negative-exponential dispersal kernel (column-normalised and
+  mass-conserving by default), plus ``distance_matrix_from_points``. The
+  planning-unit analogue of Zonation's distribution smoothing. +5 tests.
+- **Multi-scenario robustness (``pymarxan.analysis.robustness``).**
+  ``minimax_regret`` selects the most robust plan from a plans-by-scenarios
+  cost matrix (minimax regret and minimax worst-case cost), and
+  ``evaluate_plans_across_scenarios`` builds that matrix by re-evaluating
+  each plan's objective under every scenario problem. Complements the
+  existing no-regrets overlap (``compute_selection_frequency``). +9 tests.
+- **Shiny "Representation (30x30)" panel.** New results module exposing
+  ``compute_representation`` with a threshold slider and per-feature table.
 - **Area-based representation reporting (``pymarxan.analysis.representation``).**
   New ``compute_representation(problem, solution, threshold=0.30)`` reports,
   per feature, the total amount, the amount represented by a solution, the
