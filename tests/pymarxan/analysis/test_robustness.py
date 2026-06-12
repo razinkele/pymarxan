@@ -92,3 +92,23 @@ def test_evaluate_plans_builds_objective_matrix():
     assert matrix[plans.index("pick1"), scens.index("A")] == pytest.approx(10.0)
     assert matrix[plans.index("pick1"), scens.index("B")] == pytest.approx(20.0)
     assert matrix[plans.index("pick2"), scens.index("B")] == pytest.approx(10.0)
+    assert matrix[plans.index("pick2"), scens.index("A")] == pytest.approx(20.0)
+
+
+def test_to_dataframe_shape():
+    result = minimax_regret(
+        np.array([[10.0, 20.0], [15.0, 5.0]]), plan_labels=["A", "B"]
+    )
+    df = result.to_dataframe()
+    assert set(df.columns) == {"plan", "max_regret", "worst_case_cost"}
+    assert len(df) == 2
+
+
+def test_non_2d_cost_matrix_raises():
+    with pytest.raises(ValueError, match="2-D"):
+        minimax_regret(np.array([1.0, 2.0, 3.0]))
+
+
+def test_empty_cost_matrix_raises():
+    with pytest.raises(ValueError, match="empty"):
+        minimax_regret(np.zeros((0, 3)))

@@ -65,6 +65,8 @@ def minimax_regret(
     if cost.ndim != 2:
         raise ValueError("cost_matrix must be 2-D (plans x scenarios)")
     n_plans, n_scen = cost.shape
+    if n_plans == 0 or n_scen == 0:
+        raise ValueError("cost_matrix is empty (zero plans or scenarios)")
     plans = list(plan_labels) if plan_labels is not None else list(range(n_plans))
     scens = (
         list(scenario_labels)
