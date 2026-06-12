@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Distributional-equity analysis (``pymarxan.analysis.equity``).** New
+  ``compute_equity(problem, solution, groups, value=...)`` reports how a
+  reserve's value (cost burden, unit count, or a custom per-PU benefit)
+  distributes across social/spatial groups, returning per-group totals,
+  shares, and the Gini coefficient of the group totals (0 = perfectly
+  even). First of the Tier-A "modern conservation planning" features from
+  the 2026-06-12 ecosystem survey; motivated by Gopalakrishna et al.
+  (2024), PNAS. +9 tests.
 - **JOSS paper draft (``paper/paper.md`` + ``paper/paper.bib``).** A Journal
   of Open Source Software submission presenting pymarxan, positioned
   against dormant Marxan (C++) and R-only prioritizr. All six references
