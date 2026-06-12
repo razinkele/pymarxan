@@ -10,7 +10,7 @@ bench:  ## Run perf-budget benchmarks (Phase 18/19/20 SA inner-loop costs)
 	pytest tests/ -v -m bench
 
 lint:  ## Run ruff linter
-	ruff check src/ tests/
+	ruff check src/ tests/ examples/
 
 types:  ## Run mypy type checker
 	mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PyPI publishing in ``scripts/release.sh``.** The release script now
+  publishes to PyPI as its final step (after the GitHub Release), via
+  ``twine``. Opt out with ``--no-pypi`` (GitHub-only, the previous
+  behaviour) or retarget to TestPyPI with ``--test-pypi``. Credentials
+  (a ``TWINE_PASSWORD`` API token or ``~/.pypirc``) and the ``twine``
+  tool are verified in **pre-flight**, so a missing token fails *before*
+  any irreversible commit/tag/push; artifacts are validated with
+  ``twine check`` before the push too. Five new ``--dry-run`` tests
+  cover the publish steps and the new flags.
+- **Worked example: south-eastern Baltic marine spatial planning**
+  (``examples/baltic_marine_planning.py`` + ``examples/README.md``).
+  A self-contained, deterministic end-to-end scenario (Curonian Lagoon /
+  Klaipėda shelf) — grid generation, a cost surface, four conservation
+  features, locked-in existing reserves, an exact (MIP) vs. heuristic
+  (SA) reserve comparison, before/after gap analysis, and
+  irreplaceability ranking. Runs with no network access and is pinned by
+  ``tests/test_examples.py`` so it can't rot. ``make lint`` now also
+  covers ``examples/``.
 - **Release automation script (``scripts/release.sh``).** Captures the
   manual workflow run for v0.2.0 / v0.3.0 / v0.4.0 / v0.4.1:
   pre-flight safety checks → ``make check`` → bump pyproject.toml →
