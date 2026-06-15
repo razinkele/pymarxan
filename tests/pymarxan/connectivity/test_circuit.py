@@ -82,3 +82,15 @@ def test_coord_out_of_bounds_raises():
 def test_non_positive_resistance_raises():
     with pytest.raises(ValueError, match="positive"):
         current_flow_to_matrix(np.array([[1.0, 0.0]]), [(0, 0), (0, 1)])
+
+
+def test_non_finite_resistance_raises():
+    with pytest.raises(ValueError, match="finite"):
+        current_flow_to_matrix(np.array([[1.0, np.inf]]), [(0, 0), (0, 1)])
+
+
+def test_two_planning_units_in_same_cell_have_zero_resistance():
+    # Co-located PUs (same grid cell) are perfectly connected.
+    matrix = current_flow_to_matrix(np.ones((2, 2)), [(0, 0), (0, 0)])
+    assert matrix.shape == (2, 2)
+    assert matrix[0, 1] == pytest.approx(0.0)
