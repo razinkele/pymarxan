@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Circuit-theory connectivity (``pymarxan.connectivity.circuit``).** New
+  ``current_flow_to_matrix(raster, coords)`` computes the pairwise
+  effective-resistance (resistance-distance) connectivity between planning
+  units from a habitat-resistance raster, modelling the landscape as a
+  resistor network and integrating all paths (the Circuitscape measure)
+  rather than only the cheapest one like the existing least-cost-path
+  matrix. Solved with a single reused ``scipy.sparse`` LU factorisation of
+  the grounded graph Laplacian. First Tier-B feature from the 2026-06-12
+  ecosystem survey; McRae et al. (2008). +10 tests.
 - **Automatic target-setting rules (``pymarxan.targets``).** ``relative_targets``
   (fraction of each feature's total), ``loglinear_targets`` (IUCN-style
   range-size, log-linear interpolation between two area thresholds),
