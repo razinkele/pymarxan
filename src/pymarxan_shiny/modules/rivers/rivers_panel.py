@@ -34,7 +34,7 @@ def rivers_panel_ui():
         ui.input_select("form", "DCI form", _FORMS),
         ui.input_numeric("budget", "Budget", value=1.0, min=0.0),
         ui.output_text("readout"),
-        ui.output_ui("frontier_plot"),
+        ui.output_plot("frontier_plot"),
         ui.output_data_frame("freq_table"),
     )
 
@@ -64,35 +64,32 @@ def rivers_panel_server(
             f"cost {sol.cost:.1f}"
         )
 
-    @render.ui
+    @render.plot
     def frontier_plot():
         net = network()
         if net is None:
-            return ui.p("No river network loaded.", class_="text-muted")
+            return None
         total = (
             float(net.barriers["removal_cost"].sum())
             if "removal_cost" in net.barriers.columns
             else float(net.n_barriers)
         )
         if total <= 0:
-            return ui.p("No removable barriers.", class_="text-muted")
+            return None
         budgets = [total * k / 10.0 for k in range(11)]
         df = budget_dci_frontier(net, budgets, form=input.form())
-        try:
-            import plotly.graph_objects as go
 
-            fig = go.Figure(
-                go.Scatter(x=df["budget"], y=df["dci_after"], mode="lines+markers")
-            )
-            fig.update_layout(
-                xaxis_title="Budget",
-                yaxis_title="DCI",
-                margin={"l": 45, "r": 10, "t": 10, "b": 40},
-                height=320,
-            )
-            return ui.HTML(fig.to_html(include_plotlyjs="cdn", full_html=False))
-        except ImportError:
-            return ui.HTML(df.to_html(index=False))
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+        ax.plot(df["budget"], df["dci_after"], "-o", color="#1f77b4", lw=2)
+        ax.fill_between(df["budget"], df["dci_after"], color="#1f77b4", alpha=0.1)
+        ax.set_xlabel("Budget")
+        ax.set_ylabel("Dendritic Connectivity Index")
+        ax.set_title("DCI gained per unit budget")
+        ax.set_ylim(0, 105)
+        ax.grid(True, alpha=0.3)
+        return fig
 
     @render.data_frame
     def freq_table():

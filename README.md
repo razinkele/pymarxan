@@ -31,6 +31,10 @@ The budget–DCI frontier shows exactly how much connectivity each extra dollar 
 
 ![DCI gained per unit budget](docs/images/dci_budget_frontier.png)
 
+…or explore it interactively in the bundled Shiny app (**Rivers** tab):
+
+![Rivers tab in the pymarxan Shiny app](docs/images/rivers_tab.png)
+
 ## Quick Start
 
 ```bash
