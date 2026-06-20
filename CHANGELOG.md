@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was extracted from ``mip_solver.py`` to ``solvers/_backends.py`` so the core,
   zone, and river MIP solvers share one importable home (no behaviour change).
   +8 tests, incl. MIP == brute-force on random binary trees.
+- **River-network ingest (`pymarxan.rivers`, Phase D).** ``from_hydrorivers``
+  builds a ``RiverNetwork`` directly from a HydroRIVERS / NHDPlus-style
+  GeoDataFrame via the downstream-pointer field (configurable ``id_col`` /
+  ``next_down`` / ``length``; ``NEXT_DOWN`` 0/NA → outlet), retaining segment
+  geometry. ``snap_barriers`` assigns barrier points to their nearest segment
+  (``geopandas.sjoin_nearest``) within an optional ``tolerance`` — dropping
+  too-far barriers with a warning, reprojecting on CRS mismatch, and carrying
+  over ``pass_up``/``pass_down``/``removal_cost``/``status``. +10 tests.
 
 ## [0.6.0] — 2026-06-20
 
