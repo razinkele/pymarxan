@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shiny plots now render reliably (server-side matplotlib).** Three panels
+  built their charts with ``plotly`` via
+  ``ui.HTML(fig.to_html(include_plotlyjs="cdn", ...))`` injected through
+  ``render.ui`` — which left the chart **blank** ("Plotly is not defined": the
+  inline ``Plotly.newPlot`` runs before/without the CDN script under Shiny's
+  dynamic HTML injection). Converted the **rivers budget–DCI frontier**, the
+  **SA convergence** plot, and the **target-sensitivity** chart to
+  ``@render.plot`` with matplotlib (already a dependency; same pattern as the
+  BLM explorer). Verified live via Playwright for the rivers panel.
+
 ## [0.8.0] — 2026-06-20
 
 ### Added

@@ -60,7 +60,7 @@ def convergence_ui():
                 ),
                 width=200,
             ),
-            ui.output_ui("convergence_plot"),
+            ui.output_plot("convergence_plot"),
         ),
     )
 
@@ -89,70 +89,50 @@ def convergence_server(
         choices = {str(i + 1): f"Run {entry['run']}" for i, entry in enumerate(h)}
         ui.update_select("run_select", choices=choices, selected="1")
 
-    @render.ui
+    @render.plot
     def convergence_plot():
+        import matplotlib.pyplot as plt
+
         h = histories()
         if not h:
-            return ui.p("No convergence data available. Run an SA solver first.")
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.text(
+                0.5, 0.5, "No convergence data — run an SA solver first.",
+                ha="center", va="center", color="#666",
+            )
+            ax.axis("off")
+            return fig
 
         idx = int(input.run_select()) - 1
         if idx < 0 or idx >= len(h):
             idx = 0
         entry = h[idx]
 
-        try:
-            import plotly.graph_objects as go
+        # Rendered server-side with matplotlib (@render.plot) rather than plotly
+        # via to_html(include_plotlyjs="cdn"), which fails to load under Shiny's
+        # dynamic HTML injection ("Plotly is not defined").
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(
+            entry["iteration"], entry["objective"],
+            color="#0fa3b1", lw=1, alpha=0.6, label="Current objective",
+        )
+        ax.plot(
+            entry["iteration"], entry["best_objective"],
+            color="#2d936c", lw=2, label="Best objective",
+        )
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("Objective value")
+        ax.set_title(f"SA Convergence — Run {entry['run']}")
+        ax.legend(loc="upper right")
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=entry["iteration"],
-                y=entry["objective"],
-                mode="lines",
-                name="Current Objective",
-                line=dict(color="#0fa3b1", width=1),
-                opacity=0.6,
-            ))
-            fig.add_trace(go.Scatter(
-                x=entry["iteration"],
-                y=entry["best_objective"],
-                mode="lines",
-                name="Best Objective",
-                line=dict(color="#2d936c", width=2),
-            ))
-
-            if input.show_temperature():
-                fig.add_trace(go.Scatter(
-                    x=entry["iteration"],
-                    y=entry["temperature"],
-                    mode="lines",
-                    name="Temperature",
-                    line=dict(color="#e07a5f", width=1, dash="dot"),
-                    yaxis="y2",
-                ))
-                fig.update_layout(
-                    yaxis2=dict(
-                        title="Temperature",
-                        overlaying="y",
-                        side="right",
-                        type="log",
-                    ),
-                )
-
-            fig.update_layout(
-                xaxis_title="Iteration",
-                yaxis_title="Objective Value",
-                title=f"SA Convergence — Run {entry['run']}",
-                height=400,
-                margin=dict(l=60, r=60, t=40, b=40),
-                legend=dict(x=0.7, y=0.95),
+        if input.show_temperature():
+            ax2 = ax.twinx()
+            ax2.plot(
+                entry["iteration"], entry["temperature"],
+                color="#e07a5f", lw=1, ls=":", label="Temperature",
             )
+            ax2.set_ylabel("Temperature (log)")
+            ax2.set_yscale("log")
+            ax2.legend(loc="lower right")
 
-            return ui.HTML(fig.to_html(include_plotlyjs="cdn", full_html=False))
-        except ImportError:
-            # Fallback: text summary if plotly not available
-            iters = entry["iteration"]
-            bests = entry["best_objective"]
-            lines = [f"Run {entry['run']} convergence:"]
-            for i, b in zip(iters, bests):
-                lines.append(f"  Iter {i:>8,}: best = {b:.2f}")
-            return ui.pre("\n".join(lines))
+        return fig

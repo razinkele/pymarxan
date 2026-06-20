@@ -78,7 +78,7 @@ def sensitivity_ui():
                 width=280,
             ),
             ui.div(
-                ui.output_ui("sensitivity_chart"),
+                ui.output_plot("sensitivity_chart"),
                 ui.output_data_frame("sensitivity_table"),
             ),
         ),
@@ -128,34 +128,34 @@ def sensitivity_server(
                 f"Sensitivity error: {e}", type="error"
             )
 
-    @render.ui
+    @render.plot
     def sensitivity_chart():
+        import matplotlib.pyplot as plt
+
         res = result()
         if res is None:
-            return ui.p("Run sensitivity analysis to see results.")
-        try:
-            import plotly.express as px
+            fig, ax = plt.subplots(figsize=(7, 3))
+            ax.text(
+                0.5, 0.5, "Run sensitivity analysis to see results.",
+                ha="center", va="center", color="#666",
+            )
+            ax.axis("off")
+            return fig
 
-            df = res.to_dataframe()
-            fig = px.scatter(
-                df,
-                x="multiplier",
-                y="objective",
-                color="feature_id",
-                title="Objective vs Target Multiplier",
-                labels={
-                    "multiplier": "Target Multiplier",
-                    "objective": "Objective",
-                },
-            )
-            fig.update_layout(
-                height=350, margin=dict(l=60, r=20, t=40, b=40)
-            )
-            return ui.HTML(
-                fig.to_html(include_plotlyjs="cdn", full_html=False)
-            )
-        except ImportError:
-            return ui.p("Install plotly for chart visualization.")
+        # Rendered server-side with matplotlib (@render.plot) rather than plotly
+        # via to_html(include_plotlyjs="cdn"), which fails to load under Shiny's
+        # dynamic HTML injection ("Plotly is not defined").
+        df = res.to_dataframe()
+        fig, ax = plt.subplots(figsize=(7, 3.5))
+        for fid, grp in df.groupby("feature_id"):
+            grp = grp.sort_values("multiplier")
+            ax.plot(grp["multiplier"], grp["objective"], "-o", label=f"feature {fid}")
+        ax.set_xlabel("Target Multiplier")
+        ax.set_ylabel("Objective")
+        ax.set_title("Objective vs Target Multiplier")
+        if df["feature_id"].nunique() <= 12:
+            ax.legend(fontsize=8, loc="best")
+        return fig
 
     @render.data_frame
     def sensitivity_table():
