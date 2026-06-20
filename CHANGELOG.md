@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Release-script toolchain pre-flight (``scripts/release.sh``).** The
+  release now verifies its full toolchain up front, before any
+  irreversible step: ``ruff``, ``mypy`` and ``pytest`` must resolve on
+  ``PATH`` and the ``build`` module must be importable by the build
+  interpreter (a new, overridable ``PYTHON`` variable, default
+  ``python3``). Previously a missing ``build`` failed the wheel/sdist
+  step *after* the version-bump commit had already landed, leaving a
+  partial release; the check now aborts cleanly with nothing committed.
+  ``--dry-run`` only warns, mirroring the existing twine pre-flight, so
+  the script stays runnable in CI without the full toolchain. +4 tests.
+
 ## [0.5.0] — 2026-06-20
 
 ### Added
