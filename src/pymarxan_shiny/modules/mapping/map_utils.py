@@ -92,6 +92,18 @@ def create_geo_map(
     if not _HAS_IPYLEAFLET:
         raise ImportError("ipyleaflet is required for create_geo_map")
 
+    # A GeoDataFrame always exposes a `.crs` attribute (possibly None); a plain
+    # pandas DataFrame does not. A non-spatial (classic Marxan-format) project
+    # has no geometry, so callers must gate on `has_geometry(problem)` and fall
+    # back to a synthetic grid. Fail loudly here rather than with an opaque
+    # ``AttributeError: 'DataFrame' object has no attribute 'crs'``.
+    if not hasattr(gdf, "crs"):
+        raise ValueError(
+            "create_geo_map requires a GeoDataFrame with geometry; got a plain "
+            "DataFrame. The problem has no spatial geometry — gate on "
+            "has_geometry(problem) and use create_grid_map for a synthetic grid."
+        )
+
     # ipyleaflet expects geographic coordinates (lat/lon). Projected CRSs
     # (UTM, equal-area, etc.) would otherwise render polygons at absurd
     # locations because their coordinates are in metres rather than degrees.

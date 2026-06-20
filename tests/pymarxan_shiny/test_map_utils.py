@@ -105,6 +105,16 @@ class TestCreateGeoMap:
         ]
         assert len(geo_layers) == 2
 
+    def test_plain_dataframe_raises_clear_error(self):
+        """A non-spatial (Marxan-format) project has a plain DataFrame with no
+        geometry; create_geo_map must raise a clear ValueError instead of an
+        opaque ``AttributeError: 'DataFrame' object has no attribute 'crs'``."""
+        import pandas as pd
+
+        df = pd.DataFrame({"id": [1, 2], "cost": [1.0, 2.0]})
+        with pytest.raises(ValueError, match="geometry|GeoDataFrame"):
+            create_geo_map(df, ["#ff0000", "#00ff00"])
+
     def test_reprojects_projected_crs_to_wgs84(self):
         """Projected CRS (e.g. UTM, metres) must be reprojected to lat/lon.
 

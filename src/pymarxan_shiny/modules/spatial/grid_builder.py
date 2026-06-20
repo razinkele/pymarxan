@@ -6,14 +6,15 @@ from collections.abc import Callable
 import pandas as pd
 from shiny import module, reactive, render, ui
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.geometry import generate_grid
+from pymarxan.models.problem import ConservationProblem, has_geometry
 from pymarxan.spatial.grid import compute_adjacency, generate_planning_grid
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 try:
     from shinywidgets import output_widget, render_widget
 
-    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map
+    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:  # pragma: no cover
@@ -158,7 +159,11 @@ def grid_builder_server(
             if p is None:
                 return None
             colors = ["#3498db"] * len(p.planning_units)
-            return create_geo_map(p.planning_units, colors)
+            # Classic Marxan-format projects have no geometry — fall back to a
+            # synthetic grid preview instead of crashing create_geo_map.
+            if has_geometry(p):
+                return create_geo_map(p.planning_units, colors)
+            return create_grid_map(generate_grid(len(p.planning_units)), colors)
 
     if not _HAS_IPYLEAFLET:  # pragma: no cover
 
