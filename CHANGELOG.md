@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-06-20
+
 ### Fixed
 
 - **Maps no longer crash on a non-spatial (classic Marxan-format) project.**
@@ -761,7 +763,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.2
 [0.8.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.1
 [0.8.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.0
 [0.7.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.7.0
