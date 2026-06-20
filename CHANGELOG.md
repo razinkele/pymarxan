@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **River barrier analysis + Shiny panel (`pymarxan.rivers`, Phase E).** New
+  ``budget_dci_frontier`` (solve the barrier problem across a budget sweep →
+  the DCI-gain-vs-budget efficiency frontier as a DataFrame; greedy / SA / exact
+  MIP) and ``barrier_selection_frequency`` (run many SA solves and rank barriers
+  by how often they appear in good portfolios — robust no-regret picks,
+  deterministic per ``base_seed``). New Shiny ``rivers_panel`` module
+  (`pymarxan_shiny.modules.rivers`) showing the budget–DCI frontier, a
+  before/after DCI readout, and the barrier selection-frequency table. +8 tests.
+  (Wiring the panel into the assembled app — a river-network upload flow — is
+  deferred to Phase F.)
+
 ## [0.7.0] — 2026-06-20
 
 ### Added

@@ -6,6 +6,10 @@ Barrier-decision optimization (greedy / SA / MIP) lands in later phases.
 """
 from __future__ import annotations
 
+from pymarxan.rivers.analysis import (
+    barrier_selection_frequency,
+    budget_dci_frontier,
+)
 from pymarxan.rivers.barriers import BarrierProblem, BarrierSolution
 from pymarxan.rivers.dci import (
     dci_diadromous,
@@ -24,6 +28,8 @@ __all__ = [
     "BarrierProblem",
     "BarrierSolution",
     "RiverNetwork",
+    "barrier_selection_frequency",
+    "budget_dci_frontier",
     "dci_diadromous",
     "dci_potamodromous",
     "from_hydrorivers",
