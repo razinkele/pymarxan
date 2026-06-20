@@ -147,7 +147,8 @@ def run_panel_server(
 
     @render.ui
     def progress_bar():
-        if progress.status == "running":
+        input.run_solver()  # re-arm the poll loop for every run, not just the first
+        if progress.status in ("running", "idle"):
             reactive.invalidate_later(0.5)
         frac = progress.progress_fraction()
         pct = int(frac * 100)
@@ -167,10 +168,17 @@ def run_panel_server(
 
     @reactive.effect
     def _check_results():
-        """Transfer solver results from progress to reactive values on main thread."""
-        if progress.status in ("running", "idle"):
-            reactive.invalidate_later(0.5)
-            return
+        """Transfer solver results from the worker thread to reactive values
+        on the main thread.
+
+        Polls continuously (every 0.5 s) instead of only while the first run
+        is active. The earlier version stopped re-arming its timer once a run
+        finished, and ``progress`` is a plain object (not reactive), so a
+        SECOND run in the same session — e.g. loading another project and
+        re-running — never had its result transferred. Continuous polling is
+        cheap and keeps multi-run / multi-project sessions correct.
+        """
+        reactive.invalidate_later(0.5)
         if progress.status == "done" and progress.result_best is not None:
             current_solution.set(progress.result_best)
             all_solutions.set(progress.result_solutions)
@@ -179,7 +187,8 @@ def run_panel_server(
 
     @render.text
     def run_status():
-        if progress.status == "running":
+        input.run_solver()  # re-arm for every run
+        if progress.status in ("running", "idle"):
             reactive.invalidate_later(0.5)
         p = problem()
         s = current_solution()
@@ -207,7 +216,8 @@ def run_panel_server(
 
     @render.text
     def run_log():
-        if progress.status == "running":
+        input.run_solver()  # re-arm for every run
+        if progress.status in ("running", "idle"):
             reactive.invalidate_later(0.5)
         s = current_solution()
         if s is None:

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Load real-world Marxan projects robustly.** Validating against several
+  public datasets (prioritizr's bundled example, a MarxanConnect Great Barrier
+  Reef tutorial, and a published reserve-site-selection study) surfaced two
+  format variations the reader mishandled: columns padded with repeated tabs or
+  aligned spaces (`id\t\tcost`) became spurious empty `Unnamed` columns, and
+  some exports name the boundary column `bound` rather than `boundary`. The
+  reader now collapses whitespace runs for non-comma files and accepts either
+  boundary-column name.
+- **Multiple solver runs in one session.** The run panel's result-transfer
+  effect stopped polling once the first run finished, so a *second* run in the
+  same session (e.g. loading another project and re-running) never had its
+  result transferred to the UI. It now polls robustly across runs.
+
 ## [0.8.2] — 2026-06-20
 
 ### Fixed
