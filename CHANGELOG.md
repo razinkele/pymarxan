@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   barrier-restoration feature; barrier-decision optimizers (greedy/SA/MIP) land
   in later phases. +27 tests (hand-computed chain & Y-tree confluence fixtures,
   incl. the p=0 NaN-gate).
+- **River barrier optimization — greedy + SA (`pymarxan.rivers`, Phase B).** New
+  ``BarrierProblem`` (budget-constrained DCI maximisation; barrier ``status``
+  reuses the Marxan locked-in/locked-out convention; only the wired ``max_dci``
+  objective is exposed) and ``BarrierSolution`` (``removed`` set, cost,
+  ``dci_before``/``dci_after``/``gain`` with the baseline excluding locked-in,
+  ``optimal``). Two optimizers: ``optimize_barriers_greedy`` (best
+  DCI-gain-per-cost until the budget is spent) and ``optimize_barriers_sa``
+  (simulated annealing over the free barriers, reusing
+  ``solvers.cooling.CoolingSchedule``, budget by hard rejection, deterministic
+  per ``seed``). Both honour locks and never beat the exact optimum. +9 tests
+  (brute-force oracle, gating-barrier pick, budget/lock guards, SA determinism).
 
 ## [0.6.0] — 2026-06-20
 
