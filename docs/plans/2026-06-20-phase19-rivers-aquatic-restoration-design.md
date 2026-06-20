@@ -2,9 +2,9 @@
 
 **Aquatic (riverine) restoration: dendritic connectivity + barrier-mitigation optimization**
 
-Status: design draft, **revised 2026-06-20 per multi-agent review** · Target: `pymarxan` v0.5 · Owner: maintainer
+Status: design draft, **revised 2026-06-20 per multi-agent review** · Target: `pymarxan` v0.7 · Owner: maintainer
 Filename: `docs/plans/2026-06-20-phase19-rivers-aquatic-restoration-design.md`
-Review: [`2026-06-20-phase19-rivers-review.md`](2026-06-20-phase19-rivers-review.md) — four-lens review (architect / grounding / scientific / independent re-design). No CRITICAL findings; HIGH/MEDIUM fixes folded in below (networkx-optional, connectivity wording, reuse-is-pattern, dual-solver note, Y-tree fixture, `dci_before` semantics, backend-factory extraction). Citations all verified real via scite.
+Reviews: [`2026-06-20-phase19-rivers-review.md`](2026-06-20-phase19-rivers-review.md) (first pass — four lenses) and [`2026-06-20-phase19-rivers-review-2-workflow.md`](2026-06-20-phase19-rivers-review-2-workflow.md) (deeper, adversarially-verified workflow pass). All accepted findings folded in below. Notably from the workflow pass: **H1** — `c_ij` must be a path-product, never `root_prod(i)·root_prod(j)/root_prod(lca)²` (NaN at `p=0`); **H2** — Y-tree fixture values pinned + a `p=0` NaN-gate variant; plus networkx dropped (pure-NumPy topology), `objective` trimmed to wired modes, `hypothesis` replaced with seeded loops, `direction="single_pass"` default with `round_trip`→`NotImplementedError`. Citations all verified real via scite.
 
 ---
 
@@ -114,20 +114,35 @@ Conventions:
 
 `__post_init__` validates: unique segment ids, unique barrier ids, every `down_id`
 resolves to an existing segment or NA, **exactly one outlet**, acyclic (tree), and
-passabilities in range. Build an internal `networkx.DiGraph` (edge segment → down_id)
-once and cache it. **Lazy-import `networkx` inside the method** (it is an optional dep —
-see §2 caveat), matching `connectivity/`. In practice the rooted-tree topology only needs
-the downstream-pointer walk + an LCA table, so a pure-NumPy/dict implementation that drops
-the `networkx` dependency entirely is worth considering during Phase A.
+passabilities in range.
+
+**Decision (review M1): no `networkx` dependency.** `networkx` is an *optional*
+(`shiny`-extra) dependency, not core — using it here would force a lazy-import dance or
+promote it to a core dep (enlarging every install's footprint). The rooted-tree topology
+needs only a downstream-pointer walk and an ancestor/LCA table, both trivial in pure
+NumPy/dict. **"`rivers/` imports no `networkx`" is an explicit Phase A acceptance
+criterion.** Cache the parent array, per-segment depth, and an ancestor table once at
+construction.
 
 Topology helpers (private, cached):
 - `_root_products(passabilities)` → for each segment, the product of barrier
   passabilities from that segment **down to the mouth** (= `c_i` for DCId). Single
   downstream walk, O(n).
-- `_lca(i, j)` → lowest common ancestor, for `c_ij` (DCIp) via
-  `c_ij = root_prod(i) * root_prod(j) / root_prod(lca)**2`.
+- `_lca(i, j)` → lowest common ancestor of two segments.
 - `path_barriers(i, j)` / `path_barriers_to_mouth(i)` → barrier ids on a path
-  (used by the MIP to build per-segment constraints).
+  (used by the MIP to build per-segment constraints, and to compute `c_ij`).
+
+> **CRITICAL — do NOT compute `c_ij` via `root_prod(i)·root_prod(j) / root_prod(lca)²`
+> (review H1).** That algebra is only valid when `root_prod(lca) ≠ 0`. When any barrier
+> *strictly downstream* of the LCA is impassable (`p = 0`) — which the binary MIP
+> explicitly assumes (barrier present ⇒ `p = 0`), and any fully-blocking dam realises —
+> the formula evaluates `0/0 → NaN`, destroying the true value (the product of barriers
+> *between* `i` and `j`, which can be non-zero). Compute `c_ij` instead as the **direct
+> product over `path_barriers(i, j)`** (the barriers on `i → lca → j`, which excludes
+> everything below the LCA). Use the `_root_products` route only as an O(1) shortcut for
+> the **diadromous** `c_i` (path-to-mouth), where no cancellation is involved; if an O(1)
+> potamodromous shortcut is wanted later, do it in log-space with explicit `−inf`
+> handling, never as a raw division.
 
 ## 5. DCI computation (`dci.py`)
 
@@ -139,7 +154,7 @@ Formulas (Cote et al. 2009), with `L = Σ l_i` and weights `w_i = l_i / L`:
 Public API:
 
 ```python
-def dci_diadromous(network, passabilities=None, *, direction="symmetric") -> float
+def dci_diadromous(network, passabilities=None, *, direction="single_pass") -> float
 def dci_potamodromous(network, passabilities=None) -> float
 def segment_connectivity(network, passabilities=None, form="diadromous") -> dict[int, float]
 ```
@@ -149,24 +164,29 @@ candidate solution (removed barrier → p = 1.0) without mutating the network.
 Effective passability under a removal decision `y_b ∈ {0,1}`:
 `p_b^eff = p_b + (1 − p_b)·y_b`.
 
-**Convention to pin down before coding:** the diadromous form can be single-pass
-(product of passabilities segment→mouth) or round-trip (`∏ p_b²`). Default to
-**single-pass** to match the `dci` R package; expose `direction="round_trip"` for the
-diadromous spawning-migration interpretation. Document this explicitly — it is the
-most likely source of a validation mismatch. The directional / round-trip
-formalisation (symmetric `∏ p_up·p_down` vs directional single-pass) is made explicit
-in Baldan et al. 2022 (`riverconn`); cite that, not just Côté 2009, for this convention.
+**Convention (resolved — review L2/L3):** the diadromous form can be single-pass
+(product of passabilities segment→mouth) or round-trip (`∏ p_b²`). The default is the
+literal token **`direction="single_pass"`** (matches the `dci` R package — the validation
+target), and `test_dci_validation.py` must assert the **default** reproduces the R value
+(not merely the non-default). `direction="round_trip"` is **deferred for v0.7**: ship the
+keyword but have it `raise NotImplementedError("round_trip DCI not yet validated")` rather
+than expose an unvalidated path behind a default-looking flag. The single-pass-vs-round-trip
+square is the most likely source of a validation mismatch; the directional / round-trip
+formalisation (symmetric `∏ p_up·p_down` vs directional single-pass) is made explicit in
+Baldan et al. 2022 (`riverconn`); cite that, not just Côté 2009, for this convention.
 
-**Scope recommendation (design review):** ship **symmetric-only** DCI in v0.5 — keep the
+**Scope recommendation (design review):** ship **symmetric-only** DCI in v0.7 — keep the
 `pass_up`/`pass_down`/`pass_if_mitigated` columns in the data model, but defer the
 directional *DCI math* (open decision #2) until there is a validation target for it. The
 directional combination rule is fiddly and would otherwise be an unvalidated correctness
 liability against the (single-pass, symmetric) `dci` package.
 
-Performance notes (implement simple first, optimize later): use the `_root_products`
-+ LCA route (O(n) build, O(1) per pair) rather than per-pair path walks; add an
-**incremental evaluator** that recomputes only segments whose path-to-mouth contains
-a flipped barrier (big speedup inside SA).
+Performance notes (implement simple first, optimize later): compute `c_ij` as the
+product over `path_barriers(i, j)` (see the H1 warning in §4 — **not** the
+`root_prod`-division shortcut, which is NaN-unsafe at `p = 0`). For diadromous `c_i`,
+`_root_products` is a safe O(n)-build / O(1)-per-segment route. Add an **incremental
+evaluator** that recomputes only segments whose path-to-mouth contains a flipped barrier
+(big speedup inside SA); validate it against a full recompute (see §8).
 
 ### Validated test fixture (hand-computed — use in `test_dci.py`)
 
@@ -180,14 +200,29 @@ Linear chain, outlet below S1, no mouth barrier:
 - single segment → **100** (sanity).
 - removing any barrier never decreases DCI (monotonicity property test).
 
-**Confluence (Y-tree) fixture — REQUIRED (design review H5).** The linear chain above
-never exercises a non-trivial lowest common ancestor, so a bug in
-`c_ij = root_prod(i)·root_prod(j) / root_prod(lca)²` would pass every test above. Add a
-Y-shaped network: two headwater segments `S2`, `S3` joining at a confluence segment `S1`
-that drains to the mouth, with a barrier on each headwater link (`B2` above `S2`, `B3`
-above `S3`) and optionally one on the outlet (`B1` below `S1`). Hand-compute `DCIp` for
-this network so the pair `(S2, S3)` — whose LCA is the interior segment `S1`, *not* an
-endpoint — is checked explicitly. This is the single most important fixture to add.
+**Confluence (Y-tree) fixture — REQUIRED, with pinned values (design review H2/H5).**
+The linear chain never exercises a non-trivial LCA, so an LCA bug would pass every test
+above. Y network: two headwaters `S2`, `S3` joining at confluence `S1`, which drains to
+the mouth. Barriers `B2` (on `S2 → S1`) and `B3` (on `S3 → S1`); lengths `l = 10` each
+(`w_i = 1/3`); `p(B2) = p(B3) = 0.5`.
+
+root-products: `root_prod(S1) = 1`, `root_prod(S2) = 0.5`, `root_prod(S3) = 0.5`.
+
+- diadromous `c_1 = 1`, `c_2 = 0.5`, `c_3 = 0.5` → **DCId = 100·(1/3)(1 + 0.5 + 0.5) = 66.667…**
+- pairwise: `c_12 = 0.5` (B2), `c_13 = 0.5` (B3), **`c_23 = p(B2)·p(B3) = 0.25`** — the
+  pair whose **LCA is the interior segment `S1`, not an endpoint**. Pair sum
+  `= 3 + 2(0.5) + 2(0.5) + 2(0.25) = 5.5` → **DCIp = 100·(1/9)·5.5 = 61.111…**
+- Assert the implementation's internal `LCA(S2, S3) == S1`, directly targeting the bug class.
+
+**`p = 0` mouth-barrier variant — REQUIRED to gate H1.** Add a fully-blocking barrier
+`B1` on `S1 → mouth` with `p(B1) = 0` (keep `B2 = B3 = 0.5`). Then:
+- **DCId = 0** (no segment reaches the sea).
+- **DCIp = 61.111…, unchanged** — a mouth barrier sits *below* every in-network pair's
+  LCA, so it must not affect potamodromous connectivity. `c_23` is still `0.25` via the
+  path-product. A division-based `c_ij` computes `0·0 / 0² = NaN` here and fails the
+  assert — which is exactly the regression this variant exists to catch.
+
+Plus: all barriers removed → **DCIp = DCId = 100**; single segment → **100**; monotonicity.
 
 ## 6. Barrier-decision problem (`barriers.py`)
 
@@ -195,11 +230,22 @@ endpoint — is checked explicitly. This is the single most important fixture to
 @dataclass
 class BarrierProblem:
     network: RiverNetwork
-    budget: float | None = None          # cost cap on the chosen action set
+    budget: float | None = None          # cost cap; arbitrary non-negative float
     form: str = "diadromous"             # "diadromous" | "potamodromous"
-    objective: str = "max_dci"           # "max_dci" | "max_gain" | "min_cost_for_target"
-    target_dci: float | None = None      # required for min_cost_for_target
+    objective: str = "max_dci"           # only "max_dci" is wired in v0.7 (see note)
 ```
+
+**Objective scope (review M2):** ship only the objective mode the optimizers actually
+implement — **budget-constrained `max_dci`**. `max_gain` is identical to `max_dci` under a
+fixed baseline (`argmax` of `dci_after` ⇔ `argmax` of `dci_after − dci_before`), so it adds
+nothing; `min_cost_for_target` is a *different constraint shape* (budget becomes the
+objective, target becomes the constraint) that none of the three optimizers as specified
+can produce. Drop `min_cost_for_target`/`target_dci` from the v0.7 dataclass and add them
+in a later phase, or raise `NotImplementedError` for any unsupported
+`(objective × optimizer)` cell. **Cost/budget units:** arbitrary non-negative floats; the
+optional tree-knapsack DP cross-check (§7.3 / §12) requires quantized (integer) costs and
+is gated on that — state this in the `RiverNetwork.barriers` and `BarrierProblem.budget`
+docstrings.
 
 Decision variable: per removable barrier, `y_b ∈ {0, 1}` (1 = remove). Locked-out
 barriers are fixed `y_b = 0`; locked-in fixed `y_b = 1`. (Three-way keep/mitigate/
@@ -282,9 +328,13 @@ as future work so we don't block on it.
   `down_id`, two outlets, cycle, out-of-range passability); `path_barriers_*`;
   `_root_products` against hand values.
 - **test_dci.py** — the §5 linear-chain fixture (DCIp = 61.111…, DCId = 58.333…);
-  **the §5 Y-tree confluence fixture** (hand-computed DCIp exercising an interior-node
-  LCA — REQUIRED, H5); all-removed = 100; single-segment = 100; monotonicity;
-  weight-vs-length weighting.
+  **the §5 Y-tree confluence fixture** (pinned: DCId = 66.667…, DCIp = 61.111…, with the
+  interior-node `LCA(S2,S3) == S1` assertion — REQUIRED, H2/H5); **the §5 `p = 0`
+  mouth-barrier variant** (DCId = 0, DCIp = 61.111… — gates the H1 NaN bug; a
+  division-based `c_ij` returns NaN here); all-removed = 100; single-segment = 100;
+  monotonicity; weight-vs-length weighting; **convention test (no rpy2): the default
+  `direction="single_pass"` gives DCId = 58.333… on the chain and differs from the
+  round-trip value, pinning the default convention offline (review L8).**
 - **incremental-delta correctness** — SA incremental DCI delta == full recompute after
   each flip, for **both** forms. The *potamodromous* delta (a flipped barrier changes
   `c_ij` for every pair straddling it) is the error-prone one and needs its own
@@ -293,10 +343,22 @@ as future work so we don't block on it.
   - greedy respects budget and never selects locked-out;
   - MIP optimum on the binary fixture: with `budget = 1` removal it picks **B1**
     (→ DCId 66.67), not B2 (→ 33.33), because B1 gates B2's reach;
-  - MIP == brute-force enumeration on every ≤8-barrier random net (exactness check);
+  - MIP == brute-force enumeration on every ≤8-barrier random net (exactness check). The
+    brute-force enumerator must **score candidates with the production `dci_*` functions**
+    — only the *search* is independent, not the objective — else a shared off-by-one
+    passes silently (review L7). Test a strict-budget boundary: `cost == budget` is feasible.
   - locked-out B1 ⇒ DCId stuck at 33.33 regardless of budget;
   - SA reaches the MIP optimum on the binary case (within tolerance);
-  - all heuristics ≤ MIP optimum (never beat exact) — property test via `hypothesis`.
+  - all heuristics ≤ MIP optimum (never beat exact). **No `hypothesis`** (not a dep, and
+    no precedent in the repo — a bare import would hard-fail CI collection, an
+    `importorskip` would silently skip the strongest correctness check). Write this and the
+    exactness check as **deterministic loops over a fixed seeded set of small random nets**
+    (matches the repo's seeded-loop style); make them hard, always-run tests (review M3).
+  - **binary-MIP baseline consistency (review L5):** `optimize_barriers_mip` must validate
+    that all non-locked-in barriers are binary-passable (`p ∈ {0, 1}`) — raise/warn
+    otherwise — or compute its `dci_before`/`dci_after` with the *same* binary model it
+    optimizes, never the native partial-passability `dci_diadromous`. Test that MIP `gain`
+    on a partial-passability net either errors or matches a binary-consistent baseline.
   - **infeasible / degenerate guards** (per this repo's review history): budget too small
     for any removal → return the baseline solution, not a crash; all barriers locked-out →
     baseline; zero-length segment; single-segment network. Specify whether
@@ -305,7 +367,10 @@ as future work so we don't block on it.
 - **test_dci_validation.py** — `pytest.importorskip("rpy2")` + check the R `dci`
   package is installed; build a random tree, compare native DCIp/DCId to the R
   package within `1e-6`. Skips cleanly (not fails) where R/rpy2 absent, so CI on
-  Python-only runners is green.
+  Python-only runners is green. **Because this never runs in CI**, DCI correctness must
+  not depend on it: the offline convention test in `test_dci.py` (above) is the gating
+  ground truth (review L8). Optionally capture the R `dci` outputs once and commit them as
+  a static expected-values fixture for an offline comparison.
 
 ## 9. Data ingest (`io.py`, Phase D)
 
@@ -322,9 +387,10 @@ as future work so we don't block on it.
 
 - **DCI-gain-vs-budget curve**: solve the MIP (or greedy) across a budget sweep →
   the efficiency frontier practitioners ask for. New helper in `analysis/`.
-- **Barrier selection frequency**: run many SA solves → reuse
-  `analysis/selection_freq.py` to rank barriers by how often they appear in good
-  portfolios (robust no-regret picks).
+- **Barrier selection frequency**: run many SA solves → **mirror the
+  `analysis/selection_freq.py` pattern** (a trivial membership count over each
+  `BarrierSolution.removed`; not an API call — see §2 caveat) to rank barriers by how often
+  they appear in good portfolios (robust no-regret picks).
 - **Shiny `rivers` panel** (mirror existing modules): network map, barriers coloured
   by selection frequency, the budget–DCI curve, before/after DCI readout.
 
@@ -368,7 +434,7 @@ real basin (e.g. Nemunas / a Baltic tributary), heuristic vs exact MIP.
    paths; default symmetric, document the directional rule.
 3. **Three-way action** (keep/mitigate/remove) — ship binary first, design the data
    model (`pass_if_mitigated`) so the extension needs no breaking change.
-4. **Potamodromous exact MIP** — accept heuristic-only for v0.5; log linearization
+4. **Potamodromous exact MIP** — accept heuristic-only for v0.7; log linearization
    approach as future work.
 5. **Performance target** — basin size to support at interactive speed (drives
    whether the incremental evaluator / LCA optimization lands in Phase A or later).
