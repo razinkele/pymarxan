@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Maps no longer crash on a non-spatial (classic Marxan-format) project.**
+  ``create_geo_map`` accessed ``gdf.crs`` on its input, raising
+  ``AttributeError: 'DataFrame' object has no attribute 'crs'`` whenever a
+  geometry-less project (the standard Marxan ``input.dat`` format) reached it.
+  The mapping modules already gate on ``has_geometry()``, but
+  ``grid_builder``'s map preview did not — so loading any classic project
+  flooded the server log and broke the grid preview. ``create_geo_map`` now
+  raises a clear ``ValueError`` when handed a plain ``DataFrame``, and
+  ``grid_builder`` gates on ``has_geometry()`` with a synthetic-grid fallback
+  like the other map modules. +1 test.
+
 ## [0.8.1] — 2026-06-20
 
 ### Fixed
