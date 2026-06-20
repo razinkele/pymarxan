@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-20
+
 ### Added
 
 - **Climate velocity (`pymarxan.connectivity.velocity`).** New
@@ -827,7 +829,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.10.0
 [0.9.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.9.0
 [0.8.4]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.4
 [0.8.3]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.3
