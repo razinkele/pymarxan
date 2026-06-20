@@ -78,6 +78,12 @@ DATE="$(date -u +%Y-%m-%d)"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Interpreter used for `-m build` and the pre-flight import checks. The
+# release toolchain (ruff, mypy, pytest, build) and the test deps can be
+# scattered across environments on a dev box; override PYTHON to point at
+# the one env where they all resolve. Defaults to python3.
+PYTHON="${PYTHON:-python3}"
+
 step() {
     if [[ $DRY_RUN -eq 1 ]]; then
         echo "[dry-run] $*"
@@ -176,6 +182,44 @@ if [[ $PUBLISH_PYPI -eq 1 ]]; then
     fi
 fi
 
+# --- pre-flight: release toolchain ------------------------------------
+
+# `make check` (run just below, before any mutation) shells out to ruff,
+# mypy and pytest; the build step further down uses `$PYTHON -m build`.
+# Verify every tool HERE, in pre-flight, before the irreversible steps.
+# `make check` already guards the check tools (it runs pre-mutation and
+# aborts on a missing one), but `$PYTHON -m build` runs *after* the
+# version-bump commit — on the v0.5.0 run it was unavailable and the
+# script died with a commit already made. Checking it here means a
+# missing tool aborts cleanly with nothing committed. As with the twine
+# pre-flight, --dry-run only warns so the script stays runnable in CI
+# without the full toolchain.
+step "Pre-flight: release toolchain (ruff, mypy, pytest, build)"
+
+toolchain_problem() {
+    # $1 = human description of what's missing
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "  [dry-run] note: $1 — a real release would fail here"
+    else
+        echo "error: $1" >&2
+        echo "       run the release from an environment where the full" >&2
+        echo "       toolchain resolves — ruff, mypy and pytest on PATH and" >&2
+        echo "       the 'build' module importable by \$PYTHON ($PYTHON)." >&2
+        echo "       See CLAUDE.md 'Release & versioning'." >&2
+        exit 1
+    fi
+}
+
+for tool in ruff mypy pytest; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        toolchain_problem "'$tool' not found on PATH (needed by \`make check\`)"
+    fi
+done
+
+if ! "$PYTHON" -c "import build" >/dev/null 2>&1; then
+    toolchain_problem "'$PYTHON -m build' unavailable — the 'build' module is not installed for $PYTHON"
+fi
+
 # --- run checks BEFORE making any changes -----------------------------
 
 step "Run \`make check\` before any version bump"
@@ -271,7 +315,7 @@ run git commit -m "chore(release): v$VERSION"
 
 step "Build wheel + sdist"
 run rm -rf dist/
-run python -m build
+run "$PYTHON" -m build
 
 # Validate the artifacts BEFORE any irreversible push. `twine check`
 # catches malformed metadata / unrenderable README that PyPI would

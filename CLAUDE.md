@@ -88,6 +88,13 @@ The detailed subpackage table, solver matrix, I/O conventions, and Shiny module 
 
 ## Release & versioning
 
-The version is read at runtime via `importlib.metadata.version("pymarxan")` and lives in **`pyproject.toml` only** — never hardcode it elsewhere. Releases go through `scripts/release.sh VERSION` (pass the bare version, e.g. `0.5.0`; `--dry-run` first; `--no-pypi` to skip PyPI). It enforces clean tree / on `main` / in sync with origin / non-empty CHANGELOG `[Unreleased]` / `make check` green before doing anything irreversible. See the `release-pymarxan` skill.
+The version is read at runtime via `importlib.metadata.version("pymarxan")` and lives in **`pyproject.toml` only** — never hardcode it elsewhere. Releases go through `scripts/release.sh VERSION` (pass the bare version, e.g. `0.5.0`; `--dry-run` first; `--no-pypi` to skip PyPI). It enforces clean tree / on `main` / in sync with origin / non-empty CHANGELOG `[Unreleased]` / full release toolchain present / `make check` green before doing anything irreversible. See the `release-pymarxan` skill.
+
+**Release environment:** the release needs `ruff`, `mypy`, `pytest` (with the spatial deps rasterio/ipyleaflet in pytest's own interpreter — see `marxan-testing`) on `PATH`, plus the `build` module importable by the build interpreter. On this machine these are split (`ruff` in `~/.local/bin`, `mypy`/`build` in `.venv`, `pytest`+rasterio in the `shiny` micromamba env), so a bare `scripts/release.sh` fails. Merge the tool dirs onto `PATH` (shiny first so its rasterio-capable pytest wins) and point the build interpreter at the one with `build` via `PYTHON=`:
+```bash
+PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" \
+  PYTHON="$PWD/.venv/bin/python" scripts/release.sh 0.5.1 --no-pypi
+```
+The pre-flight verifies ruff/mypy/pytest on `PATH` and `$PYTHON -m build` up front, so a missing tool aborts cleanly before any commit/tag rather than mid-release (the v0.5.0 failure mode).
 
 Design and multi-agent-review docs accumulate in `docs/plans/`.

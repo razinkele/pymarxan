@@ -127,3 +127,39 @@ def test_release_script_rejects_unknown_option():
     result = _run("9.9.9", "--bogus")
     assert result.returncode != 0
     assert "unknown option" in result.stderr
+
+
+def test_release_script_dry_run_checks_build_toolchain(dry_run_output):
+    """Pre-flight announces a release-toolchain check (ruff, mypy, pytest,
+    build, test deps). Its whole point is to fail in pre-flight when a
+    tool is missing — rather than mid-release after the version-bump
+    commit has already landed, as happened on the v0.5.0 run when
+    `python -m build` was unavailable."""
+    assert dry_run_output.returncode == 0
+    assert "release toolchain" in dry_run_output.stdout
+
+
+def test_release_script_toolchain_check_precedes_any_mutation(dry_run_output):
+    """The toolchain verification must run before the first irreversible
+    step (the version bump / commit / build), so a missing tool aborts
+    with nothing committed."""
+    out = dry_run_output.stdout
+    assert out.index("release toolchain") < out.index("Bump pyproject.toml")
+    assert out.index("release toolchain") < out.index("Build wheel")
+
+
+def test_release_script_warns_on_missing_build_tool_in_dry_run():
+    """A real run aborts on a missing tool, but --dry-run only warns so it
+    stays runnable in CI without the full toolchain — mirroring the twine
+    credential pre-flight. Force a missing interpreter via PYTHON and
+    confirm the dry-run still reaches Done with a note rather than dying."""
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "9.9.9", "--dry-run", "--no-pypi"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env={**os.environ, "TERM": "dumb", "PYTHON": "definitely-not-a-real-python"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Done — v9.9.9 released" in result.stdout
+    assert "a real release would fail here" in result.stdout
