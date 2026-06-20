@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **River connectivity — DCI metrics (`pymarxan.rivers`, Phase A).** New
+  ``RiverNetwork`` model (rooted downstream-pointer tree of segments + barriers,
+  validated for a single outlet / acyclicity / passability range, with cached
+  pure-NumPy topology — **no networkx dependency**) and the Dendritic
+  Connectivity Index (Côté et al. 2009): ``dci_diadromous`` (sea↔segment,
+  ``direction="single_pass"`` default; ``round_trip`` deferred),
+  ``dci_potamodromous`` (all within-network pairs), and ``segment_connectivity``
+  (per-segment ``c_i`` or potamodromous marginals). Pairwise ``c_ij`` is a
+  direct path-product, avoiding the ``0/0→NaN`` of the closed-form LCA division
+  when a sub-confluence barrier is impassable. First slice of the river
+  barrier-restoration feature; barrier-decision optimizers (greedy/SA/MIP) land
+  in later phases. +27 tests (hand-computed chain & Y-tree confluence fixtures,
+  incl. the p=0 NaN-gate).
+
 ## [0.6.0] — 2026-06-20
 
 ### Fixed
