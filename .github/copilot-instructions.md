@@ -3,7 +3,7 @@
 ## Build, Test, and Lint
 
 ```bash
-make test            # Full suite (1060 tests) with coverage
+make test            # Full suite (1479 tests) with coverage
 make test-fast       # Skip slow SA tests (~15s)
 make lint            # Ruff linter
 make types           # mypy type checker

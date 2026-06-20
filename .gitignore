@@ -9,5 +9,6 @@ build/
 docs/api/
 htmlcov/
 .coverage
-.claude/
+.claude/*
+!.claude/skills/
 .worktrees/
