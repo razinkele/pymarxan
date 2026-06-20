@@ -43,7 +43,13 @@ Gurobi. It also covers the wider Marxan family — multi-zone planning
 penalties, probabilistic targets, feature clumping, and minimum
 separation distance — together with post-hoc analyses such as
 irreplaceability, selection frequency, gap analysis, solution
-portfolios, and graph-theoretic connectivity metrics.
+portfolios, and graph-theoretic connectivity metrics. Beyond site
+selection, `pymarxan` adds native **river-network connectivity** — the
+Dendritic Connectivity Index [@cote2009] — and **barrier-removal
+optimization**: choosing which dams, weirs, or culverts to remove under a
+budget to maximise reconnected riverine habitat, via greedy,
+simulated-annealing, and exact integer-programming engines (the
+connected-habitat formulation of @ohanley2011).
 
 The package is built on the scientific Python stack (`numpy`, `pandas`,
 `geopandas`, `networkx`, `pulp`) and is distributed as an installable
@@ -74,6 +80,15 @@ can prototype with the heuristic and finish with a provably optimal
 solution. Third, **continuity**: by reading the native Marxan format,
 `pymarxan` lets the large body of existing Marxan projects and teaching
 material carry forward into a maintained, modern toolchain.
+
+`pymarxan` also spans a breadth no single maintained tool currently
+covers: the Marxan family for area-based site selection **and** native
+riverine barrier-removal optimization in one library. `prioritizr` has no
+dendritic-connectivity or barrier model; `restoptr` addresses
+terrestrial-2D restoration through a Java backend; and the dedicated
+river-barrier tools are typically narrow or closed. Bringing both
+paradigms into one inspectable Python API lets marine, terrestrial, and
+freshwater planning share data structures, solvers, and workflows.
 
 `pymarxan` targets researchers and practitioners doing reserve design,
 marine and terrestrial spatial planning, and the "30×30" protected-area

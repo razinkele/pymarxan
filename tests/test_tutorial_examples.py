@@ -259,3 +259,64 @@ def test_section_pareto_blm():
     # Every Pareto point comes from the raw sweep.
     for blm in pareto.blm_values:
         assert blm in result.blm_values
+
+
+# --------------------------------------------------------------------
+# Section: "River connectivity and barrier restoration"
+# --------------------------------------------------------------------
+
+
+def rivers_dci_and_barriers():
+    from pymarxan.rivers import (
+        BarrierProblem,
+        RiverNetwork,
+        budget_dci_frontier,
+        dci_diadromous,
+        optimize_barriers_greedy,
+        optimize_barriers_mip,
+    )
+
+    # A small river: S1 (the outlet) <- S2 <- S3, with an impassable barrier
+    # at the downstream end of S2 (B1) and of S3 (B2).
+    net = RiverNetwork(
+        segments=pd.DataFrame(
+            {"id": [1, 2, 3], "length": [10.0, 10.0, 10.0], "down_id": [-1, 1, 2]}
+        ),
+        barriers=pd.DataFrame(
+            {
+                "id": [1, 2],
+                "segment": [2, 3],
+                "pass_up": [0.0, 0.0],
+                "pass_down": [0.0, 0.0],
+                "removal_cost": [1.0, 1.0],
+                "status": [0, 0],
+            }
+        ),
+    )
+    baseline = dci_diadromous(net)            # 33.33 — only the outlet reaches the sea
+
+    problem = BarrierProblem(net, budget=1.0)
+    greedy = optimize_barriers_greedy(problem)
+    exact = optimize_barriers_mip(problem)    # binary diadromous → provably optimal
+
+    frontier = budget_dci_frontier(net, [0.0, 1.0, 2.0])
+
+    return {
+        "baseline": baseline,
+        "greedy_removed": greedy.removed,
+        "greedy_after": greedy.dci_after,
+        "exact_removed": exact.removed,
+        "exact_optimal": exact.optimal,
+        "frontier_after": list(frontier["dci_after"]),
+    }
+
+
+def test_section_rivers():
+    r = rivers_dci_and_barriers()
+    assert r["baseline"] == pytest.approx(100.0 / 3, abs=1e-4)
+    # B1 gates B2's reach, so one removal of B1 is the best spend.
+    assert r["greedy_removed"] == {1}
+    assert r["greedy_after"] == pytest.approx(200.0 / 3, abs=1e-4)
+    assert r["exact_removed"] == {1}
+    assert r["exact_optimal"] is True
+    assert r["frontier_after"] == pytest.approx([100.0 / 3, 200.0 / 3, 100.0], abs=1e-4)

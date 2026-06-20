@@ -1,7 +1,8 @@
-# pymarxan tutorial — v0.3 / v0.4 features
+# pymarxan tutorial — Python API
 
-A single end-to-end walk-through of the features added in v0.3.0
-("prioritizr-parity") and v0.4.0 ("Connectivity + portfolios"). Every
+A single end-to-end walk-through of the v0.3.0 ("prioritizr-parity") and
+v0.4.0 ("Connectivity + portfolios") surface, plus the v0.7+ river
+connectivity / barrier-restoration features (final section). Every
 code block below is exercised by `tests/test_tutorial_examples.py` —
 if a snippet stops running, that test fails and the doc gets fixed
 in the same commit as the code change.
@@ -291,6 +292,71 @@ for blm, c, b in zip(pareto.blm_values, pareto.costs, pareto.boundaries):
 A point `i` is dominated by point `j` iff `cost_j ≤ cost_i AND
 boundary_j ≤ boundary_i` with strict inequality somewhere. The filter
 also deduplicates identical `(cost, boundary)` pairs.
+
+---
+
+## River connectivity and barrier restoration
+
+`pymarxan.rivers` adds river-network connectivity (the Dendritic Connectivity
+Index, Côté et al. 2009) and barrier-removal optimization — *which dams / weirs
+/ culverts to remove, under a budget, to maximise reconnected habitat.*
+
+```python
+import pandas as pd
+from pymarxan.rivers import (
+    BarrierProblem,
+    RiverNetwork,
+    budget_dci_frontier,
+    dci_diadromous,
+    optimize_barriers_greedy,
+    optimize_barriers_mip,
+)
+
+# A small river: S1 (the outlet) <- S2 <- S3, with an impassable barrier
+# at the downstream end of S2 (B1) and of S3 (B2).
+net = RiverNetwork(
+    segments=pd.DataFrame(
+        {"id": [1, 2, 3], "length": [10.0, 10.0, 10.0], "down_id": [-1, 1, 2]}
+    ),
+    barriers=pd.DataFrame(
+        {
+            "id": [1, 2],
+            "segment": [2, 3],
+            "pass_up": [0.0, 0.0],
+            "pass_down": [0.0, 0.0],
+            "removal_cost": [1.0, 1.0],
+            "status": [0, 0],
+        }
+    ),
+)
+print(dci_diadromous(net))            # 33.33 — only the outlet reaches the sea
+
+problem = BarrierProblem(net, budget=1.0)
+greedy = optimize_barriers_greedy(problem)
+exact = optimize_barriers_mip(problem)   # binary diadromous → provably optimal
+print(greedy.removed, greedy.dci_after)  # {1} 66.67 — B1 gates B2's reach
+print(exact.removed, exact.optimal)      # {1} True
+
+# Efficiency frontier: DCI gained as the budget rises.
+print(budget_dci_frontier(net, [0.0, 1.0, 2.0])[["budget", "dci_after"]])
+```
+
+Key pieces:
+
+- **`RiverNetwork`** — a rooted river tree using the downstream-pointer
+  encoding (`down_id`; the outlet's is `-1`/`0`/NA). A barrier sits at the
+  *downstream end* of its `segment`. Build one from a HydroRIVERS / NHDPlus
+  GeoDataFrame with `from_hydrorivers(gdf)` and attach barrier points with
+  `snap_barriers(net, barriers_gdf)`.
+- **DCI** — `dci_diadromous` (sea ↔ segment), `dci_potamodromous` (all
+  within-network pairs), and `segment_connectivity` for per-segment values.
+- **Optimizers** — `optimize_barriers_greedy` and `optimize_barriers_sa` work
+  for general (partial) passability; `optimize_barriers_mip` is exact for the
+  binary-passability diadromous case. All honour a `budget` and locked-in /
+  locked-out barriers (`status`).
+- **Analysis** — `budget_dci_frontier` sweeps budgets into an efficiency
+  frontier; `barrier_selection_frequency` ranks barriers by how often they
+  appear in good portfolios.
 
 ---
 

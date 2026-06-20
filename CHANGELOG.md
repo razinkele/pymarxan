@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before/after DCI readout, and the barrier selection-frequency table. +8 tests.
   (Wiring the panel into the assembled app — a river-network upload flow — is
   deferred to Phase F.)
+- **Rivers app wiring, tutorial & JOSS (`pymarxan.rivers`, Phase F).** The
+  assembled Shiny app gains a **Rivers** tab (a demo-network loader + the
+  ``rivers_panel``), so barrier-removal optimization is explorable end-to-end in
+  the GUI. ``docs/TUTORIAL.md`` gains a "River connectivity and barrier
+  restoration" section (pinned by ``tests/test_tutorial_examples.py``), and the
+  JOSS paper's Summary / Statement of need are repositioned to cover the
+  marine-site-selection **plus** riverine-barrier breadth, citing Côté et al.
+  (2009) and O'Hanley (2011). +3 tests. Completes the rivers feature (Phases A–F).
 
 ## [0.7.0] — 2026-06-20
 

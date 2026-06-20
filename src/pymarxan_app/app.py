@@ -3,7 +3,7 @@ Run with: shiny run src/pymarxan_app/app.py
 """
 from __future__ import annotations
 
-from shiny import App, Inputs, Outputs, Session, reactive, ui
+from shiny import App, Inputs, Outputs, Session, reactive, render, ui
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution
@@ -76,6 +76,7 @@ from pymarxan_shiny.modules.results.target_met import (
     target_met_server,
     target_met_ui,
 )
+from pymarxan_shiny.modules.rivers import rivers_panel_server, rivers_panel_ui
 from pymarxan_shiny.modules.run_control.run_panel import run_panel_server, run_panel_ui
 from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_server,
@@ -95,6 +96,32 @@ from pymarxan_shiny.modules.spatial_export.spatial_export import (
     spatial_export_ui,
 )
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
+
+
+def _demo_river_network():
+    """A small demo river network (5-segment chain, 4 impassable barriers)
+    so the Rivers panel is explorable without an upload flow."""
+    import pandas as pd
+
+    from pymarxan.rivers import RiverNetwork
+
+    n = 5
+    return RiverNetwork(
+        segments=pd.DataFrame(
+            {"id": list(range(1, n + 1)), "length": [10.0] * n, "down_id": [-1, 1, 2, 3, 4]}
+        ),
+        barriers=pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4],
+                "segment": [2, 3, 4, 5],
+                "pass_up": [0.0] * 4,
+                "pass_down": [0.0] * 4,
+                "removal_cost": [1.0] * 4,
+                "status": [0] * 4,
+            }
+        ),
+    )
+
 
 app_ui = ui.page_navbar(
     ui.nav_panel(
@@ -147,6 +174,25 @@ app_ui = ui.page_navbar(
         ),
     ),
     ui.nav_panel(
+        "Rivers",
+        ui.layout_columns(
+            ui.card(
+                ui.card_header("River network"),
+                ui.p(
+                    "Load a demo river network to explore barrier-removal "
+                    "optimization (Dendritic Connectivity Index).",
+                    class_="text-muted small",
+                ),
+                ui.input_action_button(
+                    "load_demo_river", "Load demo river network", class_="btn-primary"
+                ),
+                ui.output_text("river_status"),
+            ),
+            rivers_panel_ui("rivers"),
+            col_widths=12,
+        ),
+    ),
+    ui.nav_panel(
         "Zones",
         ui.layout_columns(zone_config_ui("zone_config"), col_widths=12),
     ),
@@ -182,7 +228,23 @@ def server(input: Inputs, output: Outputs, session: Session):
     connectivity_pu_ids: reactive.Value = reactive.value(None)
     gadm_boundary: reactive.Value = reactive.value(None)
 
+    river_network: reactive.Value = reactive.value(None)
+
     upload_server("upload", problem=problem)
+    rivers_panel_server("rivers", network=river_network)
+
+    @reactive.effect
+    @reactive.event(input.load_demo_river)
+    def _load_demo_river():
+        river_network.set(_demo_river_network())
+
+    @render.text
+    def river_status():
+        net = river_network()
+        if net is None:
+            return "No river network loaded."
+        return f"Loaded: {net.n_segments} segments, {net.n_barriers} barriers."
+
     solver_picker_server("solver", solver_config=solver_config)
     objective_selector_server("objective", solver_config=solver_config)
     probability_config_server("probability", problem=problem)
