@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Omniscape omnidirectional connectivity (`pymarxan.connectivity.omniscape`).**
+  ``omniscape(resistance, radius, source_strength=None)`` maps omnidirectional
+  current density across a landscape with a moving window over the existing
+  grounded grid-Laplacian solve (McRae 2016; Landau et al. 2021), returning
+  ``cumulative_current``, the flat-resistance ``flow_potential`` null, and
+  ``normalized_current`` (>1 marks channelling "pinch points"). +6 tests
+  (uniform→normalized≈1 invariant; corridor pinch-point).
+- **Climate-refugia scoring (`pymarxan.connectivity.refugia`).**
+  ``refugia_score(velocity, connectivity=None, ...)`` composes climate stability
+  (inverse velocity) and connectivity into a [0, 1] "resilient-and-connected"
+  priority surface (Keppel et al. 2015; Anderson et al. 2023), weighted or
+  geometric, treating flat-climate (infinite-velocity) cells as the worst.
+  +8 tests.
+- **Dynamic / multi-period reserve design (`pymarxan.temporal`).**
+  ``dynamic_reserve_greedy`` — the Costello–Polasky (2004) informed-myopic
+  schedule (protect by value × loss-risk over a per-period budget; beats the
+  naive value-only baseline) — and ``two_stage_reserve_mip`` — the
+  Snyder–Haight–ReVelle (2005) two-stage stochastic maximal-coverage MIP
+  (act-now vs. recourse under future scenarios) on the shared CBC/HiGHS/Gurobi
+  backend. +13 tests (informed > naive; MIP == brute-force; scenario-loss
+  recourse). Climate-adaptive and temporal features from the 2026-06-20
+  frontier-methods survey.
+
 ## [0.10.0] — 2026-06-20
 
 ### Added
