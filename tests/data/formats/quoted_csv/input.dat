@@ -1,0 +1,16 @@
+Input file for the synthetic real-world-format fixture.
+BLM 1
+PROP 0.5
+RANDSEED -1
+NUMREPS 10
+NUMITNS 1000000
+NUMTEMP 10000
+INPUTDIR input
+SPECNAME spec.dat
+PUNAME pu.dat
+PUVSPRNAME puvspr.dat
+BOUNDNAME bound.dat
+SCENNAME output
+OUTPUTDIR output
+RUNMODE 1
+MISSLEVEL 1.0
