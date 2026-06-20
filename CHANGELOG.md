@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Project prioritization (`pymarxan.projects`).** A spatially-implicit
+  complement to site selection (the "Project Prioritization Protocol", Joseph
+  et al. 2009; exact form Hanson et al. 2019): fund a budget-constrained set of
+  management **actions** to maximise weighted expected feature persistence,
+  where **projects** (bundles of possibly-shared actions) secure features. New
+  ``ProjectProblem`` / ``ProjectSolution`` model, an ``evaluate_projects``
+  scorer, an exact ``prioritize_projects_mip`` (assignment linearisation on the
+  shared CBC/HiGHS/Gurobi backend, ``optimal=True``), and a greedy
+  cost-effectiveness ``prioritize_projects_greedy`` baseline. Shared actions
+  make ranking suboptimal — the exact MIP provably beats greedy (guarded by a
+  brute-force exactness test). First slice from the 2026-06-20 AI/frontier
+  methods survey. +6 tests.
+
 ## [0.8.4] — 2026-06-20
 
 ### Added
