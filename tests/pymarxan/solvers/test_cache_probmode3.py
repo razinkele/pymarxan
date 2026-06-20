@@ -65,10 +65,12 @@ class TestProbmode3CacheFields:
         cache = ProblemCache.from_problem(problem)
         assert cache.prob_weight == 2.5
 
-    def test_expected_matrix_uses_amount_times_one_minus_prob(self):
+    def test_expected_matrix_uses_amount_times_prob(self):
+        """Marxan PROB2D presence convention: expected = amount * prob
+        (probability.cpp ComputeP_AllPUsSelected_2D), NOT amount * (1 - prob)
+        (that's the PROBMODE 2 / Marxan 1D loss convention)."""
         problem = _make_probmode3_problem(num_pus=2, seed=42)
         cache = ProblemCache.from_problem(problem)
-        # For each (pu, feat): expected = amount * (1 - prob)
         puvspr = problem.pu_vs_features
         for _, row in puvspr.iterrows():
             pu_idx = cache.pu_id_to_idx[int(row["pu"])]
@@ -76,7 +78,7 @@ class TestProbmode3CacheFields:
             amount = float(row["amount"])
             prob = float(row["prob"])
             assert cache.expected_matrix[pu_idx, feat_idx] == pytest.approx(
-                amount * (1.0 - prob)
+                amount * prob
             )
 
     def test_var_matrix_is_bernoulli_form(self):
@@ -99,8 +101,9 @@ class TestProbmode3CacheFields:
             cache.feat_ptarget, np.array([0.95, 0.80]),
         )
 
-    def test_missing_prob_column_defaults_to_zero(self):
-        """A problem without a `prob` column gets variance=0 throughout."""
+    def test_missing_prob_column_is_deterministic(self):
+        """No `prob` column → presence defaults to 1.0 (certain): variance is
+        0 throughout and expected collapses to the plain amount."""
         problem = _make_probmode3_problem()
         problem = problem.copy_with(
             pu_vs_features=problem.pu_vs_features.drop(columns=["prob"]),
@@ -109,7 +112,7 @@ class TestProbmode3CacheFields:
         np.testing.assert_array_equal(
             cache.var_matrix, np.zeros_like(cache.var_matrix),
         )
-        # expected_matrix collapses to amount (since 1-0 = 1)
+        # expected_matrix collapses to amount (since prob defaults to 1.0)
         np.testing.assert_array_almost_equal(
             cache.expected_matrix, cache.pu_feat_matrix,
         )

@@ -6,8 +6,10 @@ constraints). Lives in ``pymarxan.solvers.probability``.
 Sign convention: Z = (T - E) / sqrt(V), positive = shortfall side
 (matches Marxan v4 ``computation.hpp::computeProbMeasures``).
 Upper-tail probability P_j = norm.sf(Z_j) = 1 - Φ(Z_j).
-Penalty normalisation: SPF_j * (ptarget_j - P_j) / ptarget_j, summed
-and scaled by PROBABILITYWEIGHTING.
+Penalty normalisation: (ptarget_j - P_j) / ptarget_j, summed and scaled by
+PROBABILITYWEIGHTING only — NOT by SPF (Marxan's ComputeProbability2D weights
+the probability shortfall by PROBABILITYWEIGHTING alone; SPF weights the
+separate representation penalty). See score_change.cpp:611.
 """
 from __future__ import annotations
 
@@ -86,14 +88,13 @@ class TestZscorePerFeature:
 
 
 class TestZscorePenalty:
-    """Marxan-normalised: SPF_j * (ptarget_j - P_j) / ptarget_j."""
+    """Marxan-normalised: (ptarget_j - P_j) / ptarget_j, NOT SPF-weighted."""
 
     def test_zero_when_prob_target_met(self):
         # Z = -2.0 -> P = norm.sf(-2.0) ≈ 0.977 > ptarget 0.5
         p = compute_zscore_penalty(
             zscore_per_feature={1: -2.0},
             prob_targets={1: 0.5},
-            spf={1: 1.0},
             weight=1.0,
         )
         assert p == pytest.approx(0.0)
@@ -102,18 +103,34 @@ class TestZscorePenalty:
         """Verifies the (ptarget - P)/ptarget normalisation against the raw
         subtraction the v1 design would have produced."""
         # Z = 1.0 -> P = norm.sf(1.0) ≈ 0.1587
-        # penalty = SPF · (ptarget - P) / ptarget = 2.0 · (0.95 - 0.1587) / 0.95
+        # penalty = (ptarget - P) / ptarget = (0.95 - 0.1587) / 0.95
         p = compute_zscore_penalty(
             zscore_per_feature={1: 1.0},
             prob_targets={1: 0.95},
-            spf={1: 2.0},
             weight=1.0,
         )
-        expected_raw = 2.0 * (0.95 - norm.sf(1.0))
-        expected_norm = 2.0 * (0.95 - norm.sf(1.0)) / 0.95
+        expected_raw = 0.95 - norm.sf(1.0)
+        expected_norm = (0.95 - norm.sf(1.0)) / 0.95
         # Marxan normalises by ptarget; this is the distinguishing test.
         assert p == pytest.approx(expected_norm, abs=1e-9)
         assert p != pytest.approx(expected_raw, abs=1e-4)
+
+    def test_not_weighted_by_spf(self):
+        """Marxan's ComputeProbability2D scales the probability shortfall by
+        PROBABILITYWEIGHTING ONLY — never by SPF. The penalty depends solely
+        on Z, ptarget and weight, so there is no per-feature SPF input."""
+        # The function signature must not accept an SPF argument.
+        import inspect
+
+        params = inspect.signature(compute_zscore_penalty).parameters
+        assert "spf" not in params
+        # And the value is exactly the un-SPF-weighted normalised shortfall.
+        p = compute_zscore_penalty(
+            zscore_per_feature={1: 1.0},
+            prob_targets={1: 0.95},
+            weight=1.0,
+        )
+        assert p == pytest.approx((0.95 - norm.sf(1.0)) / 0.95, abs=1e-9)
 
     def test_disabled_when_ptarget_negative(self):
         """ptarget == -1 (Marxan disabled sentinel) -> feature contributes 0
@@ -121,7 +138,6 @@ class TestZscorePenalty:
         p = compute_zscore_penalty(
             zscore_per_feature={1: 5.0},  # huge shortfall
             prob_targets={1: -1.0},
-            spf={1: 1.0},
             weight=1.0,
         )
         assert p == 0.0
@@ -131,7 +147,6 @@ class TestZscorePenalty:
         p = compute_zscore_penalty(
             zscore_per_feature={1: 5.0},
             prob_targets={1: 0.0},
-            spf={1: 1.0},
             weight=1.0,
         )
         assert p == 0.0
@@ -141,28 +156,26 @@ class TestZscorePenalty:
         base = compute_zscore_penalty(
             zscore_per_feature={1: 1.0},
             prob_targets={1: 0.95},
-            spf={1: 1.0},
             weight=1.0,
         )
         scaled = compute_zscore_penalty(
             zscore_per_feature={1: 1.0},
             prob_targets={1: 0.95},
-            spf={1: 1.0},
             weight=3.0,
         )
         assert scaled == pytest.approx(3.0 * base)
 
     def test_sums_over_features(self):
-        """Multi-feature penalty is the SPF-weighted sum."""
+        """Multi-feature penalty is the un-weighted sum of normalised
+        shortfalls (no SPF factor)."""
         p = compute_zscore_penalty(
             zscore_per_feature={1: 1.0, 2: -1.0},
             prob_targets={1: 0.95, 2: 0.95},
-            spf={1: 1.0, 2: 3.0},
         )
         # feature 1: shortfall side. feature 2: exceedance side.
         e1 = max(0.0, (0.95 - norm.sf(1.0)) / 0.95)
         e2 = max(0.0, (0.95 - norm.sf(-1.0)) / 0.95)
-        expected = 1.0 * e1 + 3.0 * e2
+        expected = e1 + e2
         assert p == pytest.approx(expected, abs=1e-9)
 
     def test_sentinel_variance_means_deterministic_no_penalty(self):
@@ -178,7 +191,6 @@ class TestZscorePenalty:
         p = compute_zscore_penalty(
             zscore_per_feature={1: 4.0},
             prob_targets={1: 0.95},
-            spf={1: 1.0},
             weight=1.0,
         )
         assert p == 0.0

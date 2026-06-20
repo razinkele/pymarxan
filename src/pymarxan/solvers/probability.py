@@ -17,10 +17,19 @@ elsewhere via the regular penalty path.
 
 Penalty per feature is normalised by ptarget (matching Marxan):
 
-    penalty_j = SPF_j · max(0, (ptarget_j − P_j) / ptarget_j)
+    penalty_j = max(0, (ptarget_j − P_j) / ptarget_j)
 
-Features with ``ptarget_j ≤ 0`` are disabled (Marxan's sentinel) and
-contribute 0 regardless of Z.
+Marxan's ``ComputeProbability2D`` scales the probability shortfall only by
+``PROBABILITYWEIGHTING`` — **not** by SPF (the SPF weighting applies to the
+*representation* penalty, a separate objective term; see
+``score_change.cpp:611``). Features with ``ptarget_j ≤ 0`` are disabled
+(Marxan's sentinel) and contribute 0 regardless of Z.
+
+Expected amount uses the PROB2D *presence* convention
+(``ComputeP_AllPUsSelected_2D``: ``ExpectedAmount2D += amount * prob``), i.e.
+``E[T_j] = Σ amount_ij · p_ij`` — the opposite polarity to PROBMODE 2 / Marxan
+1D, where the per-PU ``prob`` is a loss probability and held amount is
+``amount · (1 − prob)``.
 
 References
 ----------
@@ -77,7 +86,6 @@ def compute_zscore_per_feature(
 def compute_zscore_penalty(
     zscore_per_feature: dict[int, float],
     prob_targets: dict[int, float],
-    spf: dict[int, float],
     weight: float = 1.0,
 ) -> float:
     """Marxan-faithful normalised probability shortfall penalty.
@@ -85,10 +93,13 @@ def compute_zscore_penalty(
     For each feature *j*::
 
         P_j = norm.sf(Z_j)
-        penalty_j = SPF_j · max(0, (ptarget_j − P_j) / ptarget_j)
+        penalty_j = max(0, (ptarget_j − P_j) / ptarget_j)
 
-    Total: ``weight · Σ penalty_j``. Features with ``ptarget_j ≤ 0`` are
-    treated as disabled (Marxan's ``-1`` sentinel) and contribute 0.
+    Total: ``weight · Σ penalty_j``. Following Marxan's ``ComputeProbability2D``
+    the probability shortfall is scaled **only** by ``PROBABILITYWEIGHTING``,
+    not by SPF (SPF weights the separate representation penalty). Features with
+    ``ptarget_j ≤ 0`` are treated as disabled (Marxan's ``-1`` sentinel) and
+    contribute 0.
 
     Parameters
     ----------
@@ -96,8 +107,6 @@ def compute_zscore_penalty(
         Z scores from :func:`compute_zscore_per_feature`.
     prob_targets
         Per-feature probability target. ``-1`` (or any ≤ 0) means disabled.
-    spf
-        Per-feature species penalty factor.
     weight
         Global ``PROBABILITYWEIGHTING`` scaling factor.
 
@@ -117,9 +126,8 @@ def compute_zscore_penalty(
         if z == _MARXAN_ZERO_VARIANCE_SENTINEL:
             continue
         prob = float(norm.sf(z))  # upper tail; matches Marxan's probZUT
-        spf_j = spf.get(fid, 1.0)
         shortfall = max(0.0, (ptarget - prob) / ptarget)
-        total += spf_j * shortfall
+        total += shortfall
     return float(weight * total)
 
 
@@ -148,7 +156,6 @@ def evaluate_solution_chance(
         return {}, 0.0
     feat_ids = problem.features["id"].astype(int).values
     feat_target = problem.features["target"].astype(float).values
-    feat_spf = problem.features["spf"].astype(float).values
     feat_ptarget = problem.features["ptarget"].astype(float).values
 
     if not any(pt > 0 for pt in feat_ptarget):
@@ -173,12 +180,14 @@ def evaluate_solution_chance(
             continue
         fid = int(pv_sp[k])
         amt = float(pv_am[k])
-        p = float(pv_pr[k]) if pv_pr is not None else 0.0
-        achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amt * (1.0 - p)
+        # PROB2D presence convention: p = P(present); default 1.0 (certain
+        # presence) when there is no `prob` column. Matches Marxan
+        # ComputeP_AllPUsSelected_2D (`ExpectedAmount2D += amount * prob`).
+        p = float(pv_pr[k]) if pv_pr is not None else 1.0
+        achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amt * p
         achieved_var[fid] = achieved_var.get(fid, 0.0) + amt * amt * p * (1.0 - p)
 
     targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
-    spf = {int(feat_ids[j]): float(feat_spf[j]) for j in range(len(feat_ids))}
     ptargets = {int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))}
 
     # Ensure every feature is keyed (E=Var=0 → sentinel Z)
@@ -188,7 +197,7 @@ def evaluate_solution_chance(
 
     z_per = compute_zscore_per_feature(achieved_mean, achieved_var, targets)
     weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
-    penalty = compute_zscore_penalty(z_per, ptargets, spf, weight=weight)
+    penalty = compute_zscore_penalty(z_per, ptargets, weight=weight)
 
     shortfalls: dict[int, float] = {}
     for fid, z in z_per.items():

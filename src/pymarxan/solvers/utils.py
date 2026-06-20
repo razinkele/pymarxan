@@ -345,8 +345,11 @@ def _compute_probmode3_zscore_penalty(
                 continue
             fid = int(pv_sp[k])
             amount = float(pv_am[k])
-            p = float(pv_pr[k]) if pv_pr is not None else 0.0
-            achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amount * (1.0 - p)
+            # PROB2D presence convention: p = P(present); default 1.0
+            # (deterministic) when no `prob` column. E[T] += amount * p,
+            # matching Marxan ComputeP_AllPUsSelected_2D.
+            p = float(pv_pr[k]) if pv_pr is not None else 1.0
+            achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amount * p
             achieved_variance[fid] = (
                 achieved_variance.get(fid, 0.0) + (amount ** 2) * p * (1.0 - p)
             )
@@ -354,7 +357,6 @@ def _compute_probmode3_zscore_penalty(
     # Feature-side data
     feat_ids = problem.features["id"].astype(int).values
     feat_target = problem.features["target"].astype(float).values
-    feat_spf = problem.features["spf"].astype(float).values
     if "ptarget" in problem.features.columns:
         feat_ptarget = problem.features["ptarget"].astype(float).values
     else:
@@ -366,7 +368,6 @@ def _compute_probmode3_zscore_penalty(
         return 0.0
 
     targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
-    spf = {int(feat_ids[j]): float(feat_spf[j]) for j in range(len(feat_ids))}
     prob_targets = {
         int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))
     }
@@ -378,7 +379,7 @@ def _compute_probmode3_zscore_penalty(
         achieved_variance.setdefault(fid, 0.0)
 
     z_per_feat = compute_zscore_per_feature(achieved_mean, achieved_variance, targets)
-    return compute_zscore_penalty(z_per_feat, prob_targets, spf, weight=prob_weight)
+    return compute_zscore_penalty(z_per_feat, prob_targets, weight=prob_weight)
 
 
 def compute_objective_terms(

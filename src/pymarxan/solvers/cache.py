@@ -96,8 +96,8 @@ class ProblemCache:
     # but only used when probmode == 3. See solvers/probability.py for the math.
     probmode: int = 0
     prob_weight: float = 1.0
-    # expected_matrix[i, j] = amount_ij · (1 − p_ij); collapses to amount when
-    # there is no `prob` column or when prob == 0.
+    # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
+    # when there is no `prob` column or when prob == 1.
     expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     # var_matrix[i, j] = amount_ij² · p_ij · (1 − p_ij); all-zero when no `prob`.
     var_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
@@ -231,11 +231,16 @@ class ProblemCache:
         probmode = int(params.get("PROBMODE", 0))
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
 
-        # Per-cell Bernoulli probability — read once into a dense matrix.
-        # The expected and variance matrices are derived from amount + prob
-        # so they can be summed via boolean indexing exactly like
-        # pu_feat_matrix during full / delta objective evaluation.
-        prob_matrix = np.zeros_like(pu_feat_matrix)
+        # Per-cell probability of PRESENCE — read once into a dense matrix.
+        # Marxan's PROB2D `prob` is the probability the feature is present at
+        # the cell (clumping.cpp / probability.cpp ComputeP_AllPUsSelected_2D:
+        # `ExpectedAmount2D += amount * SM.prob`). Cells without an explicit
+        # prob default to 1.0 (certain presence == deterministic), so a
+        # problem with no `prob` column reduces to the plain amount sum.
+        # NB: this is the *opposite* polarity to PROBMODE 2 (per-PU `prob`,
+        # Marxan 1D), where `prob` is the probability of loss and the held
+        # amount is `amount * (1 - prob)`.
+        prob_matrix = np.ones_like(pu_feat_matrix)
         if (
             problem.pu_vs_features is not None
             and "prob" in problem.pu_vs_features.columns
@@ -249,10 +254,10 @@ class ProblemCache:
                 if pi is not None and fj is not None:
                     prob_matrix[pi, fj] = float(pv_pr[k])
 
-        # Marxan PROB2D math:
-        #   E[T_j contribution from i] = amount_ij * (1 - p_ij)
+        # Marxan PROB2D math (probability.cpp ComputeP_AllPUsSelected_2D):
+        #   E[T_j contribution from i]   = amount_ij * p_ij          (presence)
         #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
-        expected_matrix = pu_feat_matrix * (1.0 - prob_matrix)
+        expected_matrix = pu_feat_matrix * prob_matrix
         var_matrix = (pu_feat_matrix ** 2) * prob_matrix * (1.0 - prob_matrix)
 
         # Per-feature probability target; default -1 (disabled sentinel) for
@@ -469,7 +474,10 @@ class ProblemCache:
             z = (target - mean) / np.sqrt(var)
             prob_met = float(norm.sf(z))
             shortfall = max(0.0, (ptarget - prob_met) / ptarget)
-            total += float(self.feat_spf[j]) * shortfall
+            # Marxan's ComputeProbability2D weights the probability shortfall
+            # only by PROBABILITYWEIGHTING — NOT by SPF (unlike the
+            # representation penalty). See score_change.cpp:611.
+            total += shortfall
         return self.prob_weight * total
 
     def compute_full_objective(

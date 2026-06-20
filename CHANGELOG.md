@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PROBMODE 3 (Z-score chance constraints) brought to true Marxan PROB2D
+  parity.** An audit against the authoritative Marxan C++ source
+  (`probability.cpp`, `computation.hpp::computeProbMeasures`) found two
+  divergences in the Phase 18 implementation:
+  - **Expected-amount polarity.** The expected reserve amount was computed as
+    `Σ amount·(1 − p)` (Marxan's *1D* loss convention) instead of
+    `Σ amount·p` (Marxan's *2D* presence convention,
+    `ComputeP_AllPUsSelected_2D`). The per-(PU, feature) `prob` column is now
+    interpreted as the **probability of presence**, matching Marxan PROB2D.
+  - **SPF weighting.** The probability shortfall was multiplied by each
+    feature's SPF; Marxan's `ComputeProbability2D` scales it by
+    `PROBABILITYWEIGHTING` only (SPF weights the separate representation
+    penalty). The SPF factor has been removed from the probability penalty.
+
+  The Z-score, upper-tail probability (`norm.sf` ≡ Marxan `probZUT`),
+  ptarget normalisation, and zero-variance sentinel were already correct and
+  are unchanged.
+
+### Changed
+
+- **BREAKING (PROBMODE 3 only): the `puvspr` `prob` column now means
+  probability of presence, not loss.** Existing PROBMODE 3 inputs that
+  supplied loss probabilities must be complemented (`p → 1 − p`) to keep the
+  same behaviour. A missing `prob` now defaults to `1.0` (certain presence ⇒
+  deterministic). PROBMODE 1 and 2 (per-PU `prob`, Marxan 1D loss convention)
+  are unaffected. Deterministic problems (no `prob` column) are unaffected.
+
 ## [0.5.1] — 2026-06-20
 
 ### Changed

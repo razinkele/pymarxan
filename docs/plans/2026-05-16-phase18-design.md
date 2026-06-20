@@ -1,5 +1,14 @@
 # Phase 18 — Probability Completion (PROB2D + PTARGET + Z-score)
 
+> **Correction (2026-06-20):** a later source audit against the Marxan C++
+> (`probability.cpp`, `computation.hpp::computeProbMeasures`) found two errors
+> in the formulation below: (1) the expected amount must be `Σ amount·p`
+> (PROB2D *presence* convention), not `Σ amount·(1 − p)` as written in
+> §Formulation; and (2) the probability penalty must **not** be SPF-weighted —
+> Marxan scales it by `PROBABILITYWEIGHTING` only. Both were fixed in the code;
+> see the CHANGELOG "PROBMODE 3 … Marxan PROB2D parity" entry. Treat the
+> `(1 − p)` and `SPF_j ·` expressions below as superseded.
+
 **Date:** 2026-05-16 (revised post-review)
 **Target version:** v0.2.0 (Marxan-classic parity)
 **Parent plan:** [`docs/plans/2026-05-16-realignment.md`](2026-05-16-realignment.md)

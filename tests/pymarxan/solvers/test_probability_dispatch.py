@@ -112,19 +112,21 @@ def test_probmode_3_computes_zscore_penalty():
     variance is non-zero and ptarget is active."""
     from scipy.stats import norm
     problem = _problem_with_prob2d(prob_mode=3)
-    # Both PUs selected. amount=8 each, prob=0.1 each.
-    # E[T] = sum(amount * (1-prob)) = 8*0.9 + 8*0.9 = 14.4
+    # Both PUs selected. amount=8 each, prob=0.1 each (PROB2D presence prob).
+    # E[T] = sum(amount * prob) = 8*0.1 + 8*0.1 = 1.6   (Marxan 2D convention)
     # Var[T] = sum(amount² * prob * (1-prob)) = 64*0.1*0.9 + 64*0.1*0.9 = 11.52
-    # target=10, so Z = (10 - 14.4) / sqrt(11.52) ≈ -1.2964
-    # P = norm.sf(Z) ≈ 0.9025; ptarget=0.95; penalty = 2.0 * (0.95 - 0.9025) / 0.95
+    # target=10, so Z = (10 - 1.6) / sqrt(11.52) ≈ 2.4749
+    # P = norm.sf(Z) ≈ 0.0067; ptarget=0.95; penalty = (0.95 - P) / 0.95
+    # (no SPF factor — Marxan weights the probability shortfall by
+    # PROBABILITYWEIGHTING only).
     selected = np.array([True, True])
     pu_index = {1: 0, 2: 1}
 
-    e = 8.0 * 0.9 + 8.0 * 0.9
+    e = 8.0 * 0.1 + 8.0 * 0.1
     v = 64.0 * 0.09 + 64.0 * 0.09
     z = (10.0 - e) / v ** 0.5
     p = norm.sf(z)
-    expected = 2.0 * max(0.0, (0.95 - p) / 0.95) * 1.0  # weight = 1.0
+    expected = max(0.0, (0.95 - p) / 0.95) * 1.0  # weight = 1.0, no SPF
 
     assert compute_probability_penalty(problem, selected, pu_index) == pytest.approx(
         expected, abs=1e-9
