@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Climate velocity (`pymarxan.connectivity.velocity`).** New
+  ``spatial_gradient`` (Horn 1981 3×3 finite-difference gradient of a climate
+  raster, as used by Burrows et al. 2014 / the VoCC package) and
+  ``climate_velocity`` (local temporal climate trend ÷ spatial gradient — the
+  speed a species must move to track its niche, e.g. km/yr). Accepts a scalar
+  or per-cell temporal trend, returns a non-negative velocity-magnitude raster
+  (``inf`` on flat climate, with an optional ``max_velocity`` cap). A
+  climate-adaptation layer that feeds Marxan as a cost / feature / boundary
+  (e.g. prioritise low-velocity refugia). Pure NumPy; georeferencing to
+  planning units is handled by the existing spatial raster pipeline. First
+  climate-adaptive feature from the 2026-06-20 frontier-methods survey. +12 tests.
+
 ## [0.9.0] — 2026-06-20
 
 ### Added
