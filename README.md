@@ -4,11 +4,11 @@ Modular Python toolkit for Marxan conservation planning.
 
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-1479%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1539%20passing-brightgreen)
 
 ## What is this?
 
-[Marxan](https://marxansolutions.org/) is the world's most widely used conservation planning software, helping prioritize areas for biodiversity protection. **pymarxan** is a complete Python reimplementation covering the full Marxan family — Marxan, Marxan with Zones, and Marxan with Connectivity — combined with modern exact solvers, an interactive web UI, and a modular architecture for programmatic use.
+[Marxan](https://marxansolutions.org/) is the world's most widely used conservation planning software, helping prioritize areas for biodiversity protection. **pymarxan** is a complete Python reimplementation covering the full Marxan family — Marxan, Marxan with Zones, and Marxan with Connectivity — combined with modern exact solvers, modern conservation-planning analyses (30×30 representation, distributional equity, multi-scenario robustness), native **river-connectivity (DCI) and barrier-removal optimization**, an interactive web UI, and a modular architecture for programmatic use.
 
 It provides a pure Python core library for headless optimization, reusable Shiny UI components, and an assembled web application — all in one package.
 
@@ -46,13 +46,15 @@ pymarxan (three-layer monorepo)
 │   ├── models/            ConservationProblem & Solution dataclasses
 │   ├── solvers/           SA, MIP, heuristic, II, run-mode pipeline
 │   ├── zones/             Multi-zone model, zone SA/heuristic/II/MIP solvers
-│   ├── connectivity/      Distance decay functions, connectivity penalties
+│   ├── connectivity/      Distance decay, penalties, circuit-theory (current-flow), smoothing
+│   ├── rivers/            River-network (DCI) + barrier-removal optimization
 │   ├── constraints/       Contiguity, feature contiguity, neighbor, linear, budget
 │   ├── objectives/        MinSet, MaxCoverage, MaxUtility, MinShortfall
+│   ├── targets/           Automatic target rules (relative, log-linear, group)
 │   ├── spatial/           Grid generation, feature intersection, boundary, export
 │   ├── io/                Marxan file readers/writers (binary & zone formats)
 │   ├── calibration/       BLM calibration & sensitivity analysis
-│   └── analysis/          Selection frequency, portfolio analysis
+│   └── analysis/          Selection frequency, portfolio, equity, 30×30 representation, robustness
 ├── src/pymarxan_shiny/    Reusable Shiny UI modules (26 modules)
 └── src/pymarxan_app/      Assembled Shiny web application
 ```
@@ -93,12 +95,34 @@ pymarxan (three-layer monorepo)
 - Distance decay functions (exponential, power-law, threshold)
 - MIP linearization (binary-AND for symmetric, directed for asymmetric)
 - Zone-aware connectivity (same-zone bonus)
+- Circuit-theory (current-flow / effective-resistance) connectivity from a resistance raster
+- Mass-conserving distribution smoothing via a dispersal kernel
+
+### River connectivity & barrier restoration (`pymarxan.rivers`)
+- `RiverNetwork`: rooted river tree (downstream-pointer encoding) with cached
+  pure-NumPy topology — no extra graph dependency
+- **Dendritic Connectivity Index** (Côté et al. 2009): `dci_diadromous`
+  (sea↔segment), `dci_potamodromous` (all within-network pairs), per-segment
+  connectivity
+- Barrier-removal optimization under a budget and locked-in/out barriers:
+  `optimize_barriers_greedy`, `optimize_barriers_sa` (partial passability), and
+  an exact `optimize_barriers_mip` for the binary-passability diadromous case
+- GIS ingest: `from_hydrorivers` (HydroRIVERS / NHDPlus GeoDataFrames) and
+  `snap_barriers` (snap barrier points to nearest segment)
 
 ### Probability
-- Dual-mode probability support:
+- Three probability modes:
   - Mode 1: risk premium weighted by cost
   - Mode 2: persistence-adjusted feature amounts
+  - Mode 3: Marxan-faithful Z-score **chance constraints** (PROB2D, per-feature
+    probability targets)
 - Integrated in SA, heuristic, and MIP solvers
+
+### Modern conservation planning
+- 30×30 / GBF area-based **representation** reporting against a policy threshold
+- Distributional **equity** analysis (per-group totals/shares + Gini coefficient)
+- Automatic **target-setting** rules (relative, IUCN-style log-linear, per-group)
+- Multi-scenario **robustness** (minimax-regret no-regrets plan selection)
 
 ### Constraints
 - **Contiguity**: selected PUs must form a connected subgraph (MIP network flow)
