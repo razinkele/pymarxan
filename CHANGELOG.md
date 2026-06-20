@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-06-20
+
 ### Fixed
 
 - **Shiny plots now render reliably (server-side matplotlib).** Three panels
@@ -746,7 +748,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.1
 [0.8.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.8.0
 [0.7.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.7.0
 [0.6.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.6.0
