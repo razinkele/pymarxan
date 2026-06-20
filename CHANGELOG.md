@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``solvers.cooling.CoolingSchedule``, budget by hard rejection, deterministic
   per ``seed``). Both honour locks and never beat the exact optimum. +9 tests
   (brute-force oracle, gating-barrier pick, budget/lock guards, SA determinism).
+- **River barrier optimization — exact MIP (`pymarxan.rivers`, Phase C).**
+  ``optimize_barriers_mip`` solves the binary-passability **diadromous** case
+  exactly: a segment reaches the sea iff every blocking barrier on its path is
+  removed, linearised as ``c_i = ∏ y_b`` (``c_i ≤ y_b``; ``c_i ≥ Σy_b −
+  (|path|−1)``; continuous ``c_i``), maximising ``Σ w_i c_i`` under the budget
+  and locks (O'Hanley 2011 / Kuby 2005 lineage). Returns ``optimal=True``;
+  refuses partial passability (``p ∉ {0,1}`` → use SA) and the potamodromous
+  form. The PuLP backend factory (``_available_backends`` / ``_make_pulp_solver``)
+  was extracted from ``mip_solver.py`` to ``solvers/_backends.py`` so the core,
+  zone, and river MIP solvers share one importable home (no behaviour change).
+  +8 tests, incl. MIP == brute-force on random binary trees.
 
 ## [0.6.0] — 2026-06-20
 

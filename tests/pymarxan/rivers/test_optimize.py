@@ -17,6 +17,7 @@ from pymarxan.rivers import (
     RiverNetwork,
     dci_diadromous,
     optimize_barriers_greedy,
+    optimize_barriers_mip,
     optimize_barriers_sa,
 )
 
@@ -147,3 +148,110 @@ def test_heuristics_never_beat_brute_force():
         s = optimize_barriers_sa(problem, seed=7, num_steps=1000)
         assert g.dci_after <= opt + 1e-6
         assert s.dci_after <= opt + 1e-6
+
+
+# --- exact MIP (binary diadromous) ------------------------------------
+
+
+def _random_binary_net(seed: int) -> RiverNetwork:
+    """A small random binary tree: segment k>1 drains to a random earlier
+    segment; one barrier per non-outlet segment with p in {0,1}, cost 1."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(4, 7))
+    seg_ids = list(range(1, n + 1))
+    down = [-1] + [int(rng.integers(1, k)) for k in range(2, n + 1)]
+    bar_ids = seg_ids[1:]
+    pass_up = [float(rng.integers(0, 2)) for _ in bar_ids]
+    return RiverNetwork(
+        segments=pd.DataFrame(
+            {"id": seg_ids, "length": [10.0] * n, "down_id": down}
+        ),
+        barriers=pd.DataFrame(
+            {
+                "id": bar_ids,
+                "segment": bar_ids,
+                "pass_up": pass_up,
+                "pass_down": pass_up,
+                "removal_cost": [1.0] * len(bar_ids),
+                "status": [STATUS_NORMAL] * len(bar_ids),
+            }
+        ),
+    )
+
+
+def test_mip_picks_gating_barrier_and_is_optimal():
+    sol = optimize_barriers_mip(BarrierProblem(_binary_chain(), budget=1.0))
+    assert sol.removed == {1}
+    assert sol.dci_after == pytest.approx(200.0 / 3, abs=1e-4)
+    assert sol.optimal is True
+
+
+def test_mip_equals_brute_force_on_binary_chain():
+    for budget in (0.0, 1.0, 2.0, None):
+        problem = BarrierProblem(_binary_chain(), budget=budget)
+        sol = optimize_barriers_mip(problem)
+        assert sol.dci_after == pytest.approx(_brute_force(problem), abs=1e-4)
+
+
+def test_mip_equals_brute_force_on_random_nets():
+    for seed in range(8):
+        net = _random_binary_net(seed)
+        for budget in (1.0, 2.0, None):
+            problem = BarrierProblem(net, budget=budget)
+            sol = optimize_barriers_mip(problem)
+            assert sol.optimal is True
+            assert sol.dci_after == pytest.approx(_brute_force(problem), abs=1e-4)
+
+
+def test_mip_respects_locked_out():
+    net = _binary_chain(statuses=[STATUS_LOCKED_OUT, STATUS_NORMAL])
+    sol = optimize_barriers_mip(BarrierProblem(net, budget=10.0))
+    assert 1 not in sol.removed
+    assert sol.dci_after == pytest.approx(100.0 / 3, abs=1e-4)
+
+
+def test_mip_forces_locked_in():
+    net = _binary_chain(statuses=[STATUS_LOCKED_IN, STATUS_NORMAL])
+    sol = optimize_barriers_mip(BarrierProblem(net, budget=10.0))
+    assert 1 in sol.removed
+
+
+def test_mip_rejects_potamodromous():
+    with pytest.raises(NotImplementedError, match="diadromous|potamodromous"):
+        optimize_barriers_mip(
+            BarrierProblem(_binary_chain(), form="potamodromous")
+        )
+
+
+def test_mip_rejects_partial_passability():
+    # native p=0.5 → not binary → MIP must refuse (use SA instead)
+    net = RiverNetwork(
+        segments=pd.DataFrame(
+            {"id": [1, 2], "length": [10.0, 10.0], "down_id": [-1, 1]}
+        ),
+        barriers=pd.DataFrame(
+            {
+                "id": [1],
+                "segment": [2],
+                "pass_up": [0.5],
+                "pass_down": [0.5],
+                "removal_cost": [1.0],
+                "status": [STATUS_NORMAL],
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="binary"):
+        optimize_barriers_mip(BarrierProblem(net))
+
+
+def test_heuristics_match_mip_on_random_nets():
+    for seed in range(5):
+        net = _random_binary_net(seed)
+        problem = BarrierProblem(net, budget=2.0)
+        opt = optimize_barriers_mip(problem).dci_after
+        g = optimize_barriers_greedy(problem).dci_after
+        s = optimize_barriers_sa(problem, seed=3, num_steps=2000).dci_after
+        assert g <= opt + 1e-6
+        assert s == pytest.approx(opt, abs=1e-4)  # SA reaches optimum on small nets

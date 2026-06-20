@@ -15,6 +15,7 @@ from pymarxan.rivers.dci import (
 from pymarxan.rivers.network import RiverNetwork
 from pymarxan.rivers.optimize import (
     optimize_barriers_greedy,
+    optimize_barriers_mip,
     optimize_barriers_sa,
 )
 
@@ -25,6 +26,7 @@ __all__ = [
     "dci_diadromous",
     "dci_potamodromous",
     "optimize_barriers_greedy",
+    "optimize_barriers_mip",
     "optimize_barriers_sa",
     "segment_connectivity",
 ]
