@@ -39,6 +39,26 @@ class TestReadPuDefaults:
         assert "status" in df.columns
         assert list(df["status"]) == [0, 0]
 
+    def test_read_pu_double_tab_separated(self, tmp_path):
+        """Some real Marxan exports pad columns with repeated tabs/whitespace
+        (e.g. ``id\\t\\tcost\\t\\tstatus``). The reader must collapse the runs
+        rather than create empty ``Unnamed`` columns."""
+        (tmp_path / "pu.dat").write_text(
+            "id\t\tcost\t\tstatus\n1\t\t5\t\t0\n2\t\t3\t\t2\n"
+        )
+        df = read_pu(tmp_path / "pu.dat")
+        assert not any(str(c).startswith("Unnamed") for c in df.columns)
+        assert list(df["id"]) == [1, 2]
+        assert list(df["cost"]) == [5.0, 3.0]
+        assert list(df["status"]) == [0, 2]
+
+    def test_read_pu_space_separated(self, tmp_path):
+        """Whitespace-padded columns are also collapsed."""
+        (tmp_path / "pu.dat").write_text("id  cost  status\n1  5  0\n2  3  2\n")
+        df = read_pu(tmp_path / "pu.dat")
+        assert not any(str(c).startswith("Unnamed") for c in df.columns)
+        assert list(df["cost"]) == [5.0, 3.0]
+
 
 class TestReadSpec:
     def test_reads_csv(self):
@@ -78,6 +98,14 @@ class TestReadBound:
         df = read_bound(DATA_DIR / "input" / "bound.dat")
         assert set(df.columns) >= {"id1", "id2", "boundary"}
         assert len(df) == 11
+
+    def test_accepts_bound_column_alias(self, tmp_path):
+        """Some Marxan exports name the boundary column ``bound`` rather than
+        ``boundary``; both must work."""
+        (tmp_path / "bound.dat").write_text("id1,id2,bound\n1,2,1.0\n2,3,0.5\n")
+        df = read_bound(tmp_path / "bound.dat")
+        assert "boundary" in df.columns
+        assert df["boundary"].tolist() == [1.0, 0.5]
 
 class TestReadInputDat:
     def test_reads_parameters(self):

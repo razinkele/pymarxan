@@ -23,7 +23,13 @@ _KNOWN_SPEC_COLS: frozenset[str] = frozenset({
 
 
 def _read_dat(path: str | Path) -> pd.DataFrame:
-    """Read a .dat file, auto-detecting the delimiter (tab or comma).
+    """Read a .dat file, auto-detecting the delimiter.
+
+    Comma-delimited files (including quoted CSV) are read as-is. Otherwise the
+    file is treated as whitespace-delimited and **runs** of tabs/spaces are
+    collapsed — many real Marxan exports pad columns with double tabs
+    (``id\\t\\tcost``) or aligned spaces, which a plain ``sep="\\t"`` would turn
+    into spurious empty ``Unnamed`` columns.
 
     Parameters
     ----------
@@ -39,12 +45,10 @@ def _read_dat(path: str | Path) -> pd.DataFrame:
     with open(path) as f:
         first_line = f.readline()
 
-    if "\t" in first_line:
-        sep = "\t"
-    else:
-        sep = ","
-
-    return pd.read_csv(path, sep=sep)
+    if "," in first_line:
+        return pd.read_csv(path, sep=",")
+    # Tab- or space-delimited (possibly with repeated/aligned separators).
+    return pd.read_csv(path, sep=r"\s+", engine="python")
 
 
 def read_pu(path: str | Path) -> pd.DataFrame:
@@ -203,6 +207,10 @@ def read_bound(path: str | Path) -> pd.DataFrame:
         Boundary data.
     """
     df = _read_dat(path)
+    # Marxan bound.dat names the boundary column either ``boundary`` or
+    # ``bound`` depending on the exporter; accept both.
+    if "boundary" not in df.columns and "bound" in df.columns:
+        df = df.rename(columns={"bound": "boundary"})
     df["id1"] = df["id1"].astype(int)
     df["id2"] = df["id2"].astype(int)
     df["boundary"] = df["boundary"].astype(float)
