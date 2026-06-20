@@ -12,6 +12,25 @@ Modular Python toolkit for Marxan conservation planning.
 
 It provides a pure Python core library for headless optimization, reusable Shiny UI components, and an assembled web application — all in one package.
 
+### ✨ River connectivity & barrier-removal optimization
+
+Beyond classic site selection, pymarxan natively optimizes **river restoration** — *which dams, weirs, or culverts to remove, under a budget, to maximize reconnected habitat* — using the Dendritic Connectivity Index (Côté et al. 2009) with greedy, simulated-annealing, and **provably optimal** integer-programming engines.
+
+![Barrier-removal optimization: before vs after](docs/images/river_network_optimization.png)
+
+```python
+from pymarxan.rivers import RiverNetwork, BarrierProblem, optimize_barriers_mip, dci_diadromous
+
+net = RiverNetwork(segments=..., barriers=...)   # or: from_hydrorivers(gdf)
+print(dci_diadromous(net))                        # current connectivity
+sol = optimize_barriers_mip(BarrierProblem(net, budget=3.0))
+print(sol.removed, sol.dci_after, sol.optimal)    # the optimal set of barriers to remove
+```
+
+The budget–DCI frontier shows exactly how much connectivity each extra dollar buys:
+
+![DCI gained per unit budget](docs/images/dci_budget_frontier.png)
+
 ## Quick Start
 
 ```bash
