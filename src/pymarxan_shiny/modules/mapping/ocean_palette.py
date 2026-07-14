@@ -51,6 +51,19 @@ COST_HIGH_RGB  = (193, 68, 14)    # deep coral #c1440e
 FREQ_LOW_RGB   = (250, 254, 255)  # ocean white
 FREQ_HIGH_RGB  = (11, 37, 69)     # ocean deep #0b2545
 
+
+def frequency_color(freq: float) -> str:
+    """Map a 0-1 value to an ocean-white → deep-navy hex color.
+
+    0.0 -> ocean white, 1.0 -> deep navy. Used for selection-frequency and
+    Zonation priority-rank choropleths.
+    """
+    freq = max(0.0, min(1.0, freq))
+    r = int(FREQ_LOW_RGB[0] * (1.0 - freq) + FREQ_HIGH_RGB[0] * freq)
+    g = int(FREQ_LOW_RGB[1] * (1.0 - freq) + FREQ_HIGH_RGB[1] * freq)
+    b = int(FREQ_LOW_RGB[2] * (1.0 - freq) + FREQ_HIGH_RGB[2] * freq)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
 # Network metric: aqua → deep navy
 METRIC_LOW_RGB  = (72, 191, 227)  # aqua #48bfe3
 METRIC_HIGH_RGB = (11, 37, 69)    # deep navy #0b2545
