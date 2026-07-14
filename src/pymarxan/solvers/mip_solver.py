@@ -113,7 +113,13 @@ class MIPSolver(Solver):
             )
         _validate_mip_strategy(
             "objective", objective,
-            ("min_set", "max_features", "min_largest_shortfall", "min_penalties"),
+            (
+                "min_set",
+                "max_features",
+                "min_largest_shortfall",
+                "min_penalties",
+                "max_weighted_features",
+            ),
         )
         self.mip_chance_strategy = mip_chance_strategy
         self.mip_clump_strategy = mip_clump_strategy
@@ -342,6 +348,40 @@ class MIPSolver(Solver):
                 "objective",
             )
             model += cost_expr <= cost_budget, "cost_budget"
+        elif self.objective == "max_weighted_features":
+            # Binary z_j per feature; relaxed target ≥ target · z_j; cost cap
+            # from COSTBUDGET. Maximise Σ spf_j·z_j (LpMinimize → negate) — the
+            # spf-weighted count of targets met. With spf = branch length this
+            # maximises phylogenetic diversity. This weights the *target-met*
+            # indicator; it is NOT the objectives/ MaxUtility class (which sums
+            # held amounts). Like max_features, a feature with no pu_vs_features
+            # rows gets an unconstrained feat_met the maximiser sets to 1 for
+            # free — callers must prune zero-occurrence features (the phylo
+            # branch decomposition does). Solution.objective is recomputed
+            # min_set-style and is NOT the weighted objective value.
+            cost_budget = problem.parameters.get("COSTBUDGET")
+            if cost_budget is None:
+                raise ValueError(
+                    "objective='max_weighted_features' requires a COSTBUDGET "
+                    "parameter on the problem "
+                    "(problem.parameters['COSTBUDGET'] = ...). Without a budget "
+                    "the formulation is degenerate — every target is trivially "
+                    "met by selecting all PUs."
+                )
+            cost_budget = float(cost_budget)
+            feat_spf_arr = problem.features["spf"].values.astype(float)
+            spf_by_id = {
+                int(feat_ids_init[fi]): float(feat_spf_arr[fi])
+                for fi in range(len(feat_ids_init))
+            }
+            for fi in range(len(feat_ids_init)):
+                fid = int(feat_ids_init[fi])
+                feat_met[fid] = pulp.LpVariable(f"feat_met_{fid}", cat="Binary")
+            model += (
+                -pulp.lpSum(spf_by_id[fid] * feat_met[fid] for fid in feat_met),
+                "objective",
+            )
+            model += cost_expr <= cost_budget, "cost_budget"
         elif self.objective == "min_largest_shortfall":
             # Auxiliary slack_j ≥ 0, slack_j ≥ target_j - Σ amount·x;
             # t ≥ slack_j for every feature. Minimise t.
@@ -430,10 +470,10 @@ class MIPSolver(Solver):
                         float(amt) * x[int(pu)]
                         for pu, amt in zip(pus, amounts)
                     )
-                if self.objective == "max_features":
+                if self.objective in ("max_features", "max_weighted_features"):
                     # Relaxed target: only enforced when feat_met_j = 1.
-                    # Maximising Σ feat_met_j therefore picks as many
-                    # features as the cost budget will pay for.
+                    # Maximising Σ (weight·)feat_met_j therefore picks as many
+                    # (weighted) features as the cost budget will pay for.
                     model += (
                         amount_expr >= target * feat_met[fid],
                         f"target_{fid}",
