@@ -111,3 +111,24 @@ def test_registered_in_default_registry():
 
     solver = get_default_registry().create("zonation")
     assert isinstance(solver, ZonationSolver)
+
+
+def test_smoothing_passthrough_matches_engine():
+    import numpy as np
+
+    from pymarxan.zonation.rank_removal import rank_removal
+    from pymarxan.zonation.smoothing import SmoothingSpec
+
+    spec = SmoothingSpec(alpha=1.0, coords=np.array([[0.0], [1.0], [2.0]]))
+    problem = _problem([[10], [0], [0]], feat_ids=(1,))
+    sol = ZonationSolver(smoothing=spec, top_fraction=2 / 3).solve(problem)[0]
+    engine_top = rank_removal(problem, smoothing=spec).top_fraction(2 / 3)
+    selected_ids = {
+        int(pid)
+        for pid, s in zip(problem.planning_units["id"], sol.selected)
+        if s
+    }
+    assert selected_ids == engine_top
+    # provenance marker recorded in metadata
+    assert sol.metadata["smoothed"] is True
+    assert sol.metadata["smoothing_alpha"] == pytest.approx(1.0)

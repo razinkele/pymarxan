@@ -142,3 +142,19 @@ def test_invalid_rule_raises():
 def test_zero_cost_raises_when_use_cost():
     with pytest.raises(ValueError, match="cost"):
         rank_removal(_problem(P1, cost=[1.0, 0.0, 1.0]), rule="caz", use_cost=True)
+
+
+def test_smoothing_changes_ranking():
+    from pymarxan.zonation.smoothing import SmoothingSpec
+
+    # feature peaked on PU1; without smoothing PU2/PU3 hold none (removed by
+    # index -> [2,3,1]); with smoothing PU2 (near) inherits value, out-ranks PU3.
+    # NB: [3,2,1] relies on _problem's uniform cost (delta/cost tie-breaking).
+    problem = _problem([[10], [0], [0]], feat_ids=(1,))
+    coords = np.array([[0.0], [1.0], [2.0]])
+    plain = rank_removal(problem, rule="caz")
+    smoothed = rank_removal(
+        problem, rule="caz", smoothing=SmoothingSpec(alpha=1.0, coords=coords)
+    )
+    assert plain.removal_order == [2, 3, 1]
+    assert smoothed.removal_order == [3, 2, 1]  # near-neighbor PU2 now out-ranks PU3

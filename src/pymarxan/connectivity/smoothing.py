@@ -46,7 +46,8 @@ def smooth_distribution(
     the raw ``K @ amounts`` accumulation (total grows).
 
     Args:
-        amounts: Length-``n`` array of per-unit amounts for one feature.
+        amounts: Length-``n`` array of per-unit amounts for one feature, or an
+            ``(n, m)`` array to smooth ``m`` features at once (each column).
         distances: ``(n, n)`` pairwise distance matrix.
         alpha: Decay rate (> 0); larger = more local.
         normalize: Conserve total amount (default True).

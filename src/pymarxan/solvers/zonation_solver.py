@@ -11,6 +11,7 @@ from pymarxan.models.problem import (
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
 from pymarxan.zonation.rank_removal import rank_removal
+from pymarxan.zonation.smoothing import SmoothingSpec
 
 
 class ZonationSolver(Solver):
@@ -43,6 +44,7 @@ class ZonationSolver(Solver):
         warp: int = 1,
         weights: dict[int, float] | None = None,
         use_cost: bool = True,
+        smoothing: SmoothingSpec | None = None,
     ) -> None:
         if rule not in ("caz", "abf"):
             raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
@@ -53,6 +55,7 @@ class ZonationSolver(Solver):
         self.warp = warp
         self.weights = weights
         self.use_cost = use_cost
+        self.smoothing = smoothing
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
@@ -63,6 +66,7 @@ class ZonationSolver(Solver):
             weights=self.weights,
             warp=self.warp,
             use_cost=self.use_cost,
+            smoothing=self.smoothing,
         )
         selected_ids = result.top_fraction(self.top_fraction)
         selected = np.array(
@@ -81,6 +85,8 @@ class ZonationSolver(Solver):
             "top_fraction": self.top_fraction,
             "priority_rank": result.priority_rank,
             "performance_curves": result.performance_curves,
+            "smoothed": self.smoothing is not None,
+            "smoothing_alpha": self.smoothing.alpha if self.smoothing else None,
         }
         return [build_solution(problem, selected, blm, metadata=meta)]
 
