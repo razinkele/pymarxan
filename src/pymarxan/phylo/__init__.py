@@ -7,6 +7,7 @@ PD directly. See ``docs/plans/2026-07-14-phylo-diversity-design.md``.
 """
 from __future__ import annotations
 
+from pymarxan.phylo.decomposition import phylogenetic_branch_problem
 from pymarxan.phylo.diversity import PDResult, compute_phylogenetic_diversity
 from pymarxan.phylo.tree import PhylogeneticTree
 
@@ -14,4 +15,5 @@ __all__ = [
     "PhylogeneticTree",
     "PDResult",
     "compute_phylogenetic_diversity",
+    "phylogenetic_branch_problem",
 ]
