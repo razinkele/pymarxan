@@ -77,6 +77,7 @@ from pymarxan_shiny.modules.results.target_met import (
     target_met_ui,
 )
 from pymarxan_shiny.modules.rivers import rivers_panel_server, rivers_panel_ui
+from pymarxan_shiny.modules.zonation import zonation_panel_server, zonation_panel_ui
 from pymarxan_shiny.modules.run_control.run_panel import run_panel_server, run_panel_ui
 from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_server,
@@ -193,6 +194,10 @@ app_ui = ui.page_navbar(
         ),
     ),
     ui.nav_panel(
+        "Zonation",
+        ui.layout_columns(zonation_panel_ui("zonation"), col_widths=12),
+    ),
+    ui.nav_panel(
         "Zones",
         ui.layout_columns(zone_config_ui("zone_config"), col_widths=12),
     ),
@@ -232,6 +237,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     upload_server("upload", problem=problem)
     rivers_panel_server("rivers", network=river_network)
+    zonation_panel_server("zonation", problem)
 
     @reactive.effect
     @reactive.event(input.load_demo_river)
@@ -273,6 +279,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif st == "pipeline":
             from pymarxan.solvers.run_mode import RunModePipeline
             return RunModePipeline()
+        elif st == "zonation":
+            from pymarxan_shiny.modules.zonation.zonation_panel import (
+                zonation_solver_from_config,
+            )
+            return zonation_solver_from_config(config_dict)
         return MIPSolver()
 
     blm_explorer_server(

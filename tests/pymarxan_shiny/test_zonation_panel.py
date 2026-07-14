@@ -73,3 +73,11 @@ def test_zonation_solver_from_config_maps_and_clamps():
     assert d.rule == "caz" and d.top_fraction == 0.3
     # a typed out-of-range top_fraction is clamped, not raised
     assert zonation_solver_from_config({"zonation_top_fraction": 1.5}).top_fraction == 1.0
+
+
+def test_solver_picker_offers_zonation():
+    # the choice is actually rendered into the picker UI (@module.ui renders
+    # session-free), not merely present in the source text.
+    from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui
+
+    assert "Zonation (rank-removal)" in str(solver_picker_ui("t"))

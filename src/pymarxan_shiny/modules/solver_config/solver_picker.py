@@ -16,6 +16,7 @@ def solver_picker_ui():
     solver_choices["greedy"] = "Greedy Heuristic"
     solver_choices["iterative_improvement"] = "Iterative Improvement"
     solver_choices["pipeline"] = "Run Mode Pipeline"
+    solver_choices["zonation"] = "Zonation (rank-removal)"
     if binary_available:
         solver_choices["binary"] = "Marxan C++ Binary"
     return ui.card(
@@ -178,6 +179,21 @@ def solver_picker_ui():
                     ),
                 ),
                 ui.panel_conditional(
+                    "input.solver_type === 'zonation'",
+                    ui.input_select(
+                        "zonation_rule", "Removal rule",
+                        choices={
+                            "caz": "Core-area (CAZ) \u2014 rarity",
+                            "abf": "Additive benefit (ABF) \u2014 richness",
+                        },
+                        selected="caz",
+                    ),
+                    ui.input_numeric(
+                        "zonation_top_fraction", "Top priority fraction",
+                        value=0.3, min=0.0, max=1.0, step=0.05,
+                    ),
+                ),
+                ui.panel_conditional(
                     "input.solver_type === 'iterative_improvement'",
                     ui.tooltip(
                         ui.input_select(
@@ -233,6 +249,7 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         input.zone_sa_iterations, input.zone_sa_temp_steps,
         input.mip_time_limit, input.mip_gap, input.mip_verbose,
         input.heurtype, input.itimptype, input.runmode,
+        input.zonation_rule, input.zonation_top_fraction,
         ignore_init=False,
     )
     def _update_config():
@@ -263,6 +280,9 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
             config["itimptype"] = int(input.itimptype() or 0)
         if input.solver_type() == "pipeline":
             config["runmode"] = int(input.runmode() or 0)
+        if input.solver_type() == "zonation":
+            config["zonation_rule"] = input.zonation_rule()
+            config["zonation_top_fraction"] = float(input.zonation_top_fraction() or 0.3)
         solver_config.set(config)
 
     @render.text
@@ -306,5 +326,15 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
                 "Run Mode Pipeline\n-----------------\n"
                 "Chains heuristic, SA, and iterative improvement\n"
                 "in sequences matching Marxan RUNMODE 0-6."
+            )
+        elif st == "zonation":
+            return (
+                "Zonation (rank-removal)\n-----------------------\n"
+                "Ranks every planning unit by iterative backward removal\n"
+                "(CAZ = rarity, ABF = richness), then selects the top\n"
+                "fraction as the reserve. A continuous priority paradigm —\n"
+                "unlike min-set, it does NOT guarantee feature targets, so a\n"
+                "low top-fraction may leave some unmet by design. See the\n"
+                "Zonation tab for the full priority map + performance curves."
             )
         return ""
