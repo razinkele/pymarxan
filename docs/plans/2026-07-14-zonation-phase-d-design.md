@@ -31,8 +31,11 @@ This is UI work in `pymarxan_shiny`; it follows established module conventions
 - **`solver_picker`** (`modules/solver_config/solver_picker.py`) — a hardcoded
   `solver_choices` dict + `panel_conditional` config sub-panels + a
   `reactive.effect` that assembles `solver_config`.
-- **`run_panel`** (`modules/run_control/run_panel.py`) — `_run_solver` maps
-  `solver_type` → solver construction + `SolverConfig`.
+- **`app.py::active_solver()`** — a `reactive.calc` (app.py:255-276) maps
+  `solver_type` → a `Solver` instance; `run_panel._run_solver` reads that instance
+  via `active = solver()` and just sets `p.parameters` + `SolverConfig` before
+  `active.solve(...)`. So the solver-construction wiring is in `active_solver()`,
+  **not** in `run_panel`.
 
 ## Component 1 — the Zonation panel (`modules/zonation/zonation_panel.py`)
 
@@ -59,14 +62,16 @@ A `@module.ui` / `@module.server` pair taking the reactive
   `ui.output_data_frame`).
 
 **`zonation_panel_server(input, output, session, problem)`:**
-- `@reactive.calc` `_result()` — gated on `input.rank()` (the button) and reading
-  `input.rule()`; returns `rank_removal(problem(), rule=input.rule())` or `None`
-  when no problem is loaded. (Smoothing is not exposed in the UI — see Out of
-  scope.)
-- `@render_widget` map — `rank_to_colors` → `create_geo_map(pu, colors)` when
-  `has_geometry(problem())`, else `create_grid_map` on a synthetic grid, else a
-  "load a spatial project to see the map" message. Follows the existing map
-  modules' `has_geometry` gate (the map-crash lesson).
+- `@reactive.event(input.rank)` `_result()` — fires **only** on the Rank click
+  (reading the current `input.rule()` then), returning
+  `rank_removal(problem(), rule=input.rule())` or `None` when no problem is
+  loaded. Using `reactive.event` (not a bare `reactive.calc` reading both the
+  button and the rule) is what makes the O(n²) ranking run on click, not on every
+  rule change. (Smoothing is not exposed in the UI — see Out of scope.)
+- `@render_widget` map — `rank_to_colors` → **the same fallback `frequency_map`
+  uses**: `create_geo_map(planning_units, colors)` when `has_geometry(problem())`,
+  else `create_grid_map(grid, colors)` (the map-crash lesson; reuse
+  `frequency_map`'s grid-source path verbatim).
 - `@render.plot` curves — matplotlib: x = `prop_landscape_remaining` (1→0),
   y = each `feat_<id>` retained proportion (one line per feature), plus labels.
 - top-priority readout — how many PUs are in `result.top_fraction(input.top_fraction())`
@@ -82,12 +87,14 @@ A `@module.ui` / `@module.server` pair taking the reactive
 - **`solver_picker_server`:** extend the `reactive.effect` to read those inputs
   into `solver_config` (`"zonation_rule"`, `"zonation_top_fraction"`) when
   `solver_type == "zonation"`.
-- **`run_panel._run_solver`:** add a branch that builds
-  `ZonationSolver(rule=config_dict.get("zonation_rule", "caz"),
-  top_fraction=config_dict.get("zonation_top_fraction", 0.3))` and runs it,
-  producing a `Solution` (the thresholded reserve) that flows to the generic
-  Results view. Confirm the exact construction/threading path against the shipped
-  `run_panel` when planning.
+- **`app.py::active_solver()`** (the `reactive.calc` at app.py:255-276): add
+  `elif st == "zonation": from pymarxan.solvers.zonation_solver import
+  ZonationSolver; return ZonationSolver(rule=config_dict.get("zonation_rule",
+  "caz"), top_fraction=config_dict.get("zonation_top_fraction", 0.3))`. This is
+  the **only** run-flow construction change — `run_panel` needs no branch (it
+  reads the built solver via `active = solver()` and Zonation's config lives on
+  the instance, not `p.parameters`). Running it produces a `Solution` (the
+  thresholded reserve) that flows to the generic Results view.
 
 ## Component 3 — app wiring (`pymarxan_app/app.py`)
 
@@ -107,15 +114,18 @@ excluded from coverage; module servers need a session to exercise fully). Follow
 - **Module smoke:** importing `zonation_panel_ui`/`_server` and constructing the
   UI does not raise (mirrors the rivers-panel test).
 - **Picker choice present:** `"zonation"` is in the `solver_choices` the picker
-  builds (or the UI contains the option).
-- **Run-panel branch:** with `solver_config = {"solver_type": "zonation",
-  "zonation_rule": "caz", "zonation_top_fraction": 0.5}`, the solver built is a
-  `ZonationSolver` and solving a tiny problem returns a `Solution` whose
-  `metadata["solver"] == "zonation"`. (Test the construction helper directly if
-  `_run_solver` is not unit-callable; otherwise a focused reactive test.)
-- **Live verification (execution-time, optional but recommended):** drive the
-  app with Playwright, open the Zonation tab, confirm 0 console errors and that
-  the performance-curve plot + map render — as the rivers tab was verified.
+  builds.
+- **Registry mapping:** `get_default_registry().create("zonation")` is a
+  `ZonationSolver` (already shipped in Phase B) — `app.py::active_solver` mirrors
+  this same `solver_type → Solver` mapping.
+- **Run-flow wiring is Playwright-verified, not unit-tested.** `active_solver`
+  and the picker's `reactive.effect` config assembly are app-internal /
+  session-dependent, and `src/pymarxan_app/` is excluded from coverage (CLAUDE.md).
+  So those branches are exercised at execution time by driving the app with
+  Playwright: open the Zonation tab, click Rank, confirm 0 console errors and
+  that the performance-curve plot + priority-rank map render; select "Zonation"
+  in the solver picker, run, and confirm a reserve appears in Results — the way
+  the rivers tab was verified. This live pass is **required**, not optional.
 
 **Target:** ~8–12 tests (mostly the pure helpers + smoke + wiring), `make check`
 green (0 ruff / 0 mypy), coverage ≥ 75% (Shiny modules stay low-coverage per
