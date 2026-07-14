@@ -325,6 +325,13 @@ def test_from_newick_named_internal_node():
         ch == "clade" and tips == frozenset({"A", "B"})
         for ch, ln, tips in tree.branches
     )
+
+
+def test_from_newick_handles_multiline_whitespace():
+    # real phylo tools emit multi-line / space-padded Newick.
+    tree = PhylogeneticTree.from_newick("(\n  (A:1, B:1):2,\n  C:3\n);")
+    assert tree.tips == ["A", "B", "C"]
+    assert tree.total_pd == pytest.approx(7.0)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -344,9 +351,10 @@ In `src/pymarxan/phylo/tree.py`, add this classmethod to `PhylogeneticTree` (bel
             raise ValueError(
                 "quoted labels and NHX/comment brackets are not supported"
             )
+        s = "".join(s.split())  # collapse internal whitespace (multi-line Newick)
         if not s.endswith(";"):
             raise ValueError("Newick string must end with ';'")
-        s = s[:-1].strip()
+        s = s[:-1]
 
         pos = 0
         internal_counter = 0
@@ -511,7 +519,14 @@ Site 2 — in the objective-build block, add this `elif` immediately **after** t
         elif self.objective == "max_weighted_features":
             # Binary z_j per feature; relaxed target ≥ target · z_j; cost cap
             # from COSTBUDGET. Maximise Σ spf_j·z_j (LpMinimize → negate) — the
-            # spf-weighted count. With spf = branch length this maximises PD.
+            # spf-weighted count of targets met. With spf = branch length this
+            # maximises phylogenetic diversity. This weights the *target-met*
+            # indicator; it is NOT the objectives/ MaxUtility class (which sums
+            # held amounts). Like max_features, a feature with no pu_vs_features
+            # rows gets an unconstrained feat_met the maximiser sets to 1 for
+            # free — callers must prune zero-occurrence features (the phylo
+            # branch decomposition does). Solution.objective is recomputed
+            # min_set-style and is NOT the weighted objective value.
             cost_budget = problem.parameters.get("COSTBUDGET")
             if cost_budget is None:
                 raise ValueError(
@@ -573,7 +588,8 @@ git commit -m "feat(solvers): additive max_weighted_features MIP objective (spf-
 **Interfaces:**
 - Consumes: `PhylogeneticTree` (Task 1); `ConservationProblem`, `Solution`.
 - Produces:
-  - `PDResult` dataclass: `pd_represented`, `pd_total`, `pd_representable`, `fraction_pd_total`, `fraction_pd_representable`, `n_tips`, `n_tips_represented`, `branch_child: list`, `branch_length: list[float]`, `branch_represented: list[bool]`; method `to_dataframe() -> pd.DataFrame` with columns `child_node`, `length`, `represented`.
+  - `PDResult` dataclass: `pd_represented`, `pd_total`, `pd_representable`, `fraction_pd_total`, `fraction_pd_representable`, `n_tips`, `n_tips_represented`, `n_tips_unresolved`, `branch_child: list`, `branch_length: list[float]`, `branch_represented: list[bool]`; method `to_dataframe() -> pd.DataFrame` with columns `child_node`, `length`, `represented`.
+  - `_resolve_tips` emits `warnings.warn` when every tip is unresolved.
   - `compute_phylogenetic_diversity(problem, solution, tree, *, tip_feature_map: dict[str, int] | None = None) -> PDResult`.
   - `_resolve_tips(problem, tree, tip_feature_map) -> dict[NodeId, int | None]` (module-level helper reused by Task 5).
 
@@ -680,6 +696,17 @@ def test_to_dataframe_columns():
     df = res.to_dataframe()
     assert list(df.columns) == ["child_node", "length", "represented"]
     assert isinstance(res, PDResult)
+
+
+def test_all_unresolved_tips_warns_and_counts():
+    # A tree whose tips match no feature name/id → all unresolved, PD 0, warn.
+    tree = PhylogeneticTree.from_newick("((X:1,Y:1):2,Z:3);")
+    with pytest.warns(UserWarning, match="no tree tip matched"):
+        res = compute_phylogenetic_diversity(
+            _problem(), _solution([True, True, True]), tree
+        )
+    assert res.n_tips_unresolved == 3
+    assert res.pd_represented == pytest.approx(0.0)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -695,6 +722,7 @@ Create `src/pymarxan/phylo/diversity.py`:
 """Faith (1992) phylogenetic-diversity scoring of a solution."""
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import pandas as pd
@@ -715,6 +743,7 @@ class PDResult:
     fraction_pd_representable: float
     n_tips: int
     n_tips_represented: int
+    n_tips_unresolved: int
     branch_child: list[NodeId]
     branch_length: list[float]
     branch_represented: list[bool]
@@ -751,6 +780,13 @@ def _resolve_tips(
             resolved[tip] = id_to_id[key]
         else:
             resolved[tip] = None
+    if resolved and all(fid is None for fid in resolved.values()):
+        warnings.warn(
+            "no tree tip matched any feature (by name or id) — check the "
+            "phylogeny labels or pass tip_feature_map; PD will be 0. Did you "
+            "score against the branch problem instead of the original?",
+            stacklevel=2,
+        )
     return resolved
 
 
@@ -819,6 +855,7 @@ def compute_phylogenetic_diversity(
         ),
         n_tips=tree.n_tips,
         n_tips_represented=len(represented_tips),
+        n_tips_unresolved=sum(1 for fid in resolved.values() if fid is None),
         branch_child=branch_child,
         branch_length=branch_length,
         branch_represented=branch_represented,
@@ -850,7 +887,7 @@ __all__ = [
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/phylo/test_diversity.py -v`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1039,6 +1076,11 @@ def phylogenetic_branch_problem(
     tips occur in no PU are dropped (they would make ``min_set`` infeasible).
     The original species features are entirely replaced. A branch's provenance
     is recoverable from its feature ``name`` (``"branch:<child_node>"``).
+
+    ``parameters`` carry through, so ``BLM``/``boundary`` (if set) yield a
+    compact PD reserve and a budget solve reads the caller's ``COSTBUDGET``. The
+    ``probability`` frame is dropped (it references now-deleted feature ids and
+    branch features carry no probability semantics).
     """
     resolved = _resolve_tips(problem, tree, tip_feature_map)
 
@@ -1073,12 +1115,14 @@ def phylogenetic_branch_problem(
 
     branch_features = pd.DataFrame(
         feature_rows, columns=["id", "name", "target", "spf"]
-    )
+    ).astype({"id": int, "target": float, "spf": float})
     branch_puvspr = pd.DataFrame(
         puvspr_rows, columns=["species", "pu", "amount"]
-    )
+    ).astype({"species": int, "pu": int, "amount": float})
     return problem.copy_with(
-        features=branch_features, pu_vs_features=branch_puvspr
+        features=branch_features,
+        pu_vs_features=branch_puvspr,
+        probability=None,  # source prob frame references deleted feature ids
     )
 ```
 
@@ -1140,10 +1184,10 @@ Under `## [Unreleased]` → `### Added` in `CHANGELOG.md` (create the `## [Unrel
   synthetic feature weighted by length so the existing solvers maximize PD
   (``min_set`` for the cheapest full-PD reserve; the new ``max_weighted_features``
   MIP objective for max PD under a ``COSTBUDGET``). ``max_features`` is
-  unchanged. +27 tests.
+  unchanged. +29 tests.
 ```
 
-(The +27 = 13 tree, 5 diversity, 5 decomposition, 4 objective. Confirm with
+(The +29 = 14 tree, 6 diversity, 5 decomposition, 4 objective. Confirm with
 `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/phylo tests/pymarxan/solvers/test_mip_objectives.py -q` and adjust if a test was split.)
 
 - [ ] **Step 2: Run the full check**

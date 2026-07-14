@@ -89,10 +89,15 @@ Pure-Python rooted tree, no dependency.
   `ConservationProblem.validate()`): exactly one root (a node that is never a
   child), fully connected, acyclic, all branch lengths ≥ 0, ≥ 1 tip.
 
-**Rooting convention:** the standard rooted Faith PD — a branch is counted
+**Rooting convention:** the standard **rooted** Faith PD — a branch is counted
 whenever its descendant-tip set intersects the taxa of interest, which includes
-the deep branches on the path to the root. This is Faith's original (1992)
-definition; the tree is accepted as already rooted (no re-rooting, per YAGNI).
+the deep branches on the path to the root (so a single tip's PD includes its
+root-ward branches). This is Faith's original (1992) definition and the
+picante / prioritizr default (`include.root = TRUE`). An *unrooted* variant
+exists and differs (it would exclude the root path, e.g. unrooted
+PD({A,B}) = 2 vs rooted 4 in the reference tree); we deliberately implement the
+rooted convention. The tree is accepted as already rooted (no re-rooting, per
+YAGNI).
 
 ## Component 2 — scoring (`diversity.py`)
 
@@ -132,8 +137,14 @@ represented) but do not raise.
 
 **`PDResult` dataclass** (with `to_dataframe()`, like `RepresentationResult`):
 `pd_represented`, `pd_total`, `pd_representable`, `fraction_pd_total`,
-`fraction_pd_representable`, `n_tips`, `n_tips_represented`, and a per-branch
-table (`child_node`, `length`, `represented: bool`).
+`fraction_pd_representable`, `n_tips`, `n_tips_represented`, `n_tips_unresolved`,
+and a per-branch table (`child_node`, `length`, `represented: bool`).
+
+**Unresolved-tip safety.** The tip→feature mapping is the most error-prone seam:
+a whole-tree name mismatch (or accidentally scoring against the *branch* problem,
+whose tips are all named `branch:*`) silently yields PD 0, indistinguishable from
+an empty reserve. So `_resolve_tips` emits a `warnings.warn` when **every** tip
+is unresolved, and `PDResult.n_tips_unresolved` records the count.
 
 ## Component 3 — the objective / decomposition (`decomposition.py`)
 
@@ -151,8 +162,13 @@ Returns a **new** `ConservationProblem` (via `problem.copy_with(...)`, preservin
 subclass type) whose feature set is **entirely replaced** by branch features —
 the original species features and their `pu_vs_features` rows are dropped, so a
 solve optimizes PD directly rather than double-counting species alongside
-branches. The PU set (ids, cost, status), boundary, and `parameters` carry
-through unchanged. Each retained branch becomes a synthetic feature:
+branches. The PU set (ids, cost, status), `boundary`, and `parameters` carry
+through unchanged. **Parameter carry-through is not inert:** `BLM`/`boundary`
+are honored intentionally (they yield a spatially compact PD reserve), and a
+budget solve reads the caller's `COSTBUDGET`. But `PROBMODE`/the `probability`
+frame would reference now-deleted feature ids, so the decomposition passes
+`probability=None` to neutralize it (the branch features carry no probability
+semantics). Each retained branch becomes a synthetic feature:
 
 - **Feature id.** Branch features get fresh ids (branch index → stable id); since
   the original features are fully replaced, ids need only be unique among
@@ -218,10 +234,17 @@ alongside the existing four (extend the validated-objective tuple
 - `max_features` is left **exactly as-is** — zero behavior change, zero parity
   risk to existing users.
 - Branch problems use `objective='max_weighted_features'`; with `spf = branch
-  length` this maximizes captured PD under budget, matching prioritizr's
-  `add_max_phylo_div_objective`. (Note this weights the *target-met* indicator,
-  distinct from prioritizr's `add_max_utility_objective`, which sums held
-  amounts — hence the name `max_weighted_features`, not `max_utility`.)
+  length` this maximizes captured PD under budget, analogous to the
+  *deterministic case* of prioritizr's `add_max_phylo_div_objective` (which
+  adds a probabilistic feature-persistence layer we omit). (Note this weights
+  the *target-met* indicator, distinct from prioritizr's
+  `add_max_utility_objective`, which sums held amounts — hence the name
+  `max_weighted_features`, not `max_utility`.)
+- **The identity "weighted objective == represented PD" holds only at
+  `target=1`.** With `target>1`, `zᵦ` becomes "≥ target occurrences met", so a
+  branch present in exactly one PU contributes 0 to the objective while still
+  contributing its full length to actual Faith PD — the objective no longer
+  equals PD. The default (`target=1`) is the correct presence encoding.
 - **Parity:** because this adds solver objective math, run the
   `marxan-parity-check` skill; add tests that (a) `max_weighted_features` with
   uniform `spf == 1` yields the same optimal *number* of features met as
@@ -261,7 +284,7 @@ values for metrics). Reference tree `((A:1,B:1):2,C:3);` (total PD = 7).
 - `max_weighted_features` + `COSTBUDGET` on a small instance: selected PD ==
   brute-force max PD achievable within budget.
 
-**`test_mip.py` (Component 4, parity guards)**
+**`test_mip_objectives.py` (Component 4, parity guards)**
 - `max_weighted_features` with all `spf == 1` yields the same *number* of
   features met as `max_features` on the same instance/budget.
 - `max_features` optimum is unchanged before/after the edit (no mutation).
