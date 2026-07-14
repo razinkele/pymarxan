@@ -64,11 +64,13 @@ rank_removal(
 ```
 
 **Setup.** `q = problem.build_pu_feature_matrix()` — dense `(n_pu, n_feat)`
-float. PU ids from `problem.planning_units["id"]`, feature ids from
-`problem.features["id"]` (same order the matrix uses). `w` = length-`n_feat`
-weight vector (default 1.0, from `weights` keyed by feature id). `c` = PU costs
-(`use_cost=True`) or all-ones (`use_cost=False`). `status` from
-`planning_units["status"]`.
+float, columns in `problem.features["id"]` order. PU ids from
+`problem.planning_units["id"]`. `w` = length-`n_feat` weight vector aligned to
+that feature order; `weights` is keyed by feature id and **any feature id absent
+from the dict defaults to 1.0** (lenient — a partial `weights` dict is valid).
+`c` = PU costs (`use_cost=True`) or all-ones (`use_cost=False`). `status` from
+`planning_units["status"]`. The loop removes **every** PU (down to an empty
+landscape), so all `n_pu` cells receive a rank.
 
 **State.**
 - `remaining` — boolean mask over PUs, all `True` initially.
@@ -85,8 +87,12 @@ candidate cell `i`, over features with `Q_j > 0`:
 - **ABF (additive benefit):** `δ_i = Σ_j ( w_j · q_ij / Q_j )` — the sum instead
   of the max (linear benefit function; the Moilanen-2007 default). Favors
   species-rich cells.
-- **Cost:** divide by cost — `δ_i ← δ_i / c_i`. Under uniform cost this is pure
-  biological ranking (the standard Zonation cost-efficiency formulation).
+- **Cost:** divide by cost — `δ_i ← δ_i / c_i` (value-per-cost efficiency; since
+  `c_i` is constant over features it is equivalent whether applied inside or
+  outside the `max`/`Σ`). Under uniform cost this is pure biological ranking.
+  (The division form — rather than subtraction — is the standard Zonation
+  cost-efficiency formulation; flagged for the design-review scientific pass to
+  confirm against the Zonation manual.)
 
 The cell(s) with the **smallest** `δ_i` are removed (least value lost).
 
@@ -98,10 +104,14 @@ The cell(s) with the **smallest** `δ_i` are removed (least value lost).
   once every normal cell is gone.
 
 **Warp factor.** Each iteration, compute `δ` once for the current candidate set
-and remove the `warp` cells with the smallest `δ` (batch), then update `Q_j` by
-the summed contribution of the removed batch. `warp=1` recomputes every removal
-(exact Zonation). Larger `warp` trades exactness for `O(n²/warp · n_feat)`
-speed. Ties in `δ` broken deterministically by PU index (reproducible).
+and remove the `min(warp, n_candidates)` cells with the smallest `δ` (batch),
+then update `Q_j` by the summed contribution of the removed batch. A batch never
+spans a status tier — the candidate set is chosen by tier *first* (below), so a
+batch that empties the locked-out tier stops there and the next iteration moves
+to normal cells. `warp=1` recomputes every removal (exact Zonation). Larger
+`warp` trades exactness for `O(n²/warp · n_feat)` speed. Within a batch, cells
+are ordered (for removal-position/rank) by `δ` ascending then PU index; ties in
+`δ` across the whole step are broken by PU index (reproducible).
 
 **Priority rank.** `removal_order` lists PUs first-removed → last-removed. For
 the `k`-th removed cell (`k` 0-indexed), `priority_rank = (k + 1) / n_pu` — so
@@ -148,8 +158,14 @@ A dataclass (with `to_dataframe()`, like `PDResult`):
 - **Hand-worked ABF order** on the same problem where ABF and CAZ diverge
   (a species-rich cell ABF keeps but CAZ would drop, or vice versa) — proves the
   two rules are actually different.
-- **Rarity property (CAZ):** a feature present in exactly one PU forces that PU
-  to be removed **last** (rank 1.0) under CAZ — the core-area guarantee.
+- **Rarity property (CAZ):** the sole cell holding a feature always contributes
+  `w_j · q_ij / Q_j = w_j` to its CAZ `δ` (proportion 1.0 of that feature's
+  remaining stock), so it is removed **after every cell that holds no feature's
+  sole occurrence**. Test on a problem with exactly one sole-occurrence feature
+  so that cell is unambiguously last (rank 1.0); do **not** assert "rank 1.0" on
+  a problem with multiple rare features (several cells reach `δ=1` and only one
+  is literally last) — there, assert the rare cell is in the top tier / removed
+  after all common-only cells.
 - **Cost drives ties:** uniform feature values + non-uniform cost → the
   cheapest-to-keep (lowest cost, given equal value) ordering; and `use_cost=False`
   changes the order.
