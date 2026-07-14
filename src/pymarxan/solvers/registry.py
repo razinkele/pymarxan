@@ -60,6 +60,7 @@ def get_default_registry() -> SolverRegistry:
     from pymarxan.solvers.mip_solver import MIPSolver
     from pymarxan.solvers.run_mode import RunModePipeline
     from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+    from pymarxan.solvers.zonation_solver import ZonationSolver
     from pymarxan.zones.solver import ZoneSASolver
 
     reg = SolverRegistry()
@@ -70,4 +71,5 @@ def get_default_registry() -> SolverRegistry:
     reg.register("sa", SimulatedAnnealingSolver)
     reg.register("binary", MarxanBinarySolver)
     reg.register("zone_sa", ZoneSASolver)
+    reg.register("zonation", ZonationSolver)
     return reg

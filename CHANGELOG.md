@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ZonationSolver` (Zonation Phase B).** A `Solver`-ABC adapter over the Phase A
+  rank-removal engine: ``ZonationSolver(rule=..., top_fraction=0.3).solve(problem)``
+  thresholds the priority ranking into one deterministic reserve (rank map +
+  performance curves in ``Solution.metadata``), enforcing PU locks as hard
+  constraints, registered as ``"zonation"`` in the default solver registry.
+  +10 tests.
+
 ## [0.13.0] — 2026-07-14
 
 ### Added
