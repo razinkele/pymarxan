@@ -16,6 +16,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
 )
 from pymarxan.zonation.result import ZonationResult
+from pymarxan.zonation.smoothing import SmoothingSpec
 
 
 def rank_removal(
@@ -25,6 +26,7 @@ def rank_removal(
     weights: dict[int, float] | None = None,
     warp: int = 1,
     use_cost: bool = True,
+    smoothing: SmoothingSpec | None = None,
 ) -> ZonationResult:
     """Rank every planning unit by iterative backward removal.
 
@@ -49,6 +51,8 @@ def rank_removal(
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
 
     q = problem.build_pu_feature_matrix()  # (n_pu, n_feat), rows = PU order
+    if smoothing is not None:
+        q = smoothing.apply(q)
     n_pu, n_feat = q.shape
     pu_ids = problem.planning_units["id"].to_numpy()
     feat_ids = problem.features["id"].to_numpy()

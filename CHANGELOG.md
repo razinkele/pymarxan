@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zonation distribution smoothing (`SmoothingSpec`, Phase C).** An optional
+  ``smoothing=SmoothingSpec(alpha, coords=...)`` on ``rank_removal`` /
+  ``ZonationSolver`` spreads each feature's amount to nearby planning units via a
+  mass-conserving dispersal kernel before ranking (Zonation's distribution
+  smoothing), reusing ``connectivity.smoothing``. +10 tests.
+
 ## [0.14.0] — 2026-07-14
 
 ### Added
