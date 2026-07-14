@@ -104,13 +104,23 @@ def test_requires_exactly_one_of_coords_or_distances():
         )  # both
 
 
+def test_1d_coords_rejected_at_construction():
+    with pytest.raises(ValueError, match="2-D"):
+        SmoothingSpec(alpha=1.0, coords=np.array([0.0, 1.0, 2.0]))  # 1-D
+
+
 def test_resolve_distances_validates_shape():
     spec = SmoothingSpec(alpha=1.0, distances=np.zeros((2, 2)))
     with pytest.raises(ValueError, match="distances must be"):
         spec.resolve_distances(3)  # wrong distances shape
-    spec2 = SmoothingSpec(alpha=1.0, coords=np.array([0.0, 1.0, 2.0]))
-    with pytest.raises(ValueError, match="coords must be"):
-        spec2.resolve_distances(3)  # 1-D coords
+    spec2 = SmoothingSpec(alpha=1.0, coords=np.array([[0.0], [1.0]]))
+    with pytest.raises(ValueError, match="coords must have"):
+        spec2.resolve_distances(3)  # 2-D coords, wrong row count
+
+
+def test_single_pu_smooths_to_itself():
+    spec = SmoothingSpec(alpha=1.0, coords=np.array([[0.0]]))
+    assert spec.apply(np.array([[7.0]]))[0, 0] == pytest.approx(7.0)  # kernel [[1]]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -146,6 +156,14 @@ class SmoothingSpec:
     coordinates; distances computed via ``distance_matrix_from_points``) or a
     precomputed ``distances`` matrix. ``eq=False`` because numpy-array fields
     make the auto-generated ``__eq__`` raise on comparison.
+
+    ``coords`` / ``distances`` rows MUST be aligned to
+    ``problem.planning_units`` positional order — the same order
+    ``build_pu_feature_matrix`` uses for the matrix rows (and that cost/status
+    follow). Only the row *count* is validated, so a correctly-sized but
+    mis-ordered array silently produces a wrong ranking. Smoothing is
+    status-blind: the kernel spreads amount into and out of locked cells (locks
+    are enforced later, by the solver).
     """
 
     alpha: float
@@ -157,6 +175,8 @@ class SmoothingSpec:
             raise ValueError(f"alpha must be > 0, got {self.alpha}")
         if (self.coords is None) == (self.distances is None):
             raise ValueError("provide exactly one of 'coords' or 'distances'")
+        if self.coords is not None and np.asarray(self.coords).ndim != 2:
+            raise ValueError("coords must be 2-D (n_pu, d)")
 
     def resolve_distances(self, n_pu: int) -> np.ndarray:
         if self.distances is not None:
@@ -165,26 +185,31 @@ class SmoothingSpec:
                 raise ValueError(f"distances must be ({n_pu}, {n_pu}), got {d.shape}")
             return d
         coords = np.asarray(self.coords, dtype=float)
-        if coords.ndim != 2 or coords.shape[0] != n_pu:
-            raise ValueError(
-                f"coords must be 2-D with {n_pu} rows, got shape {coords.shape}"
-            )
+        if coords.shape[0] != n_pu:
+            raise ValueError(f"coords must have {n_pu} rows, got {coords.shape[0]}")
         return distance_matrix_from_points(coords)
 
     def apply(self, q: np.ndarray) -> np.ndarray:
-        """Return a copy of ``q`` with each feature column smoothed."""
-        n_pu, n_feat = q.shape
-        distances = self.resolve_distances(n_pu)
-        smoothed = np.empty_like(q, dtype=float)
-        for j in range(n_feat):
-            smoothed[:, j] = smooth_distribution(q[:, j], distances, self.alpha)
-        return smoothed
+        """Return ``q`` with every feature column smoothed (one kernel build)."""
+        distances = self.resolve_distances(q.shape[0])
+        return smooth_distribution(np.asarray(q, dtype=float), distances, self.alpha)
+```
+
+Also add a one-line note to `smooth_distribution`'s docstring in
+`src/pymarxan/connectivity/smoothing.py` — after the existing ``amounts:``
+argument line, so the 2-D call `apply` makes is documented, not undocumented
+behavior:
+
+```python
+    Args:
+        amounts: Length-``n`` array of per-unit amounts for one feature, or an
+            ``(n, m)`` array to smooth ``m`` features at once (each column).
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_smoothing.py -v`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -219,6 +244,7 @@ def test_smoothing_changes_ranking():
 
     # feature peaked on PU1; without smoothing PU2/PU3 hold none (removed by
     # index -> [2,3,1]); with smoothing PU2 (near) inherits value, out-ranks PU3.
+    # NB: [3,2,1] relies on _problem's uniform cost (delta/cost tie-breaking).
     problem = _problem([[10], [0], [0]], feat_ids=(1,))
     coords = np.array([[0.0], [1.0], [2.0]])
     plain = rank_removal(problem, rule="caz")
@@ -248,6 +274,9 @@ def test_smoothing_passthrough_matches_engine():
         if s
     }
     assert selected_ids == engine_top
+    # provenance marker recorded in metadata
+    assert sol.metadata["smoothed"] is True
+    assert sol.metadata["smoothing_alpha"] == pytest.approx(1.0)
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -306,6 +335,15 @@ And pass it in the `solve()` call to `rank_removal` (after `use_cost=self.use_co
             smoothing=self.smoothing,
 ```
 
+Then add a provenance marker to the `meta` dict in `solve()` (so a downstream
+consumer can tell a smoothed run from a raw one and recover `alpha`) — after the
+`"performance_curves": result.performance_curves,` entry:
+
+```python
+            "smoothed": self.smoothing is not None,
+            "smoothing_alpha": self.smoothing.alpha if self.smoothing else None,
+```
+
 - [ ] **Step 5: Export `SmoothingSpec`**
 
 In `src/pymarxan/zonation/__init__.py`, add the import and `__all__` entry:
@@ -332,13 +370,13 @@ Under `## [Unreleased]` → `### Added` in `CHANGELOG.md` (add the headers if th
   ``smoothing=SmoothingSpec(alpha, coords=...)`` on ``rank_removal`` /
   ``ZonationSolver`` spreads each feature's amount to nearby planning units via a
   mass-conserving dispersal kernel before ranking (Zonation's distribution
-  smoothing), reusing ``connectivity.smoothing``. +8 tests.
+  smoothing), reusing ``connectivity.smoothing``. +10 tests.
 ```
 
 - [ ] **Step 8: Run the full check**
 
 Run: `PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make check`
-Expected: `make check` green — 0 ruff, 0 mypy, full suite passes (previous count + 8). If `test_solutions_are_different` fails, rerun once (known SA flake).
+Expected: `make check` green — 0 ruff, 0 mypy, full suite passes (previous count + 10). If `test_solutions_are_different` fails, rerun once (known SA flake).
 
 Note: the CLAUDE.md `micromamba.sh` activation path may not exist on this machine; the `PATH=...` prefix above is the working invocation.
 

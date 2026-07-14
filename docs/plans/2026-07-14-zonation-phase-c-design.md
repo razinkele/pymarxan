@@ -50,22 +50,31 @@ class SmoothingSpec:   # raise "ambiguous truth value"; identity eq + hashable i
 
 - **Validation** (`__post_init__`): `alpha > 0` (else `ValueError`; also
   `negative_exponential` guards this downstream); **exactly one** of `coords` /
-  `distances` is provided (neither or both → `ValueError`).
+  `distances` is provided (neither or both → `ValueError`); and — since it's
+  knowable at construction — `coords`, when given, must be **2-D** (a 1-D array
+  raises here, fail-fast, not deep in a solve).
 - **`resolve_distances(n_pu: int) -> np.ndarray`:** if `distances` is set,
-  validate its shape is `(n_pu, n_pu)` and return it; else validate `coords` is
-  2-D with `coords.shape[0] == n_pu` (`cdist` requires 2-D; a 1-D array must
-  raise a clear `ValueError`, not a cryptic scipy error) and return
-  `distance_matrix_from_points(coords)` (`connectivity.smoothing`).
-- **`apply(q: np.ndarray) -> np.ndarray`:** resolve distances from `q.shape[0]`,
-  then smooth each feature column —
-  `smooth_distribution(q[:, j], distances, self.alpha)` (default
-  `normalize=True`, mass-conserving) — returning a new `(n_pu, n_feat)` matrix.
-  Reuses `smooth_distribution` per column (DRY); the smoothing runs once as a
-  pre-step, not per removal, so the per-column kernel rebuild is acceptable at
-  the vector-PU scale Zonation targets.
+  validate its shape is `(n_pu, n_pu)` and return it; else validate
+  `coords.shape[0] == n_pu` and return `distance_matrix_from_points(coords)`
+  (`connectivity.smoothing`). Only the row *count* is checkable here.
+- **`apply(q: np.ndarray) -> np.ndarray`:** one call —
+  `smooth_distribution(q, resolve_distances(q.shape[0]), self.alpha)`. Because
+  the kernel is amount-independent, `smooth_distribution`'s `Knorm @ amounts`
+  generalizes to a 2-D `(n_pu, n_feat)` right-hand side, smoothing every feature
+  column in a single kernel build (no per-column loop). `normalize=True` is fixed
+  (mass-conserving is what "smoothing" means here; exposing it is YAGNI). This
+  requires a one-line note on `smooth_distribution`'s docstring stating it also
+  accepts a 2-D array (smooths each column).
 
-`normalize=True` is fixed (mass-conserving is what "smoothing" means here;
-exposing it is deferred as YAGNI).
+**Row-order contract (important).** `coords`/`distances` rows **must** be aligned
+to `problem.planning_units` *positional* order — the same order
+`build_pu_feature_matrix` uses for `q`'s rows (and that `cost`/`status` follow).
+`resolve_distances` can validate only the row *count*, not the order, so a
+correctly-sized but mis-ordered `coords` (e.g. built sorted-by-id while the
+DataFrame isn't) silently produces a **wrong ranking**. This requirement is
+stated in the `SmoothingSpec` docstring. (A future `from_problem(problem, alpha)`
+classmethod deriving centroids in `planning_units` order would make this safe by
+construction — deferred, needs geometry + CRS handling.)
 
 ## `rank_removal` integration
 
@@ -79,14 +88,27 @@ if smoothing is not None:
 
 Everything downstream is unchanged: `Q`/`T`, the CAZ/ABF loop, cost/status/warp,
 and the performance curves all use the smoothed `q`. **The performance curves
-therefore report retention of the smoothed distribution** — faithful to
-Zonation, which replaces the input layer with the smoothed one (a raw-retention
-view is a possible future add, out of scope here).
+therefore report retention of the *smoothed* distribution** — Zonation treats the
+smoothed layer as the working distribution. Note the resulting intra-`Solution`
+asymmetry a caller should be aware of (documented on `ZonationResult`): with
+smoothing on, `performance_curves` are smoothed-layer retention while a
+`Solution`'s `targets_met` (from `build_solution` on the raw problem) reflect the
+*raw* distribution. A raw-retention curve column is a deferred future add (YAGNI).
+
+Smoothing is **status-blind**: the kernel spreads amount into and out of
+locked-out cells (a locked-out cell's habitat can lift its neighbors, and its
+inherited smoothed mass is stripped first since it's removed first). This is
+defensible — smoothing is a landscape operation, locks are a planning constraint
+enforced later — and noted in the docstring.
 
 ## `ZonationSolver` passthrough
 
 Add `smoothing: SmoothingSpec | None = None` to `ZonationSolver.__init__` (stored)
-and pass it to `rank_removal` in `solve()`. No other change.
+and pass it to `rank_removal` in `solve()`. Also record a **provenance marker** in
+`Solution.metadata` — `"smoothed": self.smoothing is not None` and
+`"smoothing_alpha": self.smoothing.alpha if self.smoothing else None` — so a
+downstream consumer can tell a smoothed run from a raw one and recover `alpha`
+(the `SmoothingSpec` itself isn't JSON-friendly, so just the boolean + alpha).
 
 ## Testing strategy (TDD, hand-verifiable)
 
@@ -114,8 +136,13 @@ and pass it to `rank_removal` in `solve()`. No other change.
 - **`ZonationSolver` passthrough:** `ZonationSolver(smoothing=spec, top_fraction=f)`
   selects the same PUs as `rank_removal(problem, smoothing=spec)` then
   `top_fraction(f)` (with status enforcement).
+- **`n_pu = 1` edge:** a single-PU problem smooths to itself (kernel `[[1]]`),
+  no crash.
+- The order-flip test carries a comment that `[3,2,1]` relies on the test
+  helper's uniform cost.
 
-**Target:** ~10–12 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
+**Target:** ~10 tests (8 unit + 2 integration), `make check` green (0 ruff /
+0 mypy), coverage ≥ 75%.
 
 ## Out of scope (YAGNI, Phase C)
 
