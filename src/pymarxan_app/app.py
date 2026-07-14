@@ -77,7 +77,6 @@ from pymarxan_shiny.modules.results.target_met import (
     target_met_ui,
 )
 from pymarxan_shiny.modules.rivers import rivers_panel_server, rivers_panel_ui
-from pymarxan_shiny.modules.zonation import zonation_panel_server, zonation_panel_ui
 from pymarxan_shiny.modules.run_control.run_panel import run_panel_server, run_panel_ui
 from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_server,
@@ -96,6 +95,7 @@ from pymarxan_shiny.modules.spatial_export.spatial_export import (
     spatial_export_server,
     spatial_export_ui,
 )
+from pymarxan_shiny.modules.zonation import zonation_panel_server, zonation_panel_ui
 from pymarxan_shiny.modules.zones.zone_config import zone_config_server, zone_config_ui
 
 
