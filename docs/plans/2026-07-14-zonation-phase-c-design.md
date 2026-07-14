@@ -41,8 +41,8 @@ tests/pymarxan/zonation/test_smoothing.py
 A small config dataclass bundling the smoothing parameters:
 
 ```python
-@dataclass
-class SmoothingSpec:
+@dataclass(eq=False)   # eq=False: numpy-array fields make the auto __eq__
+class SmoothingSpec:   # raise "ambiguous truth value"; identity eq + hashable is fine
     alpha: float
     coords: np.ndarray | None = None      # (n_pu, d) PU coordinates
     distances: np.ndarray | None = None   # (n_pu, n_pu) precomputed distances
@@ -52,8 +52,9 @@ class SmoothingSpec:
   `negative_exponential` guards this downstream); **exactly one** of `coords` /
   `distances` is provided (neither or both → `ValueError`).
 - **`resolve_distances(n_pu: int) -> np.ndarray`:** if `distances` is set,
-  validate its shape is `(n_pu, n_pu)` and return it; else validate
-  `coords.shape[0] == n_pu` and return
+  validate its shape is `(n_pu, n_pu)` and return it; else validate `coords` is
+  2-D with `coords.shape[0] == n_pu` (`cdist` requires 2-D; a 1-D array must
+  raise a clear `ValueError`, not a cryptic scipy error) and return
   `distance_matrix_from_points(coords)` (`connectivity.smoothing`).
 - **`apply(q: np.ndarray) -> np.ndarray`:** resolve distances from `q.shape[0]`,
   then smooth each feature column —
