@@ -175,8 +175,12 @@ A dataclass (with `to_dataframe()`, like `PDResult`):
 - **Cost drives ties:** uniform feature values + non-uniform cost → the
   cheapest-to-keep (lowest cost, given equal value) ordering; and `use_cost=False`
   changes the order.
-- **Locks:** a locked-in PU always gets rank 1.0; a locked-out PU is always in
-  the first-removed positions, regardless of its biological value.
+- **Locks:** every locked-in PU is removed after every normal PU (top tier —
+  ranks above all normal cells), and every locked-out PU is in the first-removed
+  positions (ranks below all normal cells), regardless of biological value. Only
+  with a *single* locked-in cell is its rank exactly 1.0 (same uniqueness caveat
+  as the rarity test); with several, assert the top-tier ordering, not rank 1.0
+  on each.
 - **Performance curve monotonic + bounded:** every retained proportion ∈ [0, 1]
   and is non-increasing as the landscape is stripped; the last row (empty
   landscape) is 0 for every present feature; `prop_landscape_remaining` runs
