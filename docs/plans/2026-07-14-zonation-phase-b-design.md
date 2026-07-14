@@ -70,6 +70,11 @@ fast, matching `MIPSolver`'s objective validation) and `0 < top_fraction <= 1`.
    `config` is accepted for ABC compatibility; `num_solutions` is not used
    (deterministic → one solution).
 
+Stashing the `performance_curves` DataFrame in `Solution.metadata` is safe: the
+Marxan I/O writers do not serialize `Solution.metadata` (they write
+ssoln/mvbest/sum from `selected`/`cost`), so no output path chokes on a
+non-JSON-native value.
+
 **`name()`** → `"Zonation (rank-removal)"`.
 **`supports_zones()`** → `False`.
 **`available()`** → `True`.
@@ -79,6 +84,11 @@ fast, matching `MIPSolver`'s objective validation) and `0 < top_fraction <= 1`.
 In `get_default_registry()` (`solvers/registry.py`), add the local import and
 `reg.register("zonation", ZonationSolver)` alongside the existing seven, so
 `registry.get("zonation")` returns a fresh `ZonationSolver`.
+
+**Verified safe to register now:** the Shiny solver picker uses a *hardcoded*
+`solver_choices` dict (`solver_picker.py:13-20`), not registry enumeration, so
+registering here does **not** surface a half-wired "zonation" option in the UI —
+that wiring is Phase D. No other code enumerates the registry's keys.
 
 ## Testing strategy (TDD)
 
