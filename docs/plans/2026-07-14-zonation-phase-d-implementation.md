@@ -102,6 +102,25 @@ def test_module_exposes_ui_and_server():
 
     assert callable(zonation_panel_ui)
     assert callable(zonation_panel_server)
+
+
+def test_zonation_solver_from_config_maps_and_clamps():
+    from pymarxan.solvers.zonation_solver import ZonationSolver
+    from pymarxan_shiny.modules.zonation.zonation_panel import (
+        zonation_solver_from_config,
+    )
+
+    s = zonation_solver_from_config(
+        {"zonation_rule": "abf", "zonation_top_fraction": 0.5}
+    )
+    assert isinstance(s, ZonationSolver)
+    assert s.rule == "abf"
+    assert s.top_fraction == 0.5
+    # defaults when keys absent
+    d = zonation_solver_from_config({})
+    assert d.rule == "caz" and d.top_fraction == 0.3
+    # a typed out-of-range top_fraction is clamped, not raised
+    assert zonation_solver_from_config({"zonation_top_fraction": 1.5}).top_fraction == 1.0
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -125,6 +144,18 @@ from pymarxan_shiny.modules.zonation.zonation_panel import (
 __all__ = ["zonation_panel_server", "zonation_panel_ui"]
 ```
 
+**First relocate `frequency_color` into `ocean_palette`** (decouple the panel from
+the sibling `frequency_map` UI module — the repo convention is "every viz module
+imports colors from `ocean_palette`"):
+- In `src/pymarxan_shiny/modules/mapping/ocean_palette.py`, move the
+  `frequency_color(freq: float) -> str` function (it already uses the
+  `FREQ_LOW_RGB`/`FREQ_HIGH_RGB` constants defined there).
+- In `src/pymarxan_shiny/modules/mapping/frequency_map.py`, delete the local
+  `frequency_color` def and its now-unused `FREQ_*_RGB` import, and add
+  `from pymarxan_shiny.modules.mapping.ocean_palette import frequency_color`
+  (re-export — `frequency_map.frequency_color` keeps resolving for any existing
+  importer). Its own tests confirm it still works.
+
 Create `src/pymarxan_shiny/modules/zonation/zonation_panel.py`:
 
 ```python
@@ -142,8 +173,9 @@ from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
+from pymarxan.solvers.zonation_solver import ZonationSolver
 from pymarxan.zonation import ZonationResult, rank_removal
-from pymarxan_shiny.modules.mapping.frequency_map import frequency_color
+from pymarxan_shiny.modules.mapping.ocean_palette import frequency_color
 
 try:
     from shinywidgets import output_widget, render_widget
@@ -174,6 +206,16 @@ def performance_curve_frame(result: ZonationResult) -> pd.DataFrame:
     return result.performance_curves
 
 
+def zonation_solver_from_config(config_dict: dict) -> ZonationSolver:
+    """Build a ``ZonationSolver`` from a solver-picker config dict (top_fraction
+    clamped to (0, 1] so a typed out-of-range value can't raise mid-reactive)."""
+    top = float(config_dict.get("zonation_top_fraction", 0.3) or 0.3)
+    return ZonationSolver(
+        rule=config_dict.get("zonation_rule", "caz"),
+        top_fraction=min(1.0, max(0.05, top)),
+    )
+
+
 @module.ui
 def zonation_panel_ui():
     map_output = (
@@ -184,14 +226,11 @@ def zonation_panel_ui():
         ui.p(
             "Rank every planning unit by iterative backward removal. CAZ favors "
             "rarity (protects every feature's core); ABF favors species-rich "
-            "cells. Darker = higher priority. Click Rank to compute.",
+            "cells. Darker = higher priority. Click Rank to compute. (For a "
+            "target-meeting reserve, run 'Zonation' from the solver picker.)",
             class_="text-muted small mb-3",
         ),
         ui.input_select("rule", "Removal rule", _RULES),
-        ui.input_slider(
-            "top_fraction", "Top priority fraction", min=0.0, max=1.0,
-            value=0.3, step=0.05,
-        ),
         ui.input_action_button("rank", "Rank", class_="btn-primary mb-3"),
         map_output,
         ui.output_plot("curves"),
@@ -210,10 +249,25 @@ def zonation_panel_server(
     _result: reactive.Value = reactive.value(None)
 
     @reactive.effect
+    @reactive.event(problem)
+    def _reset_on_problem():
+        # A newly-loaded project invalidates the previous ranking; drop it so the
+        # map/curves return to the "click Rank" state instead of painting new PUs
+        # against the old ranks.
+        _result.set(None)
+
+    @reactive.effect
     @reactive.event(input.rank)
     def _compute():
         p = problem()
-        _result.set(rank_removal(p, rule=input.rule()) if p is not None else None)
+        if p is None:
+            _result.set(None)
+            return
+        try:
+            _result.set(rank_removal(p, rule=input.rule()))
+        except Exception as e:  # e.g. use_cost with a zero-cost PU
+            _result.set(None)
+            ui.notification_show(f"Ranking failed: {e}", type="error")
 
     if _HAS_IPYLEAFLET:
 
@@ -247,12 +301,15 @@ def zonation_panel_server(
             return fig
         df = performance_curve_frame(res)
         x = df["prop_landscape_remaining"]
-        for col in (c for c in df.columns if c.startswith("feat_")):
+        feat_cols = [c for c in df.columns if c.startswith("feat_")]
+        for col in feat_cols:
             ax.plot(x, df[col], label=col)
         ax.set_xlabel("Proportion of landscape remaining")
         ax.set_ylabel("Proportion of feature retained")
+        ax.set_title(f"Performance curves ({res.rule.upper()})")
         ax.invert_xaxis()  # remaining goes 1 -> 0 as worst cells are stripped
-        ax.legend(fontsize="small")
+        if feat_cols:
+            ax.legend(fontsize="small")
         return fig
 
     @render.text
@@ -260,11 +317,9 @@ def zonation_panel_server(
         res = _result()
         if res is None:
             return "Click Rank to compute the priority ranking."
-        f = float(input.top_fraction())
-        n_top = len(res.top_fraction(f)) if f > 0 else 0
         return (
-            f"{res.rule.upper()}: top {f:.0%} priority = {n_top} of "
-            f"{len(res.priority_rank)} planning units."
+            f"{res.rule.upper()}: ranked {len(res.priority_rank)} planning "
+            "units (darker = higher priority)."
         )
 
     @render.data_frame
@@ -279,7 +334,7 @@ def zonation_panel_server(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan_shiny/test_zonation_panel.py -v`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -303,19 +358,17 @@ Append to `tests/pymarxan_shiny/test_zonation_panel.py`:
 
 ```python
 def test_solver_picker_offers_zonation():
-    # the picker's choices dict includes zonation
-    import inspect
+    # the choice is actually rendered into the picker UI (@module.ui renders
+    # session-free), not merely present in the source text.
+    from pymarxan_shiny.modules.solver_config.solver_picker import solver_picker_ui
 
-    from pymarxan_shiny.modules.solver_config import solver_picker
-
-    src = inspect.getsource(solver_picker)
-    assert '"zonation"' in src  # solver_choices entry present
+    assert "Zonation (rank-removal)" in str(solver_picker_ui("t"))
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan_shiny/test_zonation_panel.py::test_solver_picker_offers_zonation -v`
-Expected: FAIL — `"zonation"` not yet in the picker source.
+Expected: FAIL — "Zonation (rank-removal)" not yet in the rendered picker UI.
 
 - [ ] **Step 3: Wire the solver picker**
 
@@ -361,6 +414,21 @@ In `src/pymarxan_shiny/modules/solver_config/solver_picker.py`:
             config["zonation_top_fraction"] = float(input.zonation_top_fraction() or 0.3)
 ```
 
+(e) In the `solver_info` `@render.text` (solver_picker.py:268-310), add a branch so
+the picker isn't blank for Zonation and explains the not-target-guaranteed
+behavior:
+
+```python
+        elif st == "zonation":
+            return ("Zonation (rank-removal)\n-----------------------\n"
+                    "Ranks every planning unit by iterative backward removal\n"
+                    "(CAZ = rarity, ABF = richness), then selects the top\n"
+                    "fraction as the reserve. A continuous priority paradigm —\n"
+                    "unlike min-set, it does NOT guarantee feature targets, so a\n"
+                    "low top-fraction may leave some unmet by design. See the\n"
+                    "Zonation tab for the full priority map + performance curves.")
+```
+
 - [ ] **Step 4: Wire the run flow + nav tab in `app.py`**
 
 In `src/pymarxan_app/app.py`:
@@ -375,12 +443,15 @@ from pymarxan_shiny.modules.zonation import zonation_panel_server, zonation_pane
 
 ```python
         elif st == "zonation":
-            from pymarxan.solvers.zonation_solver import ZonationSolver
-            return ZonationSolver(
-                rule=config_dict.get("zonation_rule", "caz"),
-                top_fraction=config_dict.get("zonation_top_fraction", 0.3),
+            from pymarxan_shiny.modules.zonation.zonation_panel import (
+                zonation_solver_from_config,
             )
+            return zonation_solver_from_config(config_dict)
 ```
+
+(This uses the unit-tested `zonation_solver_from_config` helper — the config-key
+contract and the `top_fraction` clamp are covered by `test_zonation_solver_from_config`,
+not just Playwright.)
 
 (c) Add a nav panel near the Rivers one (`app.py:191` context):
 
@@ -397,7 +468,7 @@ from pymarxan_shiny.modules.zonation import zonation_panel_server, zonation_pane
 - [ ] **Step 5: Run the panel tests + import the app to verify wiring loads**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan_shiny/test_zonation_panel.py -v`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 Run: `/opt/micromamba/envs/shiny/bin/python -c "import pymarxan_app.app"`
 Expected: no exception (the app module imports with the new wiring).
@@ -424,13 +495,13 @@ Under `## [Unreleased]` → `### Added` in `CHANGELOG.md`:
 - **Zonation Shiny tab + solver-picker entry (Phase D).** A "Zonation" tab shows
   the priority-rank choropleth + per-feature performance curves for the loaded
   problem (CAZ/ABF), and "Zonation (rank-removal)" is selectable in the solver
-  picker — completing Zonation end-to-end across the stack. +5 tests.
+  picker — completing Zonation end-to-end across the stack. +6 tests.
 ```
 
 - [ ] **Step 2: Full check**
 
 Run: `PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make check`
-Expected: green — 0 ruff, 0 mypy, full suite + 5 new. (`test_solutions_are_different` flake → rerun once.)
+Expected: green — 0 ruff, 0 mypy, full suite + 6 new. (`test_solutions_are_different` flake → rerun once.)
 
 - [ ] **Step 3: Live Playwright verification (required)**
 
