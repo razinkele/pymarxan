@@ -88,10 +88,10 @@ Pure-Python rooted tree, no dependency.
   `ConservationProblem.validate()`): exactly one root (a node that is never a
   child), fully connected, acyclic, all branch lengths ≥ 0, ≥ 1 tip.
 
-**Rooting convention:** rooted Faith PD — a branch is counted whenever its
-descendant-tip set intersects the taxa of interest, which includes the deep
-branches on the path to the root. This is Faith's original definition and what
-prioritizr uses.
+**Rooting convention:** the standard rooted Faith PD — a branch is counted
+whenever its descendant-tip set intersects the taxa of interest, which includes
+the deep branches on the path to the root. This is Faith's original (1992)
+definition; the tree is accepted as already rooted (no re-rooting, per YAGNI).
 
 ## Component 2 — scoring (`diversity.py`)
 
@@ -121,13 +121,18 @@ represented) but do not raise.
    intersect the set of tips whose feature occurs in **any** PU of the problem
    (the ceiling a perfect reserve could reach).
 4. `pd_total` = `tree.total_pd`.
-5. `fraction_pd = pd_represented / pd_representable` (0.0 if
-   `pd_representable == 0`).
+5. Report **two** fractions, so neither reading is ambiguous:
+   - `fraction_pd_total = pd_represented / pd_total` — share of the whole tree of
+     life captured (0.0 if `pd_total == 0`).
+   - `fraction_pd_representable = pd_represented / pd_representable` — share of
+     what this PU layer *could* capture (0.0 if `pd_representable == 0`). A
+     `min_set` solution reaches `1.0` here even when some tips are absent from
+     every PU — which is exactly why the total-based fraction is reported too.
 
 **`PDResult` dataclass** (with `to_dataframe()`, like `RepresentationResult`):
-`pd_represented`, `pd_total`, `pd_representable`, `fraction_pd`,
-`n_tips`, `n_tips_represented`, and a per-branch table
-(`child_node`, `length`, `represented: bool`).
+`pd_represented`, `pd_total`, `pd_representable`, `fraction_pd_total`,
+`fraction_pd_representable`, `n_tips`, `n_tips_represented`, and a per-branch
+table (`child_node`, `length`, `represented: bool`).
 
 ## Component 3 — the objective / decomposition (`decomposition.py`)
 
@@ -156,7 +161,10 @@ through unchanged. Each retained branch becomes a synthetic feature:
   descendant tip's feature occurs in that PU, else the row is omitted (sparse).
   Faith's unit — a branch is captured when a descendant lives in the PU.
 - **`target`** = the `target` argument (default `1.0` → "represent every branch
-  at least once", i.e. capture 100% of representable PD).
+  at least once", i.e. capture 100% of representable PD). Values `> 1.0` can make
+  a sparse branch (occurring in fewer than `target` PUs) infeasible for
+  `min_set`; the default 1.0 never triggers this, and the caveat is documented
+  for callers who raise it.
 - **`spf`** = branch length (drives the under-representation penalty in
   SA / heuristic / `min_penalties`, and is the weight for
   `max_weighted_features`, §4).
@@ -200,7 +208,8 @@ would alter their results — a parity break disguised as "backward compatible"
 (the claim only holds when every `spf == 1.0`, which real problems violate).
 
 Instead **add a new objective mode** `max_weighted_features` to `mip_solver.py`,
-alongside the existing four:
+alongside the existing four (extend the validated-objective tuple
+`("min_set", "max_features", "min_largest_shortfall", "min_penalties")`):
 
 - Objective `-Σ spf_j·z_j`, subject to `Σ costᵢ·xᵢ ≤ COSTBUDGET` (requires a
   `COSTBUDGET`, same as `max_features` / `min_largest_shortfall`).
@@ -230,10 +239,12 @@ values for metrics). Reference tree `((A:1,B:1):2,C:3);` (total PD = 7).
 
 **`test_diversity.py`**
 - Reserve covering `{A, C}` → `pd_represented == 6` (A:1 + internal:2 + C:3),
-  B's branch (1) excluded; `fraction_pd == 6/7` when all tips are representable.
-- Empty reserve → `pd_represented == 0`.
-- A tip whose feature occurs in no PU → excluded from `pd_representable`;
-  `fraction_pd` uses the representable ceiling.
+  B's branch (1) excluded; with all tips representable both
+  `fraction_pd_total` and `fraction_pd_representable == 6/7`.
+- Empty reserve → `pd_represented == 0`, both fractions `0.0`.
+- A tip whose feature occurs in no PU → excluded from `pd_representable`, so
+  `fraction_pd_representable` can reach 1.0 while `fraction_pd_total < 1.0`
+  (the two fractions diverge — the reason both are reported).
 - `tip_feature_map` explicit vs. name-match default agree.
 
 **`test_decomposition.py`**
