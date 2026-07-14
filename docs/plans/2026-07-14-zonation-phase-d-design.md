@@ -127,9 +127,10 @@ excluded from coverage; module servers need a session to exercise fully). Follow
   in the solver picker, run, and confirm a reserve appears in Results — the way
   the rivers tab was verified. This live pass is **required**, not optional.
 
-**Target:** ~8–12 tests (mostly the pure helpers + smoke + wiring), `make check`
-green (0 ruff / 0 mypy), coverage ≥ 75% (Shiny modules stay low-coverage per
-convention; the pure helpers carry the real assertions).
+**Target:** ~5 unit tests (the pure helpers + smoke + picker-choice) plus the
+required live Playwright pass, `make check` green (0 ruff / 0 mypy). Shiny modules
+stay low-coverage per convention; the pure helpers carry the real assertions, the
+run-flow wiring is Playwright-verified.
 
 ## Out of scope (YAGNI, Phase D)
 
