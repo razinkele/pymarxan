@@ -24,8 +24,9 @@ Decompose the phylogeny so each **branch** becomes a synthetic conservation
 feature whose distribution across planning units (PUs) is the union of its
 descendant tips' occurrences, weighted by branch length. Maximizing weighted
 branch representation then equals maximizing PD. No new solver is required —
-the decomposition produces a standard `ConservationProblem` that any existing
-objective (`min_set`, `max_features`) consumes.
+the decomposition produces a standard `ConservationProblem` that the existing
+`min_set` objective consumes directly, plus one small additive
+`max_weighted_features` mode (Component 4) for the budget path.
 
 ## Scope (approved)
 
@@ -56,8 +57,8 @@ tests/pymarxan/phylo/
   test_diversity.py
 ```
 
-Plus one small edit to `src/pymarxan/solvers/mip_solver.py` (weighted
-`max_features`, §5).
+Plus one small additive edit to `src/pymarxan/solvers/mip_solver.py` (new
+`max_weighted_features` objective mode, Component 4).
 
 ## Component 1 — `PhylogeneticTree` (`tree.py`)
 
@@ -191,7 +192,8 @@ captured branch contributes its full length to PD, so `min_set` with per-branch
 targets inherently drives toward ~100% of representable PD — the well-posed
 Marxan-native framing. A "cheapest reserve for ≥ X% of *total* PD" would require
 a single aggregate knapsack constraint (Σ Lᵦ·yᵦ ≥ X·PD_total), which is the
-budget / `max_features` path, not per-feature targets. Hence the API exposes an
+budget / `max_weighted_features` path, not per-feature targets. Hence the API
+exposes an
 absolute per-branch `target` (default 1), consistent with how Marxan targets
 work, rather than a total-PD fraction.
 
