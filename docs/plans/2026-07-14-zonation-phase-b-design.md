@@ -75,6 +75,14 @@ Marxan I/O writers do not serialize `Solution.metadata` (they write
 ssoln/mvbest/sum from `selected`/`cost`), so no output path chokes on a
 non-JSON-native value.
 
+**Targets are reported, not guaranteed.** `build_solution` populates
+`targets_met`, but Zonation ranks by biological loss — it does **not** optimize
+to meet feature targets like Marxan min-set. A low `top_fraction` can therefore
+leave `all_targets_met == False`, and that is **correct behavior, not a
+violated-target bug** (the failure mode `marxan-parity-check` guards against
+applies to the min-set solvers, not to a rank-threshold reserve). Callers wanting
+a target-meeting reserve should raise `top_fraction` or use the min-set MIP.
+
 **`name()`** → `"Zonation (rank-removal)"`.
 **`supports_zones()`** → `False`.
 **`available()`** → `True`.
@@ -102,8 +110,11 @@ Reference: **P1** `q=[[10,0],[0,10],[5,5]]`, uniform cost, CAZ ranking gives
 - **Metadata carries the ranking.** `sol.metadata["priority_rank"]` equals the
   engine's rank map; `sol.metadata["performance_curves"]` is the curves
   DataFrame; `sol.metadata["solver"] == "zonation"`.
-- **`build_solution` populated the Solution.** `targets_met` is a non-empty dict
-  and (with achievable targets) all True; `cost`/`objective` are finite.
+- **`build_solution` populated the Solution.** `targets_met` is a non-empty
+  dict; `cost`/`objective` are finite. On this specific reserve ({PU1, PU2}
+  covers both features) `all_targets_met` is True — but the general property is
+  "targets reported, not guaranteed" (see above), so do **not** assert
+  all-targets-met as a universal invariant of the solver.
 - **`top_fraction` controls reserve size.** A larger `top_fraction` selects at
   least as many PUs (monotone); `top_fraction=1.0` selects all.
 - **Deterministic — one solution.** `solve(p, SolverConfig(num_solutions=5))`
