@@ -85,8 +85,16 @@ candidate cell `i`, over features with `Q_j > 0`:
   proportion of any feature's *remaining* stock held in cell `i`. Protects every
   feature's core; favors rare/narrow-range features.
 - **ABF (additive benefit):** `δ_i = Σ_j ( w_j · q_ij / Q_j )` — the sum instead
-  of the max (linear benefit function; the Moilanen-2007 default). Favors
-  species-rich cells.
+  of the max, over each feature's share of its *remaining* stock. Favors
+  species-rich cells. This is the proportional / remaining-sum form of Zonation's
+  additive-benefit family (`q_ij/Q_j = (q_ij/T_j)/R_j`, i.e. a `B'(R)=1/R`
+  marginal benefit — **not** a strictly *linear* benefit, which would use the
+  fixed original total `T_j` and be static). The remaining-sum `Q_j` is what
+  makes ABF adaptive; the concave power-benefit generalization
+  (`V_j = w_j·R_j^z` with a user-set exponent `z`, Moilanen 2007) is a documented
+  future extension. (Only the CAZ rule is an exact transcription of Moilanen 2007
+  Eq. 1a; ABF here is the proportional member of the family, not the paper's
+  general power form.)
 - **Cost:** divide by cost — `δ_i ← δ_i / c_i` (value-per-cost efficiency; since
   `c_i` is constant over features it is equivalent whether applied inside or
   outside the `max`/`Σ`). Under uniform cost this is pure biological ranking.
@@ -115,9 +123,13 @@ then update `Q_j` by the summed contribution of the removed batch. A batch never
 spans a status tier — the candidate set is chosen by tier *first* (below), so a
 batch that empties the locked-out tier stops there and the next iteration moves
 to normal cells. `warp=1` recomputes every removal (exact Zonation). Larger
-`warp` trades exactness for `O(n²/warp · n_feat)` speed. Within a batch, cells
-are ordered (for removal-position/rank) by `δ` ascending then PU index; ties in
-`δ` across the whole step are broken by PU index (reproducible).
+`warp` trades exactness for `O(n²/warp · n_feat)` speed. **This recompute is
+inherent** — removing a cell shifts *every* `Q_j`, so the Marxan per-flip
+`ProblemCache` delta model does not apply (only the `Q_j -= q_ij` update is
+incremental). The engine therefore suits vector PUs (hundreds to low-thousands);
+million-cell rasters are the separate raster-PU gap, not this loop. Within a
+batch, cells are ordered (for removal-position/rank) by `δ` ascending then PU
+index; ties in `δ` across the whole step are broken by PU index (reproducible).
 
 **Priority rank.** `removal_order` lists PUs first-removed → last-removed. For
 the `k`-th removed cell (`k` 0-indexed), `priority_rank = (k + 1) / n_pu` — so
@@ -125,11 +137,18 @@ the first-removed cell gets `1/n` (lowest) and the last-removed cell gets `1.0`
 (highest). Rank ∈ (0, 1], higher = more important.
 
 **Performance curves.** Before the first removal and after each batch, record a
-sample: the proportion of the landscape still remaining and, per feature, the
-retained proportion `Q_j / T_j`. Because cells are stripped worst-first,
-retention stays near 1.0 until important cells start being removed — the classic
-Zonation "proportion of distribution remaining vs proportion of landscape
-removed" curve.
+sample: the proportion of the landscape still remaining **by cell count**
+(`prop_landscape_remaining`) and **by cost/budget** (`prop_cost_remaining` =
+Σ remaining cost / Σ total cost, using the ranking's cost vector), plus, per
+feature, the retained proportion `Q_j / T_j`. Both x-axes are recorded because
+when `use_cost=True` the removal order is `δ/cost`, so a by-count axis alone
+would misrepresent "how much budget was spent" (a variable-cost user reading the
+curve needs the cost axis). Because cells are stripped worst-first, retention
+stays near 1.0 until important cells start being removed — the classic Zonation
+"proportion of distribution remaining vs proportion of landscape removed" curve.
+Note the curves include locked-out (unprotectable) stock: `T_j`/`Q_j` count
+locked-out cells, which are stripped during the initial forced removals, so the
+early curve segment reflects unavoidable loss.
 
 **Edge cases.**
 - A feature with `T_j = 0` (present in no PU) contributes 0 to `δ` and its
@@ -146,9 +165,9 @@ removed" curve.
 A dataclass (with `to_dataframe()`, like `PDResult`):
 - `priority_rank: dict[int, float]` — PU id → rank in (0, 1], 1.0 = highest.
 - `removal_order: list[int]` — PU ids, first-removed (lowest priority) first.
-- `performance_curves: pd.DataFrame` — wide form: a `prop_landscape_remaining`
-  column plus one `feat_<id>` column per feature (retained proportion), one row
-  per recorded step (start → each batch → empty).
+- `performance_curves: pd.DataFrame` — wide form: `prop_landscape_remaining` and
+  `prop_cost_remaining` columns plus one `feat_<id>` column per feature (retained
+  proportion), one row per recorded step (start → each batch → empty).
 - `rule: str` — `"caz"` or `"abf"`.
 - `top_fraction(f: float) -> set[int]` — the PU ids in the top `f` share by rank
   (the `ceil(f · n_pu)` highest-ranked). `0 < f ≤ 1`; used by the future
@@ -186,8 +205,14 @@ A dataclass (with `to_dataframe()`, like `PDResult`):
   landscape) is 0 for every present feature; `prop_landscape_remaining` runs
   1.0 → 0.0.
 - **Warp consistency:** `warp=1` and a small `warp` agree on the coarse ranking
-  buckets on a problem with no ties (documented approximation, not exact
-  equality).
+  buckets (documented approximation, not exact equality in general). On the P1
+  oracle they happen to produce the identical `removal_order` (the batch is
+  order-preserving there); the test uses P1 and notes this is coincidental, not
+  the general guarantee.
+- **Numeric guards (the fiddly float edges):** a feature present in **zero** PUs
+  (`T_j = 0`) is excluded from `δ` and reports retained proportion 1.0 (no
+  crash); a feature that goes **extinct mid-run** (`Q_j` reaches 0 while cells
+  remain) is dropped from `δ` by the `Q_j > 0` guard without a divide-by-zero.
 - **Validation:** `rule="bogus"` raises; `use_cost=True` with a zero cost raises.
 
 **Target:** ~15–20 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.

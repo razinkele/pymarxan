@@ -19,7 +19,7 @@
 - Lint: ruff (E, F, I, UP; line length 99). Types: mypy clean. Coverage threshold 75%.
 - The bar before done: `make check` green (lint + types + full suite).
 - Commit after each task (TDD: failing test → implementation → passing test → commit).
-- **Verified math (Moilanen 2007):** CAZ `δ_i = max_j(w_j·q_ij/Q_j)`, ABF `δ_i = Σ_j(w_j·q_ij/Q_j)`, both over the *remaining* feature sum `Q_j`, divided by cost `c_i`. Cells removed last = highest priority; `priority_rank[k-th removed] = (k+1)/n`.
+- **Removal math:** CAZ `δ_i = max_j(w_j·q_ij/Q_j)` (an exact transcription of Moilanen 2007 Eq. 1a), ABF `δ_i = Σ_j(w_j·q_ij/Q_j)` (the proportional / remaining-sum member of Zonation's additive-benefit family — `1/R_j` marginal benefit, NOT a strictly *linear* benefit, and NOT the paper's general power form). Both over the *remaining* feature sum `Q_j`, divided by cost `c_i`. Cells removed last = highest priority; `priority_rank[k-th removed] = (k+1)/n`.
 
 ## File Structure
 
@@ -148,10 +148,12 @@ class ZonationResult:
     """Priority ranking of every planning unit, with performance curves.
 
     ``priority_rank`` maps PU id -> rank in (0, 1], where 1.0 is the
-    highest-priority cell (removed last). ``removal_order`` lists PU ids
-    first-removed (lowest priority) first. ``performance_curves`` is wide form:
-    a ``prop_landscape_remaining`` column plus one ``feat_<id>`` column per
-    feature (retained proportion), one row per recorded step.
+    highest-priority cell (removed last). Ranks are unique by construction (each
+    removal position gets a distinct ``(k+1)/n``), so ``top_fraction`` is
+    deterministic. ``removal_order`` lists PU ids first-removed (lowest priority)
+    first. ``performance_curves`` is wide form: ``prop_landscape_remaining`` and
+    ``prop_cost_remaining`` columns plus one ``feat_<id>`` column per feature
+    (retained proportion), one row per recorded step.
     """
 
     priority_rank: dict[int, float]
@@ -307,6 +309,9 @@ def test_performance_curves_bounded_and_monotone():
     pc = res.performance_curves
     assert pc["prop_landscape_remaining"].iloc[0] == pytest.approx(1.0)
     assert pc["prop_landscape_remaining"].iloc[-1] == pytest.approx(0.0)
+    # cost axis present; == landscape axis under uniform cost
+    assert pc["prop_cost_remaining"].iloc[0] == pytest.approx(1.0)
+    assert pc["prop_cost_remaining"].iloc[-1] == pytest.approx(0.0)
     for col in ["feat_1", "feat_2"]:
         vals = pc[col].to_numpy()
         assert np.all((vals >= -1e-9) & (vals <= 1 + 1e-9))
@@ -315,9 +320,34 @@ def test_performance_curves_bounded_and_monotone():
 
 
 def test_warp_matches_exact_on_tie_free_problem():
+    # NB: exact order-equality is coincidental on P1 (the batch happens to be
+    # order-preserving here); warp only guarantees coarse-bucket agreement.
     exact = rank_removal(_problem(P1), rule="caz", warp=1)
     warped = rank_removal(_problem(P1), rule="caz", warp=2)
     assert warped.removal_order == exact.removal_order
+
+
+def test_zero_distribution_feature_is_inert():
+    # feature 3 occurs in no PU (T_3 = 0) → excluded from delta, retained 1.0.
+    q = [[10, 0, 0], [0, 10, 0], [5, 5, 0]]
+    res = rank_removal(_problem(q, feat_ids=(1, 2, 3)), rule="caz")
+    assert res.removal_order == [3, 1, 2]           # same as P1, feat3 inert
+    assert res.performance_curves["feat_3"].iloc[0] == pytest.approx(1.0)
+    assert res.performance_curves["feat_3"].iloc[-1] == pytest.approx(1.0)
+
+
+def test_feature_extinction_midrun_uses_guard():
+    # feature 2 lives only in a locked-out cell (PU1). It is stripped first, so
+    # feature 2 goes extinct while two NORMAL cells remain — the only way to get
+    # multi-cell extinction (CAZ otherwise protects a feature to its last cell).
+    # Without the Q_safe guard both normal deltas become NaN (0/0) and removal
+    # falls back to PU-index order [1,2,3]; with the guard it is value order.
+    q = [[0, 5], [10, 0], [8, 0]]
+    res = rank_removal(_problem(q, status=[3, 0, 0]), rule="caz")
+    # PU3 (feat1=8, lower value) removed before PU2 (feat1=10) — by value not index
+    assert res.removal_order == [1, 3, 2]
+    assert all(np.isfinite(v) for v in res.priority_rank.values())
+    assert np.all(np.isfinite(res.performance_curves.to_numpy()))
 
 
 def test_invalid_rule_raises():
@@ -340,16 +370,22 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'pymarxan.zonation.ran
 Create `src/pymarxan/zonation/rank_removal.py`:
 
 ```python
-"""Zonation CAZ/ABF rank-removal engine (Moilanen et al. 2005; Moilanen 2007)."""
+"""Zonation CAZ/ABF rank-removal engine (Moilanen et al. 2005; Moilanen 2007).
+
+Distinct from ``pymarxan.analysis.rank_importance`` (Jung et al. 2021), which
+ranks only the *selected* PUs of an existing solution by Marxan-objective
+increase; this ranks *every* PU from the whole landscape by proportional
+biological loss.
+"""
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import (
-    ConservationProblem,
     STATUS_LOCKED_IN,
     STATUS_LOCKED_OUT,
+    ConservationProblem,
 )
 from pymarxan.zonation.result import ZonationResult
 
@@ -366,10 +402,20 @@ def rank_removal(
 
     Each step removes the cell(s) with the smallest weighted marginal loss
     ``delta_i`` — ``max_j`` over features for ``rule="caz"`` (core-area,
-    favors rarity), ``sum_j`` for ``rule="abf"`` (additive benefit, favors
-    richness) — of ``w_j * q_ij / Q_j`` (``Q_j`` = remaining total of feature
-    ``j``), divided by cost. Locked-out cells are removed first, locked-in
-    last. The removal order is the priority ranking (last removed = rank 1.0).
+    favors rarity; an exact transcription of Moilanen 2007 Eq. 1a), ``sum_j``
+    for ``rule="abf"`` (additive benefit, favors richness) — of
+    ``w_j * q_ij / Q_j`` (``Q_j`` = remaining total of feature ``j``), divided
+    by cost. ABF here is the proportional / remaining-sum member of Zonation's
+    additive-benefit family (marginal benefit ``1/R_j``); it is NOT a strictly
+    *linear* benefit (which would use the fixed original total and be static),
+    and the concave power-benefit generalization is a future extension.
+    Locked-out cells are removed first, locked-in last; the removal order is the
+    priority ranking (last removed = rank 1.0).
+
+    The O(n^2 * n_feat) recompute is inherent — removing a cell shifts every
+    ``Q_j``, so the Marxan per-flip delta model does not apply (only ``Q_j -=
+    q_ij`` is incremental). ``warp`` is the scaling knob; this suits vector PUs
+    (hundreds to low-thousands), not million-cell rasters.
     """
     if rule not in ("caz", "abf"):
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
@@ -399,13 +445,17 @@ def rank_removal(
     Q = q.sum(axis=0)          # remaining totals per feature
     T = Q.copy()               # original totals (for curves)
     T_safe = np.where(T > 0, T, 1.0)
+    cost_total = float(c.sum()) if c.sum() > 0 else 1.0
 
     removal_order: list[int] = []
     curve_rows: list[dict] = []
 
     def record_curve() -> None:
         retained = np.where(T > 0, Q / T_safe, 1.0)
-        row: dict = {"prop_landscape_remaining": remaining.sum() / n_pu}
+        row: dict = {
+            "prop_landscape_remaining": remaining.sum() / n_pu,
+            "prop_cost_remaining": float(c[remaining].sum()) / cost_total,
+        }
         for j, fid in enumerate(feat_ids):
             row[f"feat_{int(fid)}"] = float(retained[j])
         curve_rows.append(row)
@@ -423,17 +473,17 @@ def rank_removal(
 
     while remaining.any():
         cand = candidate_indices()  # ascending PU-index order
-        pos = Q > 0
-        contrib = np.zeros((cand.size, n_feat), dtype=float)
-        if pos.any():
-            cols = np.flatnonzero(pos)
-            contrib[:, cols] = q[np.ix_(cand, cols)] * w[cols] / Q[cols]
+        # w_j * q_ij / Q_j on the candidate slice; extinct features (Q_j == 0)
+        # contribute 0 (Q_safe avoids the divide; the mask covers any residue).
+        Q_safe = np.where(Q > 0, Q, 1.0)
+        r = q[cand] * (w / Q_safe)
+        r[:, Q <= 0] = 0.0
         if n_feat == 0:
             delta = np.zeros(cand.size)
         elif rule == "caz":
-            delta = contrib.max(axis=1)
+            delta = r.max(axis=1)
         else:  # abf
-            delta = contrib.sum(axis=1)
+            delta = r.sum(axis=1)
         delta = delta / c[cand]
         # stable sort → ties broken by PU index (cand is ascending)
         order = np.argsort(delta, kind="stable")
@@ -441,7 +491,7 @@ def rank_removal(
         for idx in cand[order[:k]]:
             removal_order.append(int(pu_ids[idx]))
             remaining[idx] = False
-            Q = Q - q[idx]
+            Q -= q[idx]
         record_curve()
 
     priority_rank = {
@@ -476,7 +526,7 @@ __all__ = ["ZonationResult", "rank_removal"]
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_rank_removal.py -v`
-Expected: PASS (9 tests).
+Expected: PASS (11 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -508,11 +558,11 @@ Under `## [Unreleased]` in `CHANGELOG.md` (add the `## [Unreleased]` and `### Ad
   (ABF, ``sum`` → favors richness) rules, cost- and status-aware, with a warp
   factor. Returns a ``ZonationResult`` with a continuous 0-1 priority map and
   per-feature performance curves — the priority-rank paradigm Marxan's min-set
-  cannot express. +12 tests (hand-computed CAZ order; CAZ-vs-ABF divergence).
+  cannot express. +14 tests (hand-computed CAZ order; CAZ-vs-ABF divergence).
 ```
 
 (Confirm the count with
-`/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation -q`: 3 result + 9 engine = 12.)
+`/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation -q`: 3 result + 11 engine = 14.)
 
 - [ ] **Step 2: Run the full check**
 
