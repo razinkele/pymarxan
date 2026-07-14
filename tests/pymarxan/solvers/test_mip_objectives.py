@@ -226,3 +226,54 @@ def test_min_penalties_prioritizes_penalty_over_cost():
     # min_penalties is hierarchical: penalty first, cost second. It should
     # not spend MORE than max_features when both achieve zero penalty.
     assert sols_min_pen[0].cost <= sols_max_feat[0].cost + 1e-6
+
+
+# --- max_weighted_features (spf-weighted; additive, max_features untouched) ---
+def test_max_weighted_features_stores_objective():
+    solver = MIPSolver(objective="max_weighted_features")
+    assert solver.objective == "max_weighted_features"
+
+
+def test_max_weighted_features_rejects_when_no_cost_budget():
+    p = _two_feature_problem()
+    with pytest.raises(ValueError, match="COSTBUDGET"):
+        MIPSolver(objective="max_weighted_features").solve(
+            p, SolverConfig(num_solutions=1)
+        )
+
+
+def test_max_weighted_features_uniform_spf_matches_max_features_count():
+    # With every spf == 1, weighted == unweighted: same number of targets met.
+    wf = MIPSolver(objective="max_weighted_features").solve(
+        _two_feature_problem(cost_budget=1.0), SolverConfig(num_solutions=1)
+    )
+    mf = MIPSolver(objective="max_features").solve(
+        _two_feature_problem(cost_budget=1.0), SolverConfig(num_solutions=1)
+    )
+    n_wf = sum(bool(v) for v in wf[0].targets_met.values())
+    n_mf = sum(bool(v) for v in mf[0].targets_met.values())
+    assert n_wf == n_mf
+
+
+def test_max_weighted_features_prefers_high_spf_under_tight_budget():
+    # Two features, budget pays for only one. Feature 2 has spf 10 vs 1;
+    # the weighted objective must pick the target that includes feature 2.
+    planning_units = pd.DataFrame(
+        {"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]}
+    )
+    features = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 10.0]}
+    )
+    # feature 1 only in PU1; feature 2 only in PU2.
+    puvspr = pd.DataFrame(
+        {"species": [1, 2], "pu": [1, 2], "amount": [1.0, 1.0]}
+    )
+    p = ConservationProblem(
+        planning_units, features, puvspr, parameters={"COSTBUDGET": 1.0}
+    )
+    sol = MIPSolver(objective="max_weighted_features").solve(
+        p, SolverConfig(num_solutions=1)
+    )[0]
+    # PU2 (carrying the spf-10 feature) is chosen.
+    assert bool(sol.selected[1]) is True
+    assert bool(sol.selected[0]) is False
