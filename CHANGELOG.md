@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Phylogenetic-diversity objectives (`pymarxan.phylo`).** Faith (1992) PD via a
+  branch-as-feature decomposition (Rodrigues & Gaston 2002): a pure-Python
+  ``PhylogeneticTree`` (edge table or Newick, zero new deps),
+  ``compute_phylogenetic_diversity`` scoring (rooted PD, total & representable
+  fractions, unresolved-tip warning), and ``phylogenetic_branch_problem`` — each
+  branch becomes a synthetic feature weighted by length so the existing solvers
+  maximize PD (``min_set`` for the cheapest full-PD reserve; the new additive
+  ``max_weighted_features`` MIP objective for max PD under a ``COSTBUDGET``).
+  ``max_features`` is unchanged. +29 tests (Newick parse, hand-computed PD,
+  MIP == brute-force).
+
 ## [0.11.0] — 2026-07-14
 
 ### Added
