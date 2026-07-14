@@ -103,6 +103,12 @@ The cell(s) with the **smallest** `δ_i` are removed (least value lost).
 - **status 2 (locked-in)** removed **last** — highest priority. Only candidates
   once every normal cell is gone.
 
+Locked-out cells are *removed first*, **not masked out**: their amounts are part
+of `T_j`/`Q_j` and are stripped during the initial locked-out removals (so a
+feature whose only stock sits in a locked-out cell correctly shows early
+retention loss). The CAZ rarity property therefore applies to sole-occurrence
+features in **normal** cells; the rarity test uses a status-0 cell.
+
 **Warp factor.** Each iteration, compute `δ` once for the current candidate set
 and remove the `min(warp, n_candidates)` cells with the smallest `δ` (batch),
 then update `Q_j` by the summed contribution of the removed batch. A batch never
