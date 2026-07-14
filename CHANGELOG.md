@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zonation rank-removal prioritization (`pymarxan.zonation`, Phase A).** A
+  Zonation-style engine (Moilanen et al. 2005; Moilanen 2007) that ranks every
+  planning unit by iterative backward removal — ``rank_removal(problem, rule=...)``
+  with core-area (CAZ, ``max`` over features → favors rarity) and additive-benefit
+  (ABF, ``sum`` over features → favors richness) rules, cost- and status-aware,
+  with a warp factor. Returns a ``ZonationResult`` with a continuous 0-1 priority
+  map and per-feature performance curves (by cell count and by cost) — the
+  priority-rank paradigm Marxan's min-set cannot express. +14 tests (hand-computed
+  CAZ order; CAZ-vs-ABF divergence).
+
 ## [0.12.0] — 2026-07-14
 
 ### Added
