@@ -104,3 +104,10 @@ def test_invalid_top_fraction_raises():
         ZonationSolver(top_fraction=0.0)
     with pytest.raises(ValueError, match="top_fraction"):
         ZonationSolver(top_fraction=1.5)
+
+
+def test_registered_in_default_registry():
+    from pymarxan.solvers.registry import get_default_registry
+
+    solver = get_default_registry().create("zonation")
+    assert isinstance(solver, ZonationSolver)
