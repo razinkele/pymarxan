@@ -20,7 +20,7 @@
 - The bar before done: `make check` green (lint + types + full suite).
 - Commit after each task (TDD: failing test → implementation → passing test → commit).
 - `build_solution(problem, selected, blm, metadata)` (`solvers/utils.py:463`) fills cost/boundary/objective/targets_met from a boolean selection; BLM convention is `float(problem.parameters.get("BLM", 0.0))` (`heuristic.py:282`).
-- `registry.get(name)` instantiates via `self._solvers[name]()` (no args), so `ZonationSolver()` must be valid with all defaults.
+- `registry.create(name)` instantiates via `self._solvers[name]()` (no args), so `ZonationSolver()` must be valid with all defaults. (The registry lookup method is `create`, not `get`; it raises `KeyError` on an unknown name.)
 
 ## File Structure
 
@@ -116,7 +116,16 @@ def test_top_fraction_controls_size_monotone():
     small = ZonationSolver(top_fraction=1 / 3).solve(_problem(P1))[0]
     big = ZonationSolver(top_fraction=1.0).solve(_problem(P1))[0]
     assert small.n_selected <= big.n_selected
-    assert big.n_selected == 3  # top_fraction=1.0 selects all
+    assert big.n_selected == 3  # top_fraction=1.0 selects all (no locks here)
+
+
+def test_locks_enforced_at_high_top_fraction():
+    # PU1 locked-in (2), PU2 locked-out (3), PU3 normal (0). Even at
+    # top_fraction=1.0 (which by rank would select all), the reserve must
+    # exclude the locked-out PU and include the locked-in one.
+    sol = ZonationSolver(top_fraction=1.0).solve(_problem(P1, status=[2, 3, 0]))[0]
+    assert bool(sol.selected[0]) is True    # PU1 locked-in → always selected
+    assert bool(sol.selected[1]) is False   # PU2 locked-out → never selected
 
 
 def test_deterministic_single_solution():
@@ -129,6 +138,10 @@ def test_abc_surface():
     assert s.name() == "Zonation (rank-removal)"
     assert s.supports_zones() is False
     assert s.available() is True
+    # capability flags inherit True (build_solution reports gaps post-hoc);
+    # pinned so a future change doesn't silently flip them to False.
+    assert s.supports_probmode3() is True
+    assert s.supports_clumping() is True
 
 
 def test_invalid_rule_raises():
@@ -158,7 +171,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import (
+    STATUS_LOCKED_IN,
+    STATUS_LOCKED_OUT,
+    ConservationProblem,
+)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
 from pymarxan.zonation.rank_removal import rank_removal
@@ -168,12 +185,22 @@ class ZonationSolver(Solver):
     """Threshold a Zonation priority ranking into a single reserve.
 
     Runs :func:`pymarxan.zonation.rank_removal` and selects the top
-    ``top_fraction`` of the ranking as the reserve. Deterministic: one ranking
-    -> one reserve, so ``solve`` returns a length-1 list regardless of
-    ``config.num_solutions``. The full ranking and performance curves ride in
-    ``Solution.metadata``. Zonation ranks by biological loss and does not
+    ``top_fraction`` of the ranking (a fraction of PUs *by count*; for
+    unequal-area/cost PUs this is not a 30%-of-area/budget reserve — read
+    ``metadata['performance_curves']['prop_cost_remaining']`` for a budget view).
+    PU status is then enforced as a hard constraint (locked-out excluded,
+    locked-in included), so the reserve honors locks like every other solver.
+
+    Deterministic: one ranking -> one reserve, so ``solve`` returns a length-1
+    list regardless of ``config.num_solutions`` (unlike ``MIPSolver``, which pads
+    to ``num_solutions`` identical copies — copies would fake cross-run variety
+    to selection-frequency analysis). The full ranking and performance curves
+    ride in ``Solution.metadata``. Zonation ranks by biological loss and does not
     optimize to meet feature targets, so a low ``top_fraction`` may leave
-    ``all_targets_met`` False by design.
+    ``all_targets_met`` False by design. Like ``HeuristicSolver``, Zonation is
+    blind to PROBMODE 3 / TARGET2 / SEPNUM during ranking but ``build_solution``
+    reports those gaps post-hoc, so the ``supports_*`` flags keep their ``True``
+    defaults.
     """
 
     def __init__(
@@ -210,6 +237,11 @@ class ZonationSolver(Solver):
             [int(pid) in selected_ids for pid in problem.planning_units["id"]],
             dtype=bool,
         )
+        # Enforce PU status as a hard constraint — top_fraction selects by rank
+        # only, so a high fraction could otherwise sweep in a locked-out cell.
+        status = problem.planning_units["status"].to_numpy()
+        selected[status == STATUS_LOCKED_OUT] = False
+        selected[status == STATUS_LOCKED_IN] = True
         blm = float(problem.parameters.get("BLM", 0.0))
         meta = {
             "solver": "zonation",
@@ -233,7 +265,7 @@ class ZonationSolver(Solver):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_zonation_solver.py -v`
-Expected: PASS (8 tests).
+Expected: PASS (9 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -259,14 +291,14 @@ Append to `tests/pymarxan/solvers/test_zonation_solver.py`:
 def test_registered_in_default_registry():
     from pymarxan.solvers.registry import get_default_registry
 
-    solver = get_default_registry().get("zonation")
+    solver = get_default_registry().create("zonation")
     assert isinstance(solver, ZonationSolver)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_zonation_solver.py::test_registered_in_default_registry -v`
-Expected: FAIL — `get("zonation")` raises `KeyError` (not registered yet).
+Expected: FAIL — `create("zonation")` raises `KeyError` (not registered yet).
 
 - [ ] **Step 3: Register the solver**
 
@@ -285,7 +317,7 @@ and add the registration alongside the others (after the `zone_sa` line):
 - [ ] **Step 4: Run the solver tests + a registry smoke check**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_zonation_solver.py -v`
-Expected: PASS (9 tests, including the registry test).
+Expected: PASS (10 tests, including the registry test).
 
 - [ ] **Step 5: Add the CHANGELOG entry**
 
@@ -296,7 +328,7 @@ Under `## [Unreleased]` → `### Added` in `CHANGELOG.md` (add the headers if th
   rank-removal engine: ``ZonationSolver(rule=..., top_fraction=0.3).solve(problem)``
   thresholds the priority ranking into one deterministic reserve (rank map +
   performance curves in ``Solution.metadata``), registered as ``"zonation"`` in
-  the default solver registry. +9 tests.
+  the default solver registry. +10 tests.
 ```
 
 - [ ] **Step 6: Run the full check**

@@ -42,7 +42,7 @@ tests/pymarxan/solvers/test_zonation_solver.py
 ZonationSolver(
     *,
     rule: str = "caz",             # "caz" | "abf"  (validated at __init__)
-    top_fraction: float = 0.3,     # share of the landscape selected as reserve
+    top_fraction: float = 0.3,     # fraction of PUs (BY COUNT) selected as reserve
     warp: int = 1,
     weights: dict[int, float] | None = None,
     use_cost: bool = True,
@@ -59,6 +59,11 @@ fast, matching `MIPSolver`'s objective validation) and `0 < top_fraction <= 1`.
 3. Build a boolean `selected` array aligned to `planning_units` order:
    `np.array([int(pid) in selected_ids for pid in
    problem.planning_units["id"]], dtype=bool)`.
+3b. **Enforce PU status as a hard constraint** (the ranking respects status only
+   by ordering, so a high `top_fraction` could otherwise sweep a locked-out cell
+   in): `selected[status == STATUS_LOCKED_OUT] = False`;
+   `selected[status == STATUS_LOCKED_IN] = True`. This matches how every other
+   solver treats locks.
 4. `blm = float(problem.parameters.get("BLM", 0.0))` (the codebase convention,
    `heuristic.py:282`).
 5. `meta = {"solver": "zonation", "rule": self.rule, "top_fraction":
@@ -87,11 +92,34 @@ a target-meeting reserve should raise `top_fraction` or use the min-set MIP.
 **`supports_zones()`** → `False`.
 **`available()`** → `True`.
 
+**Capability flags stay at their `True` defaults.** Zonation is blind to
+PROBMODE 3 / TARGET2 / SEPNUM during ranking, but `build_solution` reports those
+gaps post-hoc (via `Solution.prob_shortfalls` / `clump_shortfalls` /
+`sep_shortfalls`) — exactly `HeuristicSolver`'s contract. So
+`supports_probmode3` / `supports_clumping` / `supports_separation` inherit `True`
+(overriding to `False` would wrongly make Zonation less capable than the
+heuristic and hide it from a capability-filtering dispatcher). A test pins this.
+
+**`num_solutions` divergence, on purpose.** `MIPSolver` (also deterministic) pads
+its output to `num_solutions` identical deep copies (`mip_solver.py:577`);
+`ZonationSolver` returns length-1 instead. This is deliberate — copies would fake
+cross-run variety to `compute_selection_frequency` (which divides by
+`len(solutions)`). Documented in the solver docstring so the divergence isn't a
+surprise.
+
+**`top_fraction` is a PU-count share, not area/budget.** `top_fraction(f)` selects
+`ceil(f · n_pu)` PUs *by count*; for unequal-area/cost PUs this differs from a
+30%-of-area or 30%-of-budget reserve (the 30×30 / Aichi targets are area-based).
+Budget-based thresholding should read `metadata["performance_curves"]
+["prop_cost_remaining"]`. Noted in the param docstring.
+
 ## Registry
 
 In `get_default_registry()` (`solvers/registry.py`), add the local import and
 `reg.register("zonation", ZonationSolver)` alongside the existing seven, so
-`registry.get("zonation")` returns a fresh `ZonationSolver`.
+`registry.create("zonation")` returns a fresh `ZonationSolver` (the registry's
+lookup method is `create(name)`, which instantiates no-arg via
+`self._solvers[name]()`; there is no `get`).
 
 **Verified safe to register now:** the Shiny solver picker uses a *hardcoded*
 `solver_choices` dict (`solver_picker.py:13-20`), not registry enumeration, so
@@ -120,7 +148,10 @@ Reference: **P1** `q=[[10,0],[0,10],[5,5]]`, uniform cost, CAZ ranking gives
 - **Deterministic — one solution.** `solve(p, SolverConfig(num_solutions=5))`
   returns a list of length 1.
 - **ABC surface.** `name()`, `supports_zones() is False`, `available() is True`.
-- **Registry.** `get_default_registry().get("zonation")` is a `ZonationSolver`.
+- **Registry.** `get_default_registry().create("zonation")` is a `ZonationSolver`.
+- **Locks enforced.** With a locked-out PU present, `top_fraction=1.0` still
+  excludes it (and a locked-in PU is always selected) — the reserve honors
+  status like every other solver, not just by rank.
 - **Validation.** `ZonationSolver(rule="bogus")` and
   `ZonationSolver(top_fraction=0)` raise `ValueError` at construction.
 
