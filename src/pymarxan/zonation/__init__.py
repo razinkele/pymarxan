@@ -7,6 +7,7 @@ cell each step; the removal order is a continuous 0-1 priority map. See
 """
 from __future__ import annotations
 
+from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.result import ZonationResult
 
-__all__ = ["ZonationResult"]
+__all__ = ["ZonationResult", "rank_removal"]
