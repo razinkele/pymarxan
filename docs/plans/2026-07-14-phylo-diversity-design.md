@@ -67,8 +67,11 @@ Pure-Python rooted tree, no dependency.
 - `PhylogeneticTree.from_edges(edges)` — `edges` is an iterable of
   `(parent, child, length)` triples. Node ids may be `int` or `str`.
 - `PhylogeneticTree.from_newick(text)` — hand-written recursive-descent parser
-  for standard Newick with branch lengths, e.g. `"((A:1,B:1):2,C:3);"`.
-  Named tips keep their labels; internal/anonymous nodes get generated ids.
+  for the Newick subset we need: nested `(...)` clades, named tips, optional
+  `:length` on any node, optional names on internal nodes, terminating `;`.
+  Named tips keep their labels; anonymous internal nodes get generated ids; a
+  root `:length` (if present) is ignored. Bootstrap values, quoted labels, and
+  NHX comments are out of scope (documented, raise a clear error if encountered).
 
 **Internal representation**
 - List of nodes; per-branch length keyed by the child node (each non-root node
@@ -142,27 +145,37 @@ Returns a **new** `ConservationProblem` (via `problem.copy_with(...)`, preservin
 subclass type) whose feature set is **entirely replaced** by branch features —
 the original species features and their `pu_vs_features` rows are dropped, so a
 solve optimizes PD directly rather than double-counting species alongside
-branches. The PU set, cost, status, boundary, and `parameters` carry through
-unchanged. Each branch is a synthetic feature:
+branches. The PU set (ids, cost, status), boundary, and `parameters` carry
+through unchanged. Each retained branch becomes a synthetic feature:
 
-- **Feature id namespace.** Branch feature ids are assigned in a non-colliding
-  range (e.g. `max(existing feature id) + 1 + branch_index`), recorded so the
-  scoring/reporting can map back. Original PU set, cost, status, and boundary
-  are carried through unchanged.
+- **Feature id.** Branch features get fresh ids (branch index → stable id); since
+  the original features are fully replaced, ids need only be unique among
+  branches. A `branch_feature_id → child_node` map is returned/recorded so
+  reporting can trace a feature back to its branch.
 - **`pu_vs_features` amount** per (branch, PU) = **presence**: `1.0` if any
   descendant tip's feature occurs in that PU, else the row is omitted (sparse).
   Faith's unit — a branch is captured when a descendant lives in the PU.
 - **`target`** = the `target` argument (default `1.0` → "represent every branch
   at least once", i.e. capture 100% of representable PD).
-- **`spf`** = branch length (evolutionary distinctness drives the
-  under-representation penalty; matters for SA / heuristic / `min_penalties`).
+- **`spf`** = branch length (drives the under-representation penalty in
+  SA / heuristic / `min_penalties`, and is the weight for
+  `max_weighted_features`, §4).
 - **`name`** = a stable branch label (e.g. `"branch:<child_node>"`).
+
+**Unrepresentable branches are excluded.** A branch whose descendant tips occur
+in **no** PU has zero total occurrence and can never meet a positive `target` —
+including it would make `min_set` infeasible. Such branches are dropped from the
+decomposition; they contribute nothing to representable PD anyway, so the
+retained branch set is exactly the `pd_representable` support from the scoring
+(§2). The dropped count is recorded for reporting. (Zero-length but *occurring*
+branches are kept: they're feasible and simply add 0 to PD / 0 weight.)
 
 **Usage**
 - `MIPSolver(objective='min_set').solve(branch_problem, cfg)` → cheapest reserve
   capturing 100% of representable PD.
 - Set `branch_problem.parameters['COSTBUDGET']` and
-  `MIPSolver(objective='max_features')` → maximize PD captured under budget.
+  `MIPSolver(objective='max_weighted_features')` (§4) → maximize PD captured
+  under budget.
 - SA / greedy also consume it (spf-weighted penalties approximate PD).
 
 **Semantics note (why `target` occurrences, not "% of total PD").** Every
@@ -174,20 +187,35 @@ budget / `max_features` path, not per-feature targets. Hence the API exposes an
 absolute per-branch `target` (default 1), consistent with how Marxan targets
 work, rather than a total-PD fraction.
 
-## Component 4 — weighted `max_features` (parity-sensitive edit)
+## Component 4 — new `max_weighted_features` objective mode (additive)
 
-Currently `mip_solver.py` builds the `max_features` objective as `-Σ z_j`
-(unweighted count of features whose target is met). Change it to `-Σ spf_j·z_j`.
+The budget path must maximize **PD** = Σ lengthᵦ·zᵦ (zᵦ = branch target met),
+i.e. a *weighted* count of features whose target is met. Today's `max_features`
+is the *unweighted* count `-Σ z_j` and does **not** read `spf`.
 
-- **Backward compatible:** `spf` defaults to `1.0` for every feature, so at the
-  default the objective is byte-identical to today's `-Σ z_j`. Existing
-  `max_features` tests and users are unaffected.
-- **Effect:** with branch features carrying `spf = branch length`, the budget
-  path maximizes captured **PD** (Σ length) rather than branch **count** — the
-  correct max-PD-under-budget objective.
-- **Parity:** because this touches solver objective math, run the
-  `marxan-parity-check` skill and add a test asserting default-`spf` equivalence
-  to the prior formulation.
+**Do not overload `max_features`.** Real Marxan problems routinely set
+non-uniform, non-1.0 `spf` (it's the species penalty factor), and those users
+rely on `max_features` being a pure count. Silently changing it to `-Σ spf_j·z_j`
+would alter their results — a parity break disguised as "backward compatible"
+(the claim only holds when every `spf == 1.0`, which real problems violate).
+
+Instead **add a new objective mode** `max_weighted_features` to `mip_solver.py`,
+alongside the existing four:
+
+- Objective `-Σ spf_j·z_j`, subject to `Σ costᵢ·xᵢ ≤ COSTBUDGET` (requires a
+  `COSTBUDGET`, same as `max_features` / `min_largest_shortfall`).
+- `max_features` is left **exactly as-is** — zero behavior change, zero parity
+  risk to existing users.
+- Branch problems use `objective='max_weighted_features'`; with `spf = branch
+  length` this maximizes captured PD under budget, matching prioritizr's
+  `add_max_phylo_div_objective`. (Note this weights the *target-met* indicator,
+  distinct from prioritizr's `add_max_utility_objective`, which sums held
+  amounts — hence the name `max_weighted_features`, not `max_utility`.)
+- **Parity:** because this adds solver objective math, run the
+  `marxan-parity-check` skill; add tests that (a) `max_weighted_features` with
+  uniform `spf == 1` yields the same optimal *number* of features met as
+  `max_features`, and (b) `max_features` output is byte-identical before/after
+  (guard against accidental mutation).
 
 ## Testing strategy (TDD, hand-computed + brute-force oracles)
 
@@ -209,15 +237,23 @@ values for metrics). Reference tree `((A:1,B:1):2,C:3);` (total PD = 7).
 - `tip_feature_map` explicit vs. name-match default agree.
 
 **`test_decomposition.py`**
-- Branch features have presence amounts and `spf == length`; ids don't collide
-  with original feature ids.
+- Branch features have presence amounts and `spf == length`; branch ids are
+  unique; the returned `branch_feature_id → child_node` map is correct.
+- A tree with an unrepresentable tip (feature in no PU) → its pendant branch is
+  dropped; `min_set` stays **feasible** and the retained branches equal the
+  `pd_representable` support.
 - `min_set` MIP on a tiny tree selects a reserve whose realized PD (via
   `compute_phylogenetic_diversity`) is 100% of representable; MIP cost == brute
   force over all PU subsets.
-- Weighted `max_features` + `COSTBUDGET` on a small instance: selected PD ==
+- `max_weighted_features` + `COSTBUDGET` on a small instance: selected PD ==
   brute-force max PD achievable within budget.
-- `max_features` with all `spf == 1` still equals the old `-Σ z_j` optimum
-  (parity guard).
+
+**`test_mip.py` (Component 4, parity guards)**
+- `max_weighted_features` with all `spf == 1` yields the same *number* of
+  features met as `max_features` on the same instance/budget.
+- `max_features` optimum is unchanged before/after the edit (no mutation).
+- `max_weighted_features` without `COSTBUDGET` raises the same clear error as the
+  other budget-requiring objectives.
 
 **Target:** ~20–25 new tests, `make check` green (0 ruff / 0 mypy), coverage
 ≥ 75%.
