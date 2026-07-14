@@ -7,7 +7,7 @@ from pymarxan.analysis.selection_freq import compute_selection_frequency
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
-from pymarxan_shiny.modules.mapping.ocean_palette import FREQ_HIGH_RGB, FREQ_LOW_RGB
+from pymarxan_shiny.modules.mapping.ocean_palette import frequency_color
 
 try:
     from shinywidgets import output_widget, render_widget
@@ -17,18 +17,6 @@ try:
     _HAS_IPYLEAFLET = True
 except ImportError:
     _HAS_IPYLEAFLET = False
-
-
-def frequency_color(freq: float) -> str:
-    """Map a 0-1 frequency to a ocean-white → deep-navy hex color.
-
-    0.0 -> ocean white, 1.0 -> deep navy.
-    """
-    freq = max(0.0, min(1.0, freq))
-    r = int(FREQ_LOW_RGB[0] * (1.0 - freq) + FREQ_HIGH_RGB[0] * freq)
-    g = int(FREQ_LOW_RGB[1] * (1.0 - freq) + FREQ_HIGH_RGB[1] * freq)
-    b = int(FREQ_LOW_RGB[2] * (1.0 - freq) + FREQ_HIGH_RGB[2] * freq)
-    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 @module.ui

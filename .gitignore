@@ -12,3 +12,4 @@ htmlcov/
 .claude/*
 !.claude/skills/
 .worktrees/
+.playwright-mcp/

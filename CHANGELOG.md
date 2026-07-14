@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zonation Shiny tab + solver-picker entry (Phase D).** A "Zonation" tab shows
+  the priority-rank choropleth + per-feature performance curves for the loaded
+  problem (CAZ/ABF), and "Zonation (rank-removal)" is selectable in the solver
+  picker — completing Zonation end-to-end across the stack (core → solver →
+  smoothing → UI). +6 tests.
+
 ## [0.15.0] — 2026-07-14
 
 ### Added
