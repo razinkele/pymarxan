@@ -141,7 +141,9 @@ def from_rasters(
    `ValueError` naming the mismatched input. Transforms are compared with a small
    tolerance (e.g. `Affine.almost_equals` / `np.allclose` on the 6 coefficients), since
    two independently-written rasters describing the same grid can differ by FP epsilon;
-   shape and CRS are compared exactly (CRS via its string form). No warping.
+   shape is compared exactly; CRS via rasterio's own `CRS` equality (`src.crs ==
+   ref_crs`, not string comparison, so an EPSG-code and an equivalent-WKT serialization
+   of the same CRS don't falsely mismatch). No warping.
 4. **Delegate** the assembled arrays + grid scalars to `from_arrays` (nodata already NaN,
    so no sentinel needed).
 
