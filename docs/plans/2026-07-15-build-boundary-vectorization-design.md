@@ -85,11 +85,12 @@ vectorized.
    s_ids = np.asarray(pu_ids)[keep]
    s_vals = self_vals[keep]
    ```
-   This is algebraically identical to the loop's `perimeter - shared`: the loop's
-   `shared[cell]` accumulates `cell_height` for each valid horizontal neighbor (left *and*
-   right, since the left edge is emitted by the left cell but added to both) and
-   `cell_width` for each valid vertical neighbor, so
-   `perimeter - shared = 2(w+h) - (has_left+has_right)·h - (has_up+has_down)·w
+   This is algebraically identical to the loop's `perimeter - shared` — **identical up to
+   floating-point rounding** (~1e-14 rel; the two forms regroup the IEEE-754 additions
+   differently, far below the `1e-10` emit threshold): the loop's `shared[cell]` accumulates
+   `cell_height` for each valid horizontal neighbor (left *and* right, since the left edge is
+   emitted by the left cell but added to both) and `cell_width` for each valid vertical
+   neighbor, so `perimeter - shared = 2(w+h) - (has_left+has_right)·h - (has_up+has_down)·w
    = (2-has_left-has_right)·h + (2-has_up-has_down)·w`.
 
 5. **Assemble.**

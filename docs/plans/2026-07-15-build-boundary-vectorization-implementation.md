@@ -83,6 +83,8 @@ def test_build_boundary_vectorized_matches_reference_loop():
         GridGeometry(0.0, 5.0, 1.0, 1.0, np.ones((5, 1), dtype=bool)),  # Nx1 strip
         GridGeometry(0.0, 3.0, 1.0, 1.0, hole),                         # center hole
         GridGeometry(0.0, 1.0, 1.0, 1.0, np.ones((1, 1), dtype=bool)),  # single cell
+        GridGeometry(0.0, 2.1, 0.3, 0.7, hole.copy()),                  # non-integer cells (ULP path)
+        GridGeometry(0.0, 3.0, 1.0, 1.0, np.asfortranarray(hole)),      # Fortran-order mask
     ]
     for grid in cases:
         got = _sorted(grid.build_boundary())
