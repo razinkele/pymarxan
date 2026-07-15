@@ -38,12 +38,17 @@ and **coherence** `C = Σ (A_i/A_total)² = m_eff / A_total`. We report `m_eff` 
   habitat area.** This is Jaeger's denominator; using habitat area instead changes the meaning and
   the scale. Here `A_total = n_valid_cells · cell_area`.
 - **Patches are connected components of *habitat* cells only.** A_i = (cells in patch) · cell_area.
-- **Adjacency:** rook (4-neighbour) by default — matches restoptr's default 4-connectivity for
-  habitat aggregation and `GridGeometry.build_boundary`'s rook edges; queen (8-neighbour) optional.
-- **Jaeger's CUT vs CBC variants:** for a self-contained study region (no habitat crossing the
-  region boundary) the two coincide; we compute the standard within-region `m_eff = ΣA_i²/A_total`.
-  The cross-boundary (CBC) variant is out of scope. *(Design-review scientific lens: confirm
-  restoptr uses the within-region form.)*
+- **Adjacency:** rook (4-neighbour) by default — this matches **restoptr's deliberate choice**
+  (`lsm_c_mesh(..., directions = 4)`) and `GridGeometry.build_boundary`'s rook edges. Note it is
+  *not* the field-wide default: landscapemetrics / FRAGSTATS default to queen (8-conn), so numeric
+  cross-checks against those tools require setting their `directions=4` explicitly. queen
+  (8-neighbour) is exposed as an option.
+- **CUT vs CBC variants:** Jaeger (2000) gave the cutting-out (CUT) form `m_eff = ΣA_i²/A_total`;
+  the cross-boundary-connection (CBC) correction is **Moser et al. (2007)**
+  (doi:10.1007/s10980-006-9023-0), for patches spanning *reporting-unit* boundaries. For a
+  self-contained study region (one landscape, no sub-unit boundaries) CUT is exact and CBC coincides
+  with it — that is what restoptr uses. We compute the CUT form; CBC is out of scope. *(Verified in
+  design review against landscapemetrics `lsm_c_mesh`, which restoptr calls.)*
 
 Range: no habitat → `MESH = 0`; a single patch covering all valid cells → `MESH = A_total` (max).
 More/larger aggregated patches → higher MESH.
@@ -53,12 +58,15 @@ More/larger aggregated patches → higher MESH.
 New subpackage `src/pymarxan/restoration/`:
 
 ```python
-@dataclass
+@dataclass(eq=False)               # numpy patch_areas field breaks the auto __eq__ (repo convention)
 class MeshResult:
     mesh: float                 # effective mesh size m_eff (area units)
     n_patches: int              # number of habitat patches
     patch_areas: np.ndarray     # (n_patches,) area per patch, descending
     total_area: float           # A_total = n_valid_cells · cell_area
+    # cheap canonical Jaeger companions (properties):
+    #   coherence  C = mesh / total_area = Σ(A_i/A_total)²   ∈ [0, 1]
+    #   division   D = 1 − C                                  ∈ [0, 1]
 
 def compute_mesh(
     grid: GridGeometry,
@@ -99,7 +107,11 @@ independently testable measure like `compute_space_held` / `compute_phylogenetic
 ## Edge cases
 
 - **No habitat cells** → `n_patches=0`, `patch_areas=[]`, `mesh=0.0`.
-- **Degenerate empty grid** (`grid.n_pu == 0`, `A_total == 0`) → `mesh=0.0` (guard the division).
+- **`cell_area <= 0`** → `ValueError` (an explicit override bypasses `GridGeometry`'s own
+  `cell_width/height > 0` check; without this it would silently yield `mesh=0.0` / negative areas).
+  This is the only reachable `A_total == 0` path — an all-False mask (`n_pu == 0`) is already
+  rejected by `GridGeometry.__post_init__`, so a degenerate empty grid can't be constructed. The
+  `total_area > 0` guard on the division is kept as harmless defence.
 - **All valid cells are habitat & connected** → `n_patches=1`, `mesh = A_total` (maximum).
 - **`habitat_mask` length ≠ `grid.n_pu`** → `ValueError`.
 - **`connectivity` not in `{"rook", "queen"}`** → `ValueError`.
@@ -128,7 +140,11 @@ denominator) before merge.
 ## Out of scope (deferred, own pieces)
 
 - **IIC / PC** connectivity indices (patch graph + topological distances; Pascual-Hortal & Saura
-  2006 / Saura & Pascual-Hortal 2007) — the natural second measure piece.
+  2006 / Saura & Pascual-Hortal 2007) — the natural second measure piece. **Home decided:** they
+  live in `pymarxan.restoration` (restoration landscape-pattern indices, restoptr's family), with
+  their own `compute_*` + `*Result` (patch graph + per-node dIIC/dPC importances — NOT sharing
+  `MeshResult`). This is distinct from `pymarxan.connectivity` (circuit/graph *flow*: Omniscape,
+  climate velocity, smoothing); the `restoration/__init__.py` docstring records the split.
 - **Restoration data model** (habitat / restorable / available cell states on a grid) + a
   problem-level `compute_mesh` convenience.
 - **MESH-maximizing optimizer** (greedy "restore the restorable cell that most raises MESH until
@@ -138,9 +154,17 @@ denominator) before merge.
 
 ## References
 
-- Jaeger (2000) *Landscape Ecology* 15:115–130 — effective mesh size. **(scite-verify.)**
+- Jaeger (2000) "Landscape division, splitting index, and effective mesh size: new measures of
+  landscape fragmentation." *Landscape Ecology* 15(2):115–130, doi:10.1023/A:1008129329289 —
+  effective mesh size (the CUT form). **✓ verified (design review).**
+- Moser et al. (2007) *Landscape Ecology* 22(3):447–459, doi:10.1007/s10980-006-9023-0 — the CBC
+  boundary correction (out of scope). **✓ verified.**
 - Justeau-Allaire et al. (2021) *J. Appl. Ecol.* doi:10.1111/1365-2664.13803 — constrained
-  optimization of landscape indices for restoration. **(scite-verify.)**
-- restoptr package: *Restoration Ecology* doi:10.1111/rec.13910. **(scite-verify.)**
+  optimization of landscape indices for restoration. **✓ verified.**
+- restoptr package: Justeau-Allaire et al. (2023) *Restoration Ecology* doi:10.1111/rec.13910; its
+  MESH is `landscapemetrics::lsm_c_mesh(directions = 4)` — same total-landscape denominator.
+  **✓ verified.**
 - Reuses `pymarxan.models.grid.GridGeometry` (raster grid + rook adjacency, S1–S4) and
-  `scipy.ndimage.label`.
+  `scipy.ndimage.label` (the raster connected-components tool — deliberately distinct from
+  `constraints/contiguity.count_connected_components`, which is a vector-PU BFS, count-only, over a
+  boundary DataFrame).

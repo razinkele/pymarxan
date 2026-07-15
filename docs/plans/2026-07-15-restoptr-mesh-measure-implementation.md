@@ -12,6 +12,14 @@ raster connected-components; the rest is numpy. No `ConservationProblem` depende
 **Tech stack:** Python 3.12+, numpy, `scipy.ndimage.label`. `from __future__ import annotations`,
 full type hints. Tests under the `shiny` micromamba env.
 
+> **⚠ Review fixes folded** (`...-review.md`, science VERIFIED, no CRITICAL/HIGH). The code below
+> is superseded by these where they conflict: `MeshResult` is `@dataclass(eq=False)` (numpy field)
+> with `coherence`/`division` `@property`s; `compute_mesh` validates `cell_area > 0`; `n_patches`
+> derives from `patch_areas.size`; the `mesh.py`/`__init__.py` docstrings record the
+> `scipy.ndimage.label` vs `count_connected_components` distinction and the `restoration` vs
+> `connectivity` split (IIC/PC home = `restoration`); tests add `cell_area<=0` + coherence/division;
+> `test_l_patch...` → `test_block_plus_isolated_cell`.
+
 ## Global constraints
 
 - MESH `= Σ A_i² / A_total`; `A_total = grid.n_pu · cell_area` (**total landscape area — every
