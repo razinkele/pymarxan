@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-15
+
 ### Changed
 
 - **Sparse solver cache (S3a).** ``ProblemCache`` now stores the feature amounts as a
@@ -965,7 +967,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.20.0
 [0.19.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.19.0
 [0.18.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.18.0
 [0.17.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.17.0
