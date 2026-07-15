@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Vectorized `GridGeometry.build_boundary`.** The analytic rook-adjacency boundary is now
+  built with O(n) numpy array ops (shifted-mask edges + exposed-side self-boundary) instead of
+  a per-cell Python loop — so `include_boundary` scales to million-cell raster grids (identical
+  output; the shapely-parity anchor is unchanged; ~9 ms for a 200×200 grid).
+
 ## [0.20.0] — 2026-07-15
 
 ### Changed

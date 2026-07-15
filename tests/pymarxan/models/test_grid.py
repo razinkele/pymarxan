@@ -193,3 +193,69 @@ def test_validate_grid_count_mismatch():
     g2 = GridGeometry(0.0, 2.0, 1.0, 1.0, np.array([[True, True]], dtype=bool))
     errs_ok = _tiny_problem().copy_with(grid=g2).validate()
     assert not any("grid" in e for e in errs_ok)
+
+
+def _reference_build_boundary(grid, pu_ids=None):
+    """The pre-vectorization per-cell loop — the multiset oracle."""
+    cells = grid.valid_cells()
+    n = len(cells)
+    if pu_ids is None:
+        pu_ids = np.arange(1, n + 1)
+    pu_ids = np.asarray(pu_ids)
+    cell_to_id = {cell: int(pu_ids[i]) for i, cell in enumerate(cells)}
+    shared = {int(pid): 0.0 for pid in pu_ids}
+    rows = []
+    for (r, c), pid in cell_to_id.items():
+        for nbr, edge in (((r, c + 1), grid.cell_height), ((r + 1, c), grid.cell_width)):
+            nid = cell_to_id.get(nbr)
+            if nid is not None:
+                rows.append({"id1": pid, "id2": nid, "boundary": edge})
+                shared[pid] += edge
+                shared[nid] += edge
+    perimeter = 2.0 * (grid.cell_width + grid.cell_height)
+    for pid in cell_to_id.values():
+        sb = perimeter - shared[pid]
+        if sb > 1e-10:
+            rows.append({"id1": pid, "id2": pid, "boundary": sb})
+    return pd.DataFrame(rows, columns=["id1", "id2", "boundary"])
+
+
+def _sorted(df):
+    return df.sort_values(["id1", "id2"]).reset_index(drop=True)
+
+
+def test_build_boundary_vectorized_matches_reference_loop():
+    rng = np.random.default_rng(0)
+    hole = np.ones((3, 3), dtype=bool)
+    hole[1, 1] = False
+    masked = rng.random((5, 5)) < 0.7
+    masked[0, 0] = True  # guarantee at least one valid cell
+    cases = [
+        GridGeometry(0.0, 4.0, 1.0, 1.0, np.ones((4, 4), dtype=bool)),   # full
+        GridGeometry(10.0, 20.0, 2.0, 3.0, masked),                     # non-square + holes
+        GridGeometry(0.0, 1.0, 1.0, 1.0, np.ones((1, 5), dtype=bool)),  # 1xN strip
+        GridGeometry(0.0, 5.0, 1.0, 1.0, np.ones((5, 1), dtype=bool)),  # Nx1 strip
+        GridGeometry(0.0, 3.0, 1.0, 1.0, hole),                         # center hole
+        GridGeometry(0.0, 1.0, 1.0, 1.0, np.ones((1, 1), dtype=bool)),  # single cell
+        GridGeometry(0.0, 2.1, 0.3, 0.7, hole.copy()),                  # non-integer (ULP)
+        GridGeometry(0.0, 3.0, 1.0, 1.0, np.asfortranarray(hole)),      # Fortran-order mask
+    ]
+    for grid in cases:
+        got = _sorted(grid.build_boundary())
+        ref = _sorted(_reference_build_boundary(grid))
+        pd.testing.assert_frame_equal(got, ref, check_dtype=False)
+
+
+def test_build_boundary_vectorized_arbitrary_pu_ids():
+    grid = GridGeometry(0.0, 2.0, 1.0, 1.0, np.ones((2, 2), dtype=bool))
+    ids = np.array([5, 3, 8, 1])  # non-sequential
+    got = _sorted(grid.build_boundary(ids))
+    ref = _sorted(_reference_build_boundary(grid, ids))
+    pd.testing.assert_frame_equal(got, ref, check_dtype=False)
+
+
+def test_build_boundary_scale_smoke():
+    # 200x200 full grid: 2*200*199 shared rows + (4*200-4) border self rows.
+    grid = GridGeometry(0.0, 200.0, 1.0, 1.0, np.ones((200, 200), dtype=bool))
+    df = grid.build_boundary()
+    assert len(df) == 2 * 200 * 199 + (4 * 200 - 4)

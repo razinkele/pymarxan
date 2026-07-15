@@ -78,31 +78,56 @@ class GridGeometry:
         """Analytic rook-adjacency boundary (columns ``id1``, ``id2``,
         ``boundary``), matching ``spatial.boundary.compute_boundary`` on the
         equivalent vector grid. ``pu_ids`` aligns to valid-cell order (defaults
-        to ``1..n_pu``)."""
-        cells = self.valid_cells()
-        n = len(cells)
+        to ``1..n_pu``). Vectorized (numpy), O(n_pu)."""
+        mask = self.mask
+        flat_valid = np.flatnonzero(mask.reshape(-1))  # row-major (C-order) == PU order
+        n = int(flat_valid.size)
         if pu_ids is None:
             pu_ids = np.arange(1, n + 1)
         pu_ids = np.asarray(pu_ids)
         if len(pu_ids) != n:
             raise ValueError(f"pu_ids must have {n} entries, got {len(pu_ids)}")
-        if len(set(pu_ids.tolist())) != n:
+        if len(np.unique(pu_ids)) != n:
             raise ValueError("pu_ids must be unique")
-        cell_to_id = {cell: int(pu_ids[i]) for i, cell in enumerate(cells)}
-        shared: dict[int, float] = {int(pid): 0.0 for pid in pu_ids}
-        rows: list[dict] = []
-        for (r, c), pid in cell_to_id.items():
-            # right neighbor shares a vertical edge (length cell_height);
-            # down neighbor shares a horizontal edge (length cell_width).
-            for nbr, edge in (((r, c + 1), self.cell_height), ((r + 1, c), self.cell_width)):
-                nid = cell_to_id.get(nbr)
-                if nid is not None:
-                    rows.append({"id1": pid, "id2": nid, "boundary": edge})
-                    shared[pid] += edge
-                    shared[nid] += edge
-        perimeter = 2.0 * (self.cell_width + self.cell_height)
-        for pid in cell_to_id.values():
-            self_b = perimeter - shared[pid]
-            if self_b > 1e-10:
-                rows.append({"id1": pid, "id2": pid, "boundary": self_b})
-        return pd.DataFrame(rows, columns=["id1", "id2", "boundary"])
+
+        # id grid: pu_ids scattered at valid cells (row-major); invalid cells unused.
+        id_grid = np.zeros(mask.shape, dtype=np.int64)
+        id_grid.reshape(-1)[flat_valid] = pu_ids  # id_grid is C-contiguous -> writable view
+        id_at_valid = id_grid.reshape(-1)[flat_valid]  # pu_ids as int64, in PU order
+
+        # Right edges (valid cell + valid right neighbor share a vertical edge = cell_height).
+        both_r = mask[:, :-1] & mask[:, 1:]
+        r_id1 = id_grid[:, :-1][both_r]
+        r_id2 = id_grid[:, 1:][both_r]
+
+        # Down edges (valid cell + valid down neighbor share a horizontal edge = cell_width).
+        both_d = mask[:-1, :] & mask[1:, :]
+        d_id1 = id_grid[:-1, :][both_d]
+        d_id2 = id_grid[1:, :][both_d]
+
+        # Self-boundary = exposed sides = perimeter - shared, per valid cell.
+        has_left = np.zeros_like(mask)
+        has_left[:, 1:] = mask[:, :-1]
+        has_right = np.zeros_like(mask)
+        has_right[:, :-1] = mask[:, 1:]
+        has_up = np.zeros_like(mask)
+        has_up[1:, :] = mask[:-1, :]
+        has_down = np.zeros_like(mask)
+        has_down[:-1, :] = mask[1:, :]
+        self_grid = (
+            (2 - has_left.astype(np.int64) - has_right.astype(np.int64)) * self.cell_height
+            + (2 - has_up.astype(np.int64) - has_down.astype(np.int64)) * self.cell_width
+        )
+        self_vals = self_grid.reshape(-1)[flat_valid]
+        keep = self_vals > 1e-10
+        s_ids = id_at_valid[keep]
+        s_vals = self_vals[keep]
+
+        id1 = np.concatenate([r_id1, d_id1, s_ids])
+        id2 = np.concatenate([r_id2, d_id2, s_ids])
+        boundary = np.concatenate([
+            np.full(r_id1.size, self.cell_height),
+            np.full(d_id1.size, self.cell_width),
+            s_vals,
+        ])
+        return pd.DataFrame({"id1": id1, "id2": id2, "boundary": boundary})
