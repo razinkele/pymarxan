@@ -44,6 +44,11 @@ per-feature CRS. The pure `from_arrays` core is unchanged.
   512 MiB), else the full path. So small rasters keep the exact S2 behaviour and large
   ones auto-switch.
 
+`include_boundary` becomes `bool | None = None`: `None` resolves per path — `True` on the
+full-array path (unchanged S2 behaviour), `False` on the windowed path (the Python-loop
+`build_boundary` is a scale bottleneck — see "Boundary at scale"). An explicit `True`/
+`False` is always honoured, so a windowed caller can still opt into the boundary.
+
 ## The windowed algorithm (two passes)
 
 All rasters are opened once via `contextlib.ExitStack` (open `DatasetReader`s held for
@@ -91,8 +96,23 @@ reference transform, `planning_units` (`id 1..n_pu`, `cost_vals`, `status_vals`)
 `grid.build_boundary(pu_ids)` when `include_boundary` (O(n_pu)), and return the
 `ConservationProblem`.
 
-**Feature-union re-reads features** (pass 1 to build the mask, pass 2 for amounts) — a
-documented I/O cost; `mask`/`cost`-driven validity reads features only once (pass 2).
+**Re-reads (I/O, not memory).** Building the mask in pass 1 and sampling in pass 2 means
+some rasters are read twice: feature-union validity re-reads every feature (pass 1 mask +
+pass 2 amounts); cost-driven validity re-reads the cost raster (pass 1 mask + pass 2
+values). `mask`-driven validity reads each feature/cost only once (pass 2). This is an I/O
+cost, not a memory one — peak memory is unchanged.
+
+**Boundary at scale (a real limitation).** With `include_boundary=True` the path calls S1's
+`grid.build_boundary`, which is a **Python loop over every valid cell** (a `dict` of `n_pu`
+tuple keys + a list of ~`3·n_pu` row dicts before the DataFrame) — fine at S1/S2 modest
+scale, but slow and memory-spiky at the million-cell scale S3c targets, and it partly
+undermines S3c's goal. S3c therefore treats this honestly: `include_boundary` stays a
+parameter (default `True`, so small/auto-full problems are unchanged), but the windowed
+path **defaults `include_boundary` to `False` when `window_size` resolves to windowed**
+(BLM off unless explicitly requested), and the docstring notes that requesting the boundary
+on a very large grid is expensive until `build_boundary` is vectorized — a deferred
+companion (natural alongside S3a). A multi-band stack (`{1:(p,1), 2:(p,2)}`) opening the
+same path twice via the `ExitStack` is a negligible, accepted duplication.
 
 ## Memory model
 
@@ -116,9 +136,11 @@ Verified on small `MemoryFile` rasters with a tiny forced `window_size` (e.g. `2
 ## Testing strategy (TDD)
 
 - **Windowed == full (the anchor).** A `5×5` grid, 2 feature rasters (+ a masked cell):
-  `from_rasters(..., window_size=2)` yields the same PU ids, `mask`,
-  `build_pu_feature_matrix()`, `cost`/`status`, and `pu_vs_features` (sorted by
-  `species,pu`) as `from_rasters(..., window_size=None)`. The core guarantee.
+  `from_rasters(..., window_size=2, include_boundary=True)` yields the same PU ids,
+  `mask`, `build_pu_feature_matrix()`, `cost`/`status`, `boundary`, and `pu_vs_features`
+  (sorted by `species,pu`) as `from_rasters(..., window_size=None, include_boundary=True)`.
+  (`include_boundary` is forced equal on both sides so the default-resolution difference
+  — windowed→None vs full→built — doesn't confound the comparison.) The core guarantee.
 - **PU-order mapping across tiles.** With `window_size=2` on a `5×5` grid, assert PU ids
   are `1..n` in global row-major order (a cell in tile (0,1) has a *lower* id than a cell
   in tile (1,0)), proving `searchsorted(flat_valid, gflat)` reproduces row-major rank.
@@ -132,8 +154,11 @@ Verified on small `MemoryFile` rasters with a tiny forced `window_size` (e.g. `2
 - **Alignment/guards still fire under windowing.** A transform/CRS mismatch and a
   rotated/non-north-up reference raster raise before any window is read (metadata check).
 - **`window_size` larger than the grid** degenerates to a single tile == full path.
+- **`include_boundary` resolution:** windowed path defaults `boundary` to `None` (not
+  built); windowed with explicit `include_boundary=True` builds it and it equals the full
+  path's; full path still defaults to a built boundary.
 
-**Target:** ~10–14 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
+**Target:** ~11–15 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
 
 ## Parity note
 
