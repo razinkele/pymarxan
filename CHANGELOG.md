@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Space/adequacy measure (raptr-style, `pymarxan.adequacy`).** `compute_space_held(problem,
+  selected, SpaceSpec)` scores how well a reserve's selected sites are *spread across each
+  feature's distribution* in an attribute space (geographic centroids by default, or user
+  `attribute_columns`, z-scored), returning raptr's `1 − WSS/TSS` proportion of attribute-space
+  variation captured (Hanson et al. 2018, doi:10.1111/2041-210x.12862; verified against raptr's
+  source). Demand points are the occupied PUs (amount-weighted) — a documented deviation from
+  raptr's KDE-sample. This is the evaluation core; SA/greedy enforcement (`SpaceState`, a soft
+  space penalty) lands in a follow-up. No change to existing solvers — the parity anchor (35.0) is
+  untouched.
+
 ## [0.25.0] — 2026-07-15
 
 ### Added
