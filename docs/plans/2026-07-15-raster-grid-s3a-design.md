@@ -44,23 +44,33 @@ Symmetric with `build_pu_feature_matrix()`: returns a `scipy.sparse.csr_matrix` 
 mapping `pu_vs_features` `pu`/`species` → row/col via `pu_id_to_index`/feature-index, dropping
 rows whose `pu`/`species` are unknown (as `build_pu_feature_matrix` does), and constructing
 `csr_matrix((amount, (rows, cols)), shape=(n_pu, n_feat))` — which **sums duplicate `(pu,
-species)` coordinates** (verified), matching the dense builder's accumulate semantics. Followed
-by `.sum_duplicates()` for canonical form.
+species)` coordinates** (verified), matching the dense builder's accumulate semantics. The
+amount data is cast to **float64** (matching `build_pu_feature_matrix`'s dtype), followed by
+`.sum_duplicates()` for canonical, per-row-sorted indices (so the delta/`feat_uses_pu` slices
+are sorted). An empty `pu_vs_features` yields an all-zero `(n_pu, n_feat)` CSR (no rows).
 **Anchor:** `build_pu_feature_csr().toarray() == build_pu_feature_matrix()` exactly.
 
 ### `ProblemCache` changes
 
 - Replace the `pu_feat_matrix: np.ndarray` **field** with a `pu_feat_csr` field (the CSR,
-  the source of truth), and add:
+  the source of truth), declared `field(compare=False, repr=False)`, and add:
   ```python
+  pu_feat_csr: csr_matrix = field(compare=False, repr=False)
+  ...
   @cached_property
   def pu_feat_matrix(self) -> np.ndarray:
       return np.asarray(self.pu_feat_csr.toarray())
   ```
-  `cached_property` works on this frozen dataclass (verified — it writes to the instance
-  `__dict__`, which `frozen=True` does not block). So the public `cache.pu_feat_matrix[:, j]` /
-  `[idx, j]` / `[selected, j]` contract used by clumping / separation / analysis is unchanged,
-  but it densifies **once, on first access** — and a plain problem never accesses it.
+  **`compare=False` is required:** `@dataclass(frozen=True)` generates `__eq__`/`__hash__` over
+  its fields, and a scipy CSR's `==` returns a sparse matrix (ambiguous truth) and is
+  unhashable — so without `compare=False` any `ProblemCache` comparison/hash would raise
+  (`repr=False` keeps the sparse dump out of the repr). `cached_property` works on this frozen
+  dataclass (verified — it writes to the instance `__dict__`, which `frozen=True` does not
+  block). So the public `cache.pu_feat_matrix[:, j]` / `[idx, j]` / `[selected, j]` contract used
+  by clumping / separation / analysis is unchanged, but it densifies **once, on first access** —
+  and a plain problem never accesses it. **Field rename note:** `from_problem` is the only
+  constructor; verify no test constructs `ProblemCache(pu_feat_matrix=...)` directly (the plan
+  greps for it — such a call must switch to `pu_feat_csr=`).
 - `from_problem` builds `pu_feat_csr = problem.build_pu_feature_csr()` instead of the dense
   matrix. `feat_uses_pu` is built from the CSR's CSC form (`csr.tocsc()`, per-column
   `indices[data > 0]`) — no densify, preserving the current `where(matrix[:, j] > 0)` result
@@ -117,9 +127,11 @@ values on a random problem incl. duplicate `(pu,species)` rows and unknown-id ro
 
 ## Testing strategy (TDD)
 
-- **`build_pu_feature_csr` == dense:** on `tiny_problem` and a random problem (with duplicate
-  and unknown-id `pu_vs_features` rows), `build_pu_feature_csr().toarray()` equals
-  `build_pu_feature_matrix()`.
+- **`build_pu_feature_csr` == dense:** on `tiny_problem`, a random problem (with duplicate
+  and unknown-id `pu_vs_features` rows), and an **empty-`pu_vs_features`** problem (all-zero
+  CSR), `build_pu_feature_csr().toarray()` equals `build_pu_feature_matrix()`.
+- **`ProblemCache` is hashable/eq-safe:** the CSR field does not break the frozen dataclass —
+  building a cache does not raise, and (if the class is ever compared) `compare=False` holds.
 - **`compute_held` dense-vs-CSR:** for several random selections, the CSR `compute_held` equals
   the old dense `pu_feat_matrix[selected].sum(0)`.
 - **`apply_flip_to_held`:** for random `idx`/`sign`, `apply_flip_to_held(held, idx, sign)` equals
