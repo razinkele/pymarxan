@@ -5,9 +5,13 @@ from shiny import module, reactive, render, ui
 
 from pymarxan.connectivity.metrics import compute_in_degree
 from pymarxan.models.geometry import generate_grid
-from pymarxan.models.problem import has_geometry
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
-from pymarxan_shiny.modules.mapping.map_utils import compute_centroids
+from pymarxan_shiny.modules.mapping.map_utils import (
+    build_pu_map,
+    compute_centroids,
+    pu_centroids_latlon,
+    too_large_for_map,
+)
 from pymarxan_shiny.modules.mapping.ocean_palette import (
     EDGE_COLOR,
     MAP_FALLBACK,
@@ -18,8 +22,6 @@ from pymarxan_shiny.modules.mapping.ocean_palette import (
 try:
     import ipyleaflet
     from shinywidgets import output_widget, render_widget
-
-    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -138,24 +140,11 @@ def network_view_server(
                 for i in range(n_pu)
             ]
 
-            if has_geometry(p):
-                m = create_geo_map(p.planning_units, colors)
-                # Centroids must also be in EPSG:4326 (lat/lon) to line up
-                # with the reprojected polygons drawn by create_geo_map.
-                pus_for_centroids = p.planning_units
-                if (
-                    pus_for_centroids.crs is not None
-                    and pus_for_centroids.crs.to_epsg() != 4326
-                ):
-                    pus_for_centroids = pus_for_centroids.to_crs("EPSG:4326")
-                centroids = [
-                    (geom.centroid.y, geom.centroid.x)
-                    for geom in pus_for_centroids.geometry
-                ]
-            else:
-                grid = generate_grid(n_pu)
-                m = create_grid_map(grid, colors)
-                centroids = compute_centroids(grid)
+            m = build_pu_map(p, colors)
+            if m is None:
+                return None  # ipyleaflet missing or grid too large to map
+            # Nodes in the same (lat, lon) frame as the base map, in PU order.
+            centroids = pu_centroids_latlon(p)
 
             # Add polyline edges (capped to prevent browser freeze)
             n = min(matrix.shape[0], n_pu)
@@ -185,6 +174,11 @@ def network_view_server(
             matrix = connectivity_matrix()
             if p is None or matrix is None:
                 return "Load a project with connectivity data to see the network."
+            if too_large_for_map(p):
+                return (
+                    f"Grid too large to map ({p.n_planning_units} cells); "
+                    "use the analysis/table views."
+                )
 
             n_pu = len(p.planning_units)
             metric_name = input.metric()

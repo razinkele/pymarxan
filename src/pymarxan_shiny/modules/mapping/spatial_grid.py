@@ -4,8 +4,8 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 from pymarxan.models.geometry import generate_grid
-from pymarxan.models.problem import has_geometry
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.map_utils import build_pu_map, too_large_for_map
 from pymarxan_shiny.modules.mapping.ocean_palette import (
     COST_HIGH_RGB,
     COST_LOW_RGB,
@@ -17,8 +17,6 @@ from pymarxan_shiny.modules.mapping.ocean_palette import (
 
 try:
     from shinywidgets import output_widget, render_widget
-
-    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -105,7 +103,6 @@ def spatial_grid_server(
             if p is None:
                 return None
 
-            n_pu = len(p.planning_units)
             color_mode = input.color_by()
 
             if color_mode == "status":
@@ -118,17 +115,18 @@ def spatial_grid_server(
                     cost_color(c / max_c if max_c > 0 else 0.0) for c in costs
                 ]
 
-            if has_geometry(p):
-                return create_geo_map(p.planning_units, colors)
-
-            grid = generate_grid(n_pu)
-            return create_grid_map(grid, colors)
+            return build_pu_map(p, colors)
 
         @render.text
         def map_summary():
             p = problem()
             if p is None:
                 return "Load a project to see the planning unit map."
+            if too_large_for_map(p):
+                return (
+                    f"Grid too large to map ({p.n_planning_units} cells); "
+                    "use the analysis/table views."
+                )
 
             n_pu = len(p.planning_units)
             color_mode = input.color_by()

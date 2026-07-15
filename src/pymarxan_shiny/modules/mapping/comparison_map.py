@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
-from pymarxan.models.geometry import generate_grid
-from pymarxan.models.problem import has_geometry
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.map_utils import build_pu_map, too_large_for_map
 from pymarxan_shiny.modules.mapping.ocean_palette import (
     CMP_A_ONLY,
     CMP_B_ONLY,
@@ -15,8 +14,6 @@ from pymarxan_shiny.modules.mapping.ocean_palette import (
 
 try:
     from shinywidgets import output_widget, render_widget
-
-    from pymarxan_shiny.modules.mapping.map_utils import create_geo_map, create_grid_map
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -142,11 +139,7 @@ def comparison_map_server(
                 for i in range(n_pu)
             ]
 
-            if has_geometry(p):
-                return create_geo_map(p.planning_units, colors)
-
-            grid = generate_grid(n_pu)
-            return create_grid_map(grid, colors)
+            return build_pu_map(p, colors)
 
         @render.text
         def map_summary():
@@ -154,6 +147,11 @@ def comparison_map_server(
             sols = all_solutions()
             if p is None or sols is None or len(sols) < 2:
                 return "Run solver with 2+ solutions to compare."
+            if too_large_for_map(p):
+                return (
+                    f"Grid too large to map ({p.n_planning_units} cells); "
+                    "use the analysis/table views."
+                )
 
             idx_a = int(input.sol_a())
             idx_b = int(input.sol_b())

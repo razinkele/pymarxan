@@ -10,19 +10,13 @@ from __future__ import annotations
 import pandas as pd
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-from pymarxan.models.geometry import generate_grid
-from pymarxan.models.problem import has_geometry
 from pymarxan.solvers.zonation_solver import ZonationSolver
 from pymarxan.zonation import ZonationResult, rank_removal
+from pymarxan_shiny.modules.mapping.map_utils import build_pu_map, too_large_for_map
 from pymarxan_shiny.modules.mapping.ocean_palette import frequency_color
 
 try:
     from shinywidgets import output_widget, render_widget
-
-    from pymarxan_shiny.modules.mapping.map_utils import (
-        create_geo_map,
-        create_grid_map,
-    )
 
     _HAS_IPYLEAFLET = True
 except ImportError:
@@ -118,9 +112,7 @@ def zonation_panel_server(
                 return None
             pu_ids = [int(x) for x in p.planning_units["id"]]
             colors = rank_to_colors(res.priority_rank, pu_ids)
-            if has_geometry(p):
-                return create_geo_map(p.planning_units, colors)
-            return create_grid_map(generate_grid(len(pu_ids)), colors)
+            return build_pu_map(p, colors)
 
     else:
 
@@ -156,10 +148,16 @@ def zonation_panel_server(
         res = _result()
         if res is None:
             return "Click Rank to compute the priority ranking."
-        return (
+        text = (
             f"{res.rule.upper()}: ranked {len(res.priority_rank)} planning "
             "units (darker = higher priority)."
         )
+        if too_large_for_map(problem()):
+            text += (
+                f"  Grid too large to map ({problem().n_planning_units} cells); "
+                "use the table below."
+            )
+        return text
 
     @render.data_frame
     def top_table():

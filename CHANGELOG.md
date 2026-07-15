@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Raster-grid problems render on the Shiny maps (S4b).** A new `has_grid` predicate + a shared
+  `build_pu_map` dispatcher draw grid (raster-ingested) planning units on their real cell footprint
+  (`GridGeometry.cell_bounds()`, reprojected to lat/lon) across the frequency / solution /
+  comparison / spatial-grid / Zonation maps and the connectivity network view. Large grids
+  (> 5000 cells) show a "too large to map" message instead of freezing the browser. `has_geometry`
+  is unchanged (vector-only).
+
 ## [0.24.0] — 2026-07-15
 
 ### Added
