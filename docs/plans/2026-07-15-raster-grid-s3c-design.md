@@ -109,10 +109,15 @@ scale, but slow and memory-spiky at the million-cell scale S3c targets, and it p
 undermines S3c's goal. S3c therefore treats this honestly: `include_boundary` stays a
 parameter (default `True`, so small/auto-full problems are unchanged), but the windowed
 path **defaults `include_boundary` to `False` when `window_size` resolves to windowed**
-(BLM off unless explicitly requested), and the docstring notes that requesting the boundary
-on a very large grid is expensive until `build_boundary` is vectorized — a deferred
-companion (natural alongside S3a). A multi-band stack (`{1:(p,1), 2:(p,2)}`) opening the
-same path twice via the `ExitStack` is a negligible, accepted duplication.
+(BLM off unless explicitly requested). When that default is taken via `"auto"` (an implicit
+size-driven switch, not an explicit int `window_size`), `from_rasters` **warns** that the
+boundary was skipped for scale — so a caller who develops on small rasters and scales up
+gets a signal rather than a silently-`None` boundary. The docstring notes that requesting
+the boundary on a very large grid is expensive until `build_boundary` is vectorized — a
+**standalone `models/grid.py` task** (a geometry concern: the per-cell Python loop gates
+*any* `GridGeometry` consumer, independent of S3a's solver-cache work). A multi-band stack
+(`{1:(p,1), 2:(p,2)}`) opening the same path twice via the `ExitStack` is a negligible,
+accepted duplication.
 
 ## Memory model
 

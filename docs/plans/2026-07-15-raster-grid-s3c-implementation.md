@@ -493,10 +493,33 @@ git commit -m "feat(spatial): windowed raster ingestion — from_rasters(window_
 
 ---
 
+## Review fixes folded in (see `...-s3c-review.md`)
+
+The 3-lens review (grounding agent RAN the builder → byte-identical to the full path)
+requires these — apply them during execution:
+1. **Promote `_spec` to module level** (it is currently a nested closure inside
+   `from_rasters`; `_from_rasters_windowed` calls it → `NameError` otherwise).
+2. **`_read_win`:** `arr: np.ndarray = src.read(band, window=win).astype(float)` then
+   `return arr` (avoids `no-any-return` under `warn_return_any=true`). `rasterio.DatasetReader`
+   annotations are fine — no `# type: ignore` needed (rasterio is `--ignore-missing-imports`).
+3. **Extract shared helpers** and refactor `from_arrays` to use them (kill windowed/full
+   drift): `_validate_status_ints(sv_real)`, `_features_table(feat_ids, feature_names)`,
+   `_check_align(label, shp, tf, crs, ref_tf, ref_shape, ref_crs)` (used by `_read_aligned`
+   + the windowed metadata check), and `_assemble_problem(*, x_min, y_max, cell_width,
+   cell_height, crs, mask, feat_ids, feature_names, cost_vals, status_vals, pvf_frames,
+   include_boundary)`.
+4. **Validate `window_size`:** reject `bool` / `<= 0` with a clear `ValueError`.
+5. **Warn on auto-skipped boundary:** when `"auto"` resolves to windowed and
+   `include_boundary is None`, `warnings.warn` that the boundary was skipped for scale.
+6. **Tests:** make `test_windowed_pu_ids_row_major` non-vacuous (nodata hole + assert a
+   post-hole cell's amount lands on the hole-shifted id); assert the cost-nodata warning
+   fires **once** and the cell cost defaults to `1.0`; add a `window_size<=0` guard test and
+   an auto-skip-boundary-warning test. New count ≈ +13 tests.
+
 ## Post-plan notes
 
-- **Design review:** run `multi-agent-design-review` before/at execution — the risk surface is the row-major PU-id mapping across tiles (`searchsorted(flat_valid, gflat)` with int64), the per-window nodata normalization matching `_read`, and the metadata-only alignment / `include_boundary` resolution.
+- **Design review:** DONE (`...-s3c-review.md`). Risk surface confirmed sound; the row-major `searchsorted` mapping was verified byte-identical against the real full path.
 - **Parity:** ingestion only; no solver/objective math. The windowed==full anchor + the S2 round-trip keep the ingested problem faithful; the 35.0 min-set anchor is untouched (full suite).
-- **Deferred:** S3a (sparse `ProblemCache` matrix — unlocks SA/greedy at scale) and S3b (MIP-at-scale guard). Vectorizing S1 `build_boundary` is a natural S3a companion (so `include_boundary` scales too).
-- `mypy`: `rasterio.DatasetReader` may need `# type: ignore` or a looser annotation if the rasterio stubs are absent; if so, annotate the open handles as `rasterio.io.DatasetReader` or fall back to `object`-typed handles with local casts. Verify during Step 6.
+- **Deferred:** S3a (sparse `ProblemCache` matrix — unlocks SA/greedy at scale) and S3b (MIP-at-scale guard). Vectorizing `build_boundary` is a standalone `models/grid.py` task (geometry, not solver-cache) so `include_boundary` scales too.
+- `mypy`: `rasterio.DatasetReader` annotations are fine (rasterio runs under `--ignore-missing-imports`). The one real mypy risk is `no-any-return` on any helper that bare-`return`s a `src.read(...)`-derived value — annotate the local `arr: np.ndarray` (see review fix 2).
 ```
