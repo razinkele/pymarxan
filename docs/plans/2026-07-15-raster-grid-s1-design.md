@@ -73,7 +73,10 @@ class GridGeometry:
 - **`cell_bounds() -> list[tuple[float,float,float,float]]`** — `(minx, miny, maxx,
   maxy)` per PU in PU order (for mapping and the parity test's comparison grid).
 - **`build_boundary(pu_ids: np.ndarray) -> pd.DataFrame`** — the analytic boundary
-  matrix. `pu_ids` is aligned to valid-cell order (defaults to `1..n_pu`). For
+  matrix. `pu_ids` is aligned to valid-cell order (defaults to `1..n_pu`);
+  `build_boundary` validates `len(pu_ids) == n_pu` (else `ValueError`) — the count
+  is checkable, the *order* alignment is the documented contract (as with the
+  Zonation-smoothing coords contract, it can't be verified). For
   each valid cell, consider its **right** neighbor (shared vertical edge, length =
   `cell_height`) and **down** neighbor (shared horizontal edge, length =
   `cell_width`) — only these two, so each shared edge is emitted once with
@@ -93,10 +96,14 @@ Add one `kw_only` field (alongside the existing `probability`/`connectivity`):
     grid: GridGeometry | None = field(default=None, kw_only=True)
 ```
 
-`copy_with` already forwards every dataclass field, so `grid` is preserved through
-`copy_with`. No other model change in S1 — `has_geometry` stays vector-only
-(grid-aware mapping is S4), and solvers are untouched (they read the derived
-`boundary`/matrix DataFrames).
+Both derived-copy paths preserve `grid` for free: `copy_with` forwards every
+dataclass field (`dataclass_fields`), and `clone()` is `copy.deepcopy(self)` (deep
+-copies the whole object, including the numpy mask) — neither enumerates fields
+explicitly, so no update is needed there. No other model change in S1 —
+`has_geometry` stays vector-only (grid-aware mapping is S4), and solvers are
+untouched (they read the derived `boundary`/matrix DataFrames). (`GridGeometry` is
+treated as immutable — don't mutate `mask` after construction, since `n_pu` /
+`valid_cells` recompute from it and would then disagree with `planning_units`.)
 
 ## Testing strategy (TDD, parity-anchored)
 
@@ -117,6 +124,10 @@ Add one `kw_only` field (alongside the existing `probability`/`connectivity`):
   exposed-edge self-boundary handling matches shapely.
 - **Hand-computed `2×2`:** `build_boundary` gives 4 shared-edge rows (each
   `cell_size`) + 4 self rows (each `2·cell_size`), matching the derivation.
+- **`build_boundary` count guard:** `build_boundary` with `len(pu_ids) != n_pu`
+  raises `ValueError`.
+- **Single valid cell:** `build_boundary([1])` gives one self row = the full
+  perimeter, no shared rows.
 - **`copy_with` preserves `grid`:** `problem.copy_with(cost=...)` keeps the same
   `grid`; a plain `ConservationProblem` has `grid is None`.
 
