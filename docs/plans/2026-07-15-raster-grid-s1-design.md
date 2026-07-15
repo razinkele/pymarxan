@@ -39,8 +39,14 @@ tests/pymarxan/models/test_grid.py
 ```
 
 `GridGeometry` lives in `models/` (core) and is **pure numpy/pandas** — no shapely
-or rasterio — so it's usable at scale and without the geo extras. (The parity
-*test* uses shapely to build the comparison grid, but the class does not.)
+or rasterio. The standalone class is geo-free (usable at scale); note that a
+`ConservationProblem` *carrying* a grid still needs geopandas, since `problem.py`
+hard-imports it at module level for `has_geometry`. (The parity *test* uses shapely
+to build the comparison grid, but the class does not.) Its docstring cross-references
+the two sibling modules it could be confused with: `spatial/grid.py`
+(`generate_planning_grid` — the materialized-vector square grid) and
+`models/geometry.py` (`generate_grid` — synthetic bboxes for the map). `GridGeometry`
+is the analytic, polygon-free counterpart.
 
 ## Component — `GridGeometry` (`models/grid.py`)
 
@@ -79,8 +85,11 @@ class GridGeometry:
   Zonation-smoothing coords contract, it can't be verified). For
   each valid cell, consider its **right** neighbor (shared vertical edge, length =
   `cell_height`) and **down** neighbor (shared horizontal edge, length =
-  `cell_width`) — only these two, so each shared edge is emitted once with
-  `id1` < `id2`:
+  `cell_width`) — only these two, so each shared edge is emitted **once**, as
+  `{id1 = this cell, id2 = the right/down neighbor}` (this mirrors `compute_boundary`'s
+  positional `(ids[i], ids[j])` pairing; with the default sequential `1..n_pu` ids the
+  neighbor is always the higher id, so `id1 < id2` — a property of the default ids, not
+  a hard invariant a caller can rely on for arbitrary `pu_ids`):
   - if the neighbor is valid → a row `{id1, id2, boundary=edge_length}` and add
     `edge_length` to both cells' shared total;
   - self-boundary per cell = `2·(cell_width + cell_height) − shared_total`, emitted
@@ -99,11 +108,20 @@ Add one `kw_only` field (alongside the existing `probability`/`connectivity`):
 Both derived-copy paths preserve `grid` for free: `copy_with` forwards every
 dataclass field (`dataclass_fields`), and `clone()` is `copy.deepcopy(self)` (deep
 -copies the whole object, including the numpy mask) — neither enumerates fields
-explicitly, so no update is needed there. No other model change in S1 —
-`has_geometry` stays vector-only (grid-aware mapping is S4), and solvers are
-untouched (they read the derived `boundary`/matrix DataFrames). (`GridGeometry` is
-treated as immutable — don't mutate `mask` after construction, since `n_pu` /
-`valid_cells` recompute from it and would then disagree with `planning_units`.)
+explicitly, so no update is needed there.
+
+`validate()` gains one `grid` branch, mirroring the existing `boundary`/`probability`
+/`connectivity` branches: when `grid is not None`, assert `grid.n_pu ==
+len(planning_units)` (append an error otherwise). This is the checkable half of the
+positional-alignment contract — it catches an S2 ingestion that builds the grid from a
+different mask than `planning_units` (the row *order* stays a documented, uncheckable
+contract). `GridGeometry` is also re-exported from `models/__init__.py` for
+discoverability parity with `ConservationProblem`.
+
+No other model change in S1 — `has_geometry` stays vector-only (grid-aware mapping is
+S4), and solvers are untouched (they read the derived `boundary`/matrix DataFrames).
+(`GridGeometry` is treated as immutable — don't mutate `mask` after construction, since
+`n_pu` / `valid_cells` recompute from it and would then disagree with `planning_units`.)
 
 ## Testing strategy (TDD, parity-anchored)
 
@@ -116,22 +134,33 @@ treated as immutable — don't mutate `mask` after construction, since `n_pu` /
 - **`cell_centroids` / `cell_bounds`:** hand-computed for a `2×2` grid
   (`x_min=0, y_max=2, cell=1`): centroids `(0.5,1.5),(1.5,1.5),(0.5,0.5),(1.5,0.5)`;
   bounds match.
+- **Non-square cells (guards the direction→edge mapping).** With `cell_width=2,
+  cell_height=3` (and a non-zero origin), assert centroids/bounds scale by the right
+  axis, and that `build_boundary` gives horizontal-neighbor edges = `cell_width` and
+  vertical-neighbor edges = `cell_height` (**not** swapped). This is the one test that
+  catches a width/height swap or a dropped `*cell_width`, since every `w==h==1` test is
+  blind to it.
 - **Analytic boundary == shapely (the parity anchor).** Build a fully-valid `3×3`
   `GridGeometry`; construct a `GeoDataFrame` of `box(*b)` from `cell_bounds()` with
   ids `1..9`; assert `build_boundary(1..9)` equals `compute_boundary(gdf)` after
-  sorting both by `(id1, id2)` (boundary values `approx`). Also a **masked**
-  (non-rectangular, e.g. one corner cell removed) grid — same equality — proving
-  exposed-edge self-boundary handling matches shapely.
+  sorting both by `(id1, id2)` (boundary values `approx`). Also: a **corner-masked**
+  grid (exposed-edge self-boundary), a **center-masked** `3×3` (`mask[1,1]=False` — a
+  fully-surrounded masked-out neighbor, the cleaner "next to a masked cell" case), and
+  a **non-square** (`w != h`) grid — each equal to shapely, proving the self-boundary
+  and edge-length handling match.
 - **Hand-computed `2×2`:** `build_boundary` gives 4 shared-edge rows (each
   `cell_size`) + 4 self rows (each `2·cell_size`), matching the derivation.
-- **`build_boundary` count guard:** `build_boundary` with `len(pu_ids) != n_pu`
-  raises `ValueError`.
+- **`build_boundary` guards:** `len(pu_ids) != n_pu` raises `ValueError`; **duplicate**
+  `pu_ids` raises `ValueError` (a standalone public method must not silently corrupt the
+  shared-length accumulation).
 - **Single valid cell:** `build_boundary([1])` gives one self row = the full
   perimeter, no shared rows.
-- **`copy_with` preserves `grid`:** `problem.copy_with(cost=...)` keeps the same
-  `grid`; a plain `ConservationProblem` has `grid is None`.
+- **`copy_with`/`clone` preserve `grid`:** `problem.copy_with(...)` keeps the same
+  `grid`; `clone()` deep-copies it; a plain `ConservationProblem` has `grid is None`.
+- **`validate()` grid branch:** a problem whose `grid.n_pu != len(planning_units)`
+  yields a validation error; a matching one yields none.
 
-**Target:** ~10–12 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
+**Target:** ~15 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
 
 ## Parity note
 
