@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-15
+
 ### Added
 
 - **MIP-at-scale warning (`MIPSolver(warn_above_pu=...)`, S3b).** `MIPSolver.solve` now emits an
@@ -993,7 +995,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.23.0
 [0.22.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.22.0
 [0.21.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.21.0
 [0.20.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.20.0
