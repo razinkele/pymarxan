@@ -258,7 +258,7 @@ class SimulatedAnnealingSolver(Solver):
                     # Accept the move — update incremental state
                     sign = -1.0 if selected[idx] else 1.0
                     selected[idx] = not selected[idx]
-                    held += sign * cache.pu_feat_matrix[idx]
+                    cache.apply_flip_to_held(held, idx, sign)
                     total_cost += sign * cache.costs[idx]
                     current_obj += delta
                     if clump_state is not None:

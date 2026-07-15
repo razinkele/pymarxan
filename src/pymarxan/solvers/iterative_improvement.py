@@ -217,7 +217,7 @@ class IterativeImprovementSolver(Solver):
                 if delta < 0:
                     # Removing this PU improves the objective
                     selected[i] = False
-                    held -= cache.pu_feat_matrix[i]
+                    cache.apply_flip_to_held(held, i, -1.0)
                     total_cost -= cache.costs[i]
                     if clump_state is not None:
                         clump_state.apply_flip(cache, i, adding=False)
@@ -299,7 +299,7 @@ class IterativeImprovementSolver(Solver):
                 if delta < 0:
                     # Adding this PU improves the objective
                     selected[i] = True
-                    held += cache.pu_feat_matrix[i]
+                    cache.apply_flip_to_held(held, i, 1.0)
                     total_cost += cache.costs[i]
                     if clump_state is not None:
                         clump_state.apply_flip(cache, i, adding=True)
@@ -352,7 +352,9 @@ class IterativeImprovementSolver(Solver):
                     # Try swap: remove r, add a
                     selected[r] = False
                     selected[a] = True
-                    new_held = held - cache.pu_feat_matrix[r] + cache.pu_feat_matrix[a]
+                    new_held = held.copy()
+                    cache.apply_flip_to_held(new_held, r, -1.0)
+                    cache.apply_flip_to_held(new_held, a, 1.0)
                     new_cost = total_cost - cache.costs[r] + cache.costs[a]
                     new_obj = cache.compute_full_objective(selected, new_held, blm)
 

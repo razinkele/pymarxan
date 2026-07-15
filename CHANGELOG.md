@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Sparse solver cache (S3a).** ``ProblemCache`` now stores the feature amounts as a
+  ``scipy.sparse`` CSR (``ConservationProblem.build_pu_feature_csr``) instead of a dense
+  ``(n_pu×n_feat)`` matrix, and builds the PROBMODE-3 ``expected``/``var`` matrices only when
+  needed — cutting SA / iterative-improvement cache memory by ~10–40× on large sparse (raster)
+  problems. ``cache.pu_feat_matrix`` is preserved as a lazily-densified property for clumping /
+  separation / analysis; the delta is now O(nnz-per-PU). Solver results are unchanged on
+  integer-amount problems (MIP still 35.0 on the reference problem; SA/greedy ≥ 35.0); the delta
+  / ``compute_held`` differ only by float summation order (≤ a few ULP) on arbitrary-float
+  problems. Scope: plain SA / iterative-improvement — clumping / separation / probmode-3 /
+  analysis / zone paths still densify (future work).
+
 ## [0.19.0] — 2026-07-15
 
 ### Added
