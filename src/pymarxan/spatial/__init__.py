@@ -13,6 +13,7 @@ from pymarxan.spatial.feature_intersection import (
 from pymarxan.spatial.gadm import fetch_gadm, list_countries
 from pymarxan.spatial.grid import compute_adjacency, generate_planning_grid
 from pymarxan.spatial.importers import import_features_from_vector, import_planning_units
+from pymarxan.spatial.raster import from_arrays, from_rasters
 from pymarxan.spatial.wdpa import apply_wdpa_status, fetch_wdpa
 
 __all__ = [
@@ -24,6 +25,8 @@ __all__ = [
     "compute_boundary",
     "fetch_gadm",
     "fetch_wdpa",
+    "from_arrays",
+    "from_rasters",
     "generate_planning_grid",
     "import_features_from_vector",
     "import_planning_units",

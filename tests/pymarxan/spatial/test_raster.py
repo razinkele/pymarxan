@@ -154,3 +154,139 @@ def test_empty_study_area_raises():
 def test_empty_features_raises():
     with pytest.raises(ValueError, match="non-empty"):
         from_arrays({}, x_min=0, y_max=1, cell_width=1, cell_height=1)
+
+
+from affine import Affine  # noqa: E402  (grouped with the wrapper tests below)
+
+from pymarxan.spatial.raster import from_rasters  # noqa: E402
+
+# 3x3 grid: x_min=0, y_max=3, cell 1x1, north-up.
+REF_TF = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 3.0)
+
+
+def _write(tmp_path, name, array, *, transform=REF_TF, crs="EPSG:3035", nodata=None):
+    import rasterio
+
+    array = np.asarray(array, dtype="float32")
+    count = 1 if array.ndim == 2 else array.shape[0]
+    height, width = array.shape[-2], array.shape[-1]
+    path = tmp_path / name
+    with rasterio.open(
+        path, "w", driver="GTiff", height=height, width=width, count=count,
+        dtype="float32", crs=crs, transform=transform, nodata=nodata,
+    ) as ds:
+        if array.ndim == 2:
+            ds.write(array, 1)
+        else:
+            ds.write(array)
+    return path
+
+
+@pytest.mark.spatial
+def test_from_rasters_single_band_matches_from_arrays(tmp_path):
+    f1 = np.array([[1, 2, 0], [0, 3, 4], [5, 0, 6]], dtype="float32")
+    f2 = np.array([[0, 0, 1], [2, 0, 0], [0, 3, 0]], dtype="float32")
+    p = from_rasters({1: _write(tmp_path, "f1.tif", f1), 2: _write(tmp_path, "f2.tif", f2)})
+    ref = from_arrays(
+        {1: f1.astype(float), 2: f2.astype(float)},
+        x_min=0, y_max=3, cell_width=1, cell_height=1,
+    )
+    assert list(p.planning_units["id"]) == list(ref.planning_units["id"])
+    assert np.allclose(p.build_pu_feature_matrix(), ref.build_pu_feature_matrix())
+    assert p.grid is not None and p.grid.n_pu == 9
+
+
+@pytest.mark.spatial
+def test_from_rasters_multiband_tuple(tmp_path):
+    f1 = np.array([[1, 2, 0], [0, 3, 4], [5, 0, 6]], dtype="float32")
+    f2 = np.array([[0, 0, 1], [2, 0, 0], [0, 3, 0]], dtype="float32")
+    stack = np.stack([f1, f2])  # (2, 3, 3)
+    path = _write(tmp_path, "stack.tif", stack)
+    p = from_rasters({1: (path, 1), 2: (path, 2)})
+    ref = from_arrays(
+        {1: f1.astype(float), 2: f2.astype(float)},
+        x_min=0, y_max=3, cell_width=1, cell_height=1,
+    )
+    assert np.allclose(p.build_pu_feature_matrix(), ref.build_pu_feature_matrix())
+
+
+@pytest.mark.spatial
+def test_from_rasters_nodata_to_nan(tmp_path):
+    f1 = np.array([[1, -9999, 3], [4, 5, 6], [7, 8, 9]], dtype="float32")
+    path = _write(tmp_path, "f.tif", f1, nodata=-9999)
+    p = from_rasters({1: path})
+    assert p.grid.n_pu == 8  # the -9999 cell is dropped
+
+
+@pytest.mark.spatial
+def test_from_rasters_cost_and_status(tmp_path):
+    f1 = np.ones((3, 3), dtype="float32")
+    cost = np.full((3, 3), 4.0, dtype="float32")
+    status = np.zeros((3, 3), dtype="float32")
+    status[0, 0] = 2
+    p = from_rasters(
+        {1: _write(tmp_path, "f.tif", f1)},
+        cost_raster=_write(tmp_path, "cost.tif", cost),
+        status_raster=_write(tmp_path, "status.tif", status),
+    )
+    assert set(p.planning_units["cost"]) == {4.0}
+    assert p.planning_units.iloc[0]["status"] == 2
+
+
+@pytest.mark.spatial
+def test_from_rasters_transform_mismatch_raises(tmp_path):
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"))
+    b = _write(tmp_path, "b.tif", np.ones((3, 3), dtype="float32"),
+               transform=Affine(2.0, 0.0, 0.0, 0.0, -2.0, 6.0))
+    with pytest.raises(ValueError, match="transform"):
+        from_rasters({1: a, 2: b})
+
+
+@pytest.mark.spatial
+def test_from_rasters_crs_mismatch_raises(tmp_path):
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), crs="EPSG:3035")
+    b = _write(tmp_path, "b.tif", np.ones((3, 3), dtype="float32"), crs="EPSG:4326")
+    with pytest.raises(ValueError, match="CRS"):
+        from_rasters({1: a, 2: b})
+
+
+@pytest.mark.spatial
+def test_from_rasters_rotated_transform_raises(tmp_path):
+    rot = Affine(1.0, 0.5, 0.0, 0.5, -1.0, 3.0)  # b, d non-zero
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), transform=rot)
+    with pytest.raises(ValueError, match="rotat|north"):
+        from_rasters({1: a})
+
+
+@pytest.mark.spatial
+def test_from_rasters_south_up_transform_raises(tmp_path):
+    south_up = Affine(1.0, 0.0, 100.0, 0.0, 1.0, 0.0)  # e >= 0 (non-identity → georeferenced)
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), transform=south_up)
+    with pytest.raises(ValueError, match="north-up"):
+        from_rasters({1: a})
+
+
+@pytest.mark.spatial
+def test_from_rasters_aligned_large_origin_no_false_reject(tmp_path):
+    # Two truly-aligned rasters at a projected origin (~4.3e6) whose origin differs by a
+    # sub-micron amount must NOT be rejected (the tolerance scales to cell size); a real
+    # half-cell shift MUST be rejected.
+    tf = Affine(100.0, 0.0, 4_321_000.0, 0.0, -100.0, 3_210_000.0)
+    tf_eps = Affine(100.0, 0.0, 4_321_000.0000005, 0.0, -100.0, 3_210_000.0)
+    tf_shift = Affine(100.0, 0.0, 4_321_050.0, 0.0, -100.0, 3_210_000.0)  # +0.5 cell
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), transform=tf)
+    b = _write(tmp_path, "b.tif", np.ones((3, 3), dtype="float32"), transform=tf_eps)
+    p = from_rasters({1: a, 2: b})  # must not raise
+    assert p.grid.n_pu == 9
+    c = _write(tmp_path, "c.tif", np.ones((3, 3), dtype="float32"), transform=tf_shift)
+    with pytest.raises(ValueError, match="transform"):
+        from_rasters({1: a, 2: c})
+
+
+@pytest.mark.spatial
+def test_from_rasters_no_crs_builds(tmp_path):
+    # All rasters lack a CRS → build succeeds, grid.crs is None.
+    a = _write(tmp_path, "a.tif", np.ones((2, 2), dtype="float32"), crs=None,
+               transform=Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0))
+    p = from_rasters({1: a})
+    assert p.grid.n_pu == 4 and p.grid.crs is None

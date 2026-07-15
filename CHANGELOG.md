@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Raster-grid ingestion (`from_rasters` / `from_arrays`, S2).** ``spatial/raster.py``
+  builds a ``ConservationProblem`` (carrying a S1 ``GridGeometry``) directly from aligned
+  rasters — a pure-NumPy ``from_arrays`` core plus a thin rasterio ``from_rasters`` wrapper.
+  One feature container (``dict[int, path | (path, band)]``) covers separate files and a
+  multi-band stack; validity precedence mask → cost → feature-union; sparse
+  ``pu_vs_features``; the analytic boundary is wired in by default. Rotated / non-north-up /
+  misaligned rasters raise (reprojection deferred). +25 tests.
+
 ## [0.17.0] — 2026-07-15
 
 ### Added
