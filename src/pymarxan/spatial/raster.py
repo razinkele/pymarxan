@@ -306,7 +306,7 @@ def from_rasters(
     status_raster: str | Path | None = None,
     mask_raster: str | Path | None = None,
     feature_names: dict[int, str] | None = None,
-    include_boundary: bool | None = None,
+    include_boundary: bool = True,
     window_size: int | Literal["auto"] | None = "auto",
 ) -> ConservationProblem:
     """Build a ConservationProblem from aligned rasters (wrapper over from_arrays).
@@ -317,9 +317,9 @@ def from_rasters(
 
     ``window_size`` (``int | "auto" | None``, default ``"auto"``) selects the ingest path:
     ``None`` reads each raster whole; a positive int reads in square tiles of that side;
-    ``"auto"`` reads windowed when the estimated dense stack exceeds a threshold. On the
-    windowed path ``include_boundary`` defaults to ``False`` (the analytic boundary builder
-    does not yet scale to millions of cells); pass ``include_boundary=True`` to force it.
+    ``"auto"`` reads windowed when the estimated dense stack exceeds a threshold.
+    ``include_boundary`` defaults to ``True`` on both paths (the analytic ``build_boundary``
+    is O(n)); pass ``include_boundary=False`` to skip it (e.g. a no-BLM run at extreme scale).
     """
     if not feature_rasters:
         raise ValueError("feature_rasters must be non-empty")
@@ -328,15 +328,6 @@ def from_rasters(
 
     # --- S3c switch: windowed vs full-array ---
     windowed, tile = _resolve_windowed(first_path, len(feat_ids), window_size)
-    if include_boundary is None:
-        include_boundary = not windowed
-        if windowed and window_size == "auto":
-            warnings.warn(
-                "boundary skipped for a large (auto-windowed) raster; pass "
-                "include_boundary=True to build it, or call "
-                "problem.grid.build_boundary(problem.planning_units['id'].to_numpy())",
-                stacklevel=2,
-            )
     if windowed:
         return _from_rasters_windowed(
             feature_rasters, feat_ids, tile,

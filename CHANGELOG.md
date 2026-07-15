@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`from_rasters` builds the boundary by default on the windowed path too.** Now that
+  ``GridGeometry.build_boundary`` is O(n) (v0.21.0), ``include_boundary`` defaults to ``True``
+  on both the full-array and windowed paths (was ``False`` for windowed, with a skip warning) —
+  so BLM works out of the box. Pass ``include_boundary=False`` to skip it at extreme scale.
+
 ## [0.21.0] — 2026-07-15
 
 ### Changed

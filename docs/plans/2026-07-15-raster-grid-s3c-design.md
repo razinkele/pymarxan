@@ -102,6 +102,11 @@ pass 2 amounts); cost-driven validity re-reads the cost raster (pass 1 mask + pa
 values). `mask`-driven validity reads each feature/cost only once (pass 2). This is an I/O
 cost, not a memory one — peak memory is unchanged.
 
+> **SUPERSEDED (2026-07-15, post-v0.21.0):** `build_boundary` was vectorized to O(n)
+> (v0.21.0), so the windowed `include_boundary`-defaults-off behaviour + auto-skip warning
+> described below were **removed** — `from_rasters` now defaults `include_boundary=True` on
+> both paths. See `2026-07-15-s3c-include-boundary-default-flip.md`.
+
 **Boundary at scale (a real limitation).** With `include_boundary=True` the path calls S1's
 `grid.build_boundary`, which is a **Python loop over every valid cell** (a `dict` of `n_pu`
 tuple keys + a list of ~`3·n_pu` row dicts before the DataFrame) — fine at S1/S2 modest

@@ -429,8 +429,9 @@ def test_windowed_guards_fire(tmp_path):
 @pytest.mark.spatial
 def test_windowed_include_boundary_resolution(tmp_path):
     p1 = _write(tmp_path, "f.tif", np.ones((5, 5), dtype="float32"), transform=TF5)
-    assert from_rasters({1: p1}, window_size=2).boundary is None
-    assert from_rasters({1: p1}, window_size=2, include_boundary=True).boundary is not None
+    # build_boundary is O(n) (v0.21.0), so the windowed path builds the boundary by default.
+    assert from_rasters({1: p1}, window_size=2).boundary is not None
+    assert from_rasters({1: p1}, window_size=2, include_boundary=False).boundary is None
     assert from_rasters({1: p1}, window_size=None).boundary is not None
 
 
@@ -471,10 +472,3 @@ def test_auto_large_takes_windowed_path(tmp_path, monkeypatch):
     assert np.allclose(auto.build_pu_feature_matrix(), ref.build_pu_feature_matrix())
 
 
-@pytest.mark.spatial
-def test_auto_windowed_skips_boundary_warns(tmp_path, monkeypatch):
-    monkeypatch.setattr(_raster_mod, "_WINDOW_AUTO_BYTES", 8)  # force auto -> windowed
-    p1 = _write(tmp_path, "f.tif", np.ones((5, 5), dtype="float32"), transform=TF5)
-    with pytest.warns(UserWarning, match="boundary skipped"):
-        p = from_rasters({1: p1}, window_size="auto")  # include_boundary None
-    assert p.boundary is None
