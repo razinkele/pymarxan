@@ -18,7 +18,7 @@ support goes through a new predicate + a shared dispatcher.
 
 - **`has_grid(problem)`** predicate (`models/problem.py`, exported) — `True` when
   `problem.grid is not None`.
-- **`map_utils.build_pu_map(problem, colors, *, zoom=..., max_cells=5000)`** — the shared 3-way
+- **`map_utils.build_pu_map(problem, colors, *, max_cells=5000)`** — the shared 3-way
   base-map dispatcher (replaces the inline `if has_geometry … else generate_grid` blocks):
   1. `has_geometry(problem)` → `create_geo_map(problem.planning_units, colors)`.
   2. `has_grid(problem)` → `create_grid_map(_grid_bounds_latlon(problem.grid), colors)`.
@@ -52,8 +52,11 @@ support goes through a new predicate + a shared dispatcher.
   when `build_pu_map` returns `None`.
 
 Out of scope: changing `has_geometry`; the spatial *input* modules (`grid_builder`, `gadm_picker`,
-`cost_upload`, `wdpa_overlay` — they build/pick geometry, not display solutions); downsampling large
-grids (the cap skips instead, per the brainstorm decision).
+`cost_upload`, `wdpa_overlay` — they build/pick geometry, not display solutions; `grid_builder` has
+the same inline `has_geometry`/`generate_grid` dispatch, but it previews *vector-materialized*
+grids where `has_geometry` is normally True, so its grid branch never fires — left inline rather
+than folded into `build_pu_map`); downsampling large grids (the cap skips instead, per the
+brainstorm decision).
 
 ## Reprojection detail
 

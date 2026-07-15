@@ -183,8 +183,14 @@ def compute_centroids(
 
 
 def too_large_for_map(problem, max_cells: int = _MAX_MAP_CELLS) -> bool:
-    """True when a grid problem has too many cells to render as rectangles."""
-    return has_grid(problem) and problem.n_planning_units > max_cells
+    """True when a grid problem has too many cells to render as rectangles.
+
+    None-safe (``problem`` may be None when no project is loaded)."""
+    return (
+        problem is not None
+        and has_grid(problem)
+        and problem.n_planning_units > max_cells
+    )
 
 
 def _latlon_transformer(crs):
@@ -217,7 +223,12 @@ def _grid_bounds_latlon(grid) -> list[tuple[tuple[float, float], tuple[float, fl
 
 def build_pu_map(problem, colors: list[str], *, max_cells: int = _MAX_MAP_CELLS):
     """Base ipyleaflet map for a problem's PUs: vector geometry, raster grid, or synthetic
-    grid. Returns None when ipyleaflet is missing, or a grid exceeds ``max_cells``."""
+    grid. Returns None when ipyleaflet is missing, or a grid exceeds ``max_cells``.
+
+    ``colors`` is one entry per PU in ``planning_units`` order — which, for a grid problem,
+    coincides with ``cell_bounds()``/``cell_centroids()`` PU (row-major) order, so cells,
+    centroids, and colors line up. (A grid source that didn't preserve that order would
+    mis-color silently.)"""
     if not _HAS_IPYLEAFLET:
         return None
     if has_geometry(problem):
@@ -248,8 +259,12 @@ def pu_centroids_latlon(problem) -> list[tuple[float, float]]:
 ```
 
 Then in `src/pymarxan_shiny/modules/mapping/network_view.py`, **remove** the local
-`compute_centroids` definition and import it from `map_utils` instead (add
-`compute_centroids` to its existing `from .map_utils import ...`).
+`compute_centroids` definition and import it from `map_utils` at **module top level, OUTSIDE the
+`try: import ipyleaflet` block** (a dedicated `from pymarxan_shiny.modules.mapping.map_utils import
+compute_centroids`). **Do not** add it to the ipyleaflet-gated import: `compute_centroids` is used
+by the non-ipyleaflet fallback render and imported at top level by `test_network_view.py`, so
+gating it would `NameError`/`ImportError` when ipyleaflet is absent (invisible to CI, which has
+ipyleaflet). `map_utils` imports fine without ipyleaflet.
 
 - [ ] **Step 5: Run to verify they pass**
 
@@ -291,15 +306,22 @@ block with:
 ```python
 return build_pu_map(p, colors)
 ```
-and in the module's summary/status `render.text`, add the cap message at the top of its body:
+and in the module's summary/status `render.text`, add the cap message **immediately after that
+render's existing `if p is None: return …` guard** (not before it — `too_large_for_map` is
+None-safe but the message only makes sense once a project is loaded):
 ```python
 if too_large_for_map(p):
     return f"Grid too large to map ({p.n_planning_units} cells); use the analysis/table views."
 ```
 Update imports: `from .map_utils import build_pu_map, too_large_for_map` (drop now-unused
 `create_geo_map`/`create_grid_map`/`generate_grid`/`has_geometry` imports if nothing else uses
-them in that file — ruff F401 will flag leftovers). `comparison_map` renders two maps (A/B) —
-apply `build_pu_map` to both; `spatial_grid` similarly if it has one map render.
+them in that file — ruff F401 will flag leftovers). Each of these has a single `map()` render
+(e.g. `comparison_map` is one overlay map colored by `comparison_color(in_a, in_b)`, **not** an
+A/B pair) and a problem-keyed summary text.
+
+**Zonation exception:** `zonation_panel`'s text render is `summary` (not `map_summary`) and is
+keyed on the ranking `_result()`, not `problem()` — so add `p = problem()` at the top of `summary`
+and the `too_large_for_map(p)` branch there, else its cap message would silently vanish.
 
 - [ ] **Step 2: Refactor `network_view`**
 
