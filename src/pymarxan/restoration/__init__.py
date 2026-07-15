@@ -9,5 +9,6 @@ connectivity (Omniscape, climate velocity, dispersal smoothing).
 from __future__ import annotations
 
 from pymarxan.restoration.mesh import MeshResult, compute_mesh
+from pymarxan.restoration.problem import RestorationProblem
 
-__all__ = ["MeshResult", "compute_mesh"]
+__all__ = ["MeshResult", "RestorationProblem", "compute_mesh"]
