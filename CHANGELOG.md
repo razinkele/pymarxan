@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Restoration data model (restoptr-style, `pymarxan.restoration`).** `RestorationProblem` (a
+  `GridGeometry` + existing-habitat / restorable / cost cell states) makes MESH *actionable*:
+  `habitat_mask(restored)` bridges a restoration plan (a bool array of restored cells, ⊆ restorable)
+  to `compute_mesh`, with `baseline_mesh` / `restore_mesh` / `restoration_cost` / `restorable_indices`
+  / `validate`. Built via `from_arrays` (pure numpy — no rasterio) or `from_rasters` (aligned
+  single-band GeoTIFFs, reusing the raster ingestion helpers). The budget / min-max-restore
+  constraints and the MESH-maximizing optimizer are follow-ons.
+
 ## [0.28.0] — 2026-07-15
 
 ### Added
