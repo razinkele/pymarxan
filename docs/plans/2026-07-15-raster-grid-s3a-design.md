@@ -35,6 +35,15 @@ Out of scope: MIP-at-scale guard (S3b), `build_boundary` vectorization (its own
 `models/grid.py` task), out-of-core, and any change to the clumping / separation / probmode-3
 math (they keep the dense matrix, via the property).
 
+**Known limitation (documented, not fixed here):** S3a makes the **plain SA / iterative-
+improvement** path scale. A clumping (`target2>0`), separation (`sepnum>1`), or PROBMODE-3
+problem at raster scale still materializes the dense matrix on first `pu_feat_matrix[:, j]`
+access — reverting to the large footprint and briefly holding CSR **and** dense together — so
+the property emits a one-time `warnings.warn` above a size threshold. Likewise `clumping.py`
+(its own `build_pu_feature_matrix`), `analysis/{ferrier_importance,irreplaceability}`, and
+`zones/cache.py` (a separate dense `pu_feat_matrix`) still densify. Those are separate future
+work; the CHANGELOG scopes the win to plain SA/II.
+
 ## Piece 2 — details
 
 ### New model method `ConservationProblem.build_pu_feature_csr()`
@@ -61,10 +70,11 @@ are sorted). An empty `pu_vs_features` yields an all-zero `(n_pu, n_feat)` CSR (
   def pu_feat_matrix(self) -> np.ndarray:
       return np.asarray(self.pu_feat_csr.toarray())
   ```
-  **`compare=False` is required:** `@dataclass(frozen=True)` generates `__eq__`/`__hash__` over
-  its fields, and a scipy CSR's `==` returns a sparse matrix (ambiguous truth) and is
-  unhashable — so without `compare=False` any `ProblemCache` comparison/hash would raise
-  (`repr=False` keeps the sparse dump out of the repr). `cached_property` works on this frozen
+  **`compare=False` is hygiene (required):** the cache is *already* non-hashable / non-value-
+  comparable (its many `np.ndarray` fields), but a scipy CSR is worse — `hash(csr)` raises and
+  `csr == csr` returns a sparse matrix (ambiguous truth) — so the CSR must be excluded from the
+  generated `__eq__`/`__hash__` field set via `compare=False` (`repr=False` keeps the sparse dump
+  out of the repr). (A future `slots=True` would break `cached_property` — guard with a comment.) `cached_property` works on this frozen
   dataclass (verified — it writes to the instance `__dict__`, which `frozen=True` does not
   block). So the public `cache.pu_feat_matrix[:, j]` / `[idx, j]` / `[selected, j]` contract used
   by clumping / separation / analysis is unchanged, but it densifies **once, on first access** —
@@ -106,9 +116,12 @@ Three access patterns move from dense indexing to CSR methods so plain problems 
    new_sf = np.maximum(0.0, eff - (held[cols] + sign * amts))
    penalty_delta = float(np.dot(self._det_spf[cols], new_sf - old_sf))
    ```
-   **Bit-identical** to the dense version — features absent from the row have `pu_amounts[j]=0`,
-   so their shortfall is unchanged and their contribution to the dot product is exactly 0 —
-   and now **O(nnz_row)** instead of O(n_feat).
+   **Identical for integer-amount problems** (incl. the 35.0 anchor) and within **≤ a few ULP**
+   for arbitrary floats — omitting the exact-zero terms preserves the value set, but the
+   *retained* terms regroup into a different (non-associative) `np.dot` reduction tree, so it is
+   **not** bitwise-identical at large `n_feat` (same float-summation regime as `compute_held`;
+   the drift is same-sign-bounded and harmless — feasibility and the anchor are unaffected). Now
+   **O(nnz_row)** instead of O(n_feat).
 
 The probmode-3 delta branch (`expected_matrix[idx]`, `var_matrix[idx]`,
 `expected_matrix[selected].sum(0)`) is unchanged (dense, probmode-3 only).
@@ -119,11 +132,11 @@ This rewrites hot loops in SA, iterative-improvement, and the cache — all Marx
 surface. The anchor is direct: the `{2, 4, 6} = 35.0` simple project is **plain** (no
 `target2`/`sepnum`/`prob`), so it runs entirely through the CSR path — MIP must still return
 35.0 and SA/greedy land **at or above** it, and `examples/validate_marxan_parity.py` must pass
-unchanged. The **delta** and **held-update** are bit-identical (they only insert/omit exact-zero
-terms), so the SA trajectory on the integer-amount simple project is unchanged; only
-`compute_held` (a reordered float sum) can differ in the last bit on arbitrary-float problems,
-which SA tolerates (it's already stochastic, and the simple project's integer amounts sum
-exactly). Additional guards: dense-vs-CSR unit tests on `build_pu_feature_csr` (`==`),
+unchanged. The **held-update** (`apply_flip_to_held`) is bit-identical (element-wise scatter, no
+sum regrouping). The **delta** and **`compute_held`** are bit-identical for integer-amount
+problems (incl. the anchor, whose SA trajectory is therefore unchanged) but can differ by ≤ a few
+ULP on arbitrary-float problems (non-associative `np.dot`/sparse-sum regrouping) — harmless, and
+SA already tolerates it (stochastic). Additional guards: dense-vs-CSR unit tests on `build_pu_feature_csr` (`==`),
 `apply_flip_to_held`/`compute_delta_objective` (bit-identical `==`), `compute_held` (`allclose`)
 on random problems incl. duplicate `(pu,species)` and unknown-id rows; and a **`bench` run** to
 confirm the O(nnz_row) delta does not regress per-flip cost (it should be ≤ the current
@@ -134,8 +147,9 @@ O(n_feat)).
 - **`build_pu_feature_csr` == dense:** on `tiny_problem`, a random problem (with duplicate
   and unknown-id `pu_vs_features` rows), and an **empty-`pu_vs_features`** problem (all-zero
   CSR), `build_pu_feature_csr().toarray()` equals `build_pu_feature_matrix()`.
-- **`ProblemCache` is hashable/eq-safe:** the CSR field does not break the frozen dataclass —
-  building a cache does not raise, and (if the class is ever compared) `compare=False` holds.
+- **`ProblemCache` is construction-safe:** the CSR field does not break the frozen dataclass —
+  building a cache does not raise. (Don't assert `hash(cache)` — the cache is already
+  non-hashable via its ndarray fields; `compare=False` is hygiene, not hashability.)
 - **`compute_held` dense-vs-CSR (`allclose`, not bitwise):** for several random selections, the
   CSR `compute_held` ≈ the old dense `pu_feat_matrix[selected].sum(0)`. **Use `np.allclose`, not
   `==`** — scipy's sparse column-sum orders the float additions differently from numpy's dense
@@ -144,10 +158,11 @@ O(n_feat)).
 - **`apply_flip_to_held` (bit-identical):** for random `idx`/`sign`, `apply_flip_to_held(held,
   idx, sign)` equals `held + sign * dense_matrix[idx]` **exactly** — `held[cols] += sign*amts`
   differs from the dense update only by omitting `+ 0.0` on absent features (`x + 0.0 == x`).
-- **`compute_delta_objective` bit-identical:** on the simple project and a random plain problem,
-  the CSR delta equals the dense implementation's value for the same flip **exactly** — the
-  per-column dot omits only exact-zero terms, which never change a sum. This is the bit-exact
-  penalty-delta guard.
+- **`compute_delta_objective` (integer-exact; ULP-tolerant on floats):** on the simple project
+  (integer amounts → `==`) and a random plain problem including a **wide `n_feat` (≥128)** case,
+  the CSR delta matches the dense implementation's value within a **relative tolerance** (not
+  `==` — the per-column dot regroups the retained terms, so it drifts ≤ a few ULP at large
+  `n_feat`). The wide case is the one that actually exercises the raster regime.
 - **`pu_feat_matrix` property:** densifies to the right dense matrix, is cached (same object on
   second access), and a plain-problem solve never triggers it (assert via a spy /
   `pu_feat_csr` present and the property's `__dict__` slot absent after `compute_held`+delta).

@@ -80,6 +80,21 @@ def test_build_pu_feature_csr_empty_pvf():
     csr = ConservationProblem(pu, feats, pvf).build_pu_feature_csr()
     assert csr.shape == (2, 1)
     assert csr.nnz == 0
+
+
+def test_build_pu_feature_csr_edge_cases():
+    import pandas as pd
+
+    from pymarxan.models.problem import ConservationProblem
+
+    # feature 2 present in no PU (empty column); PU 3 has no features (empty row);
+    # a negative amount is stored but does not count as "present".
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
+    feats = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0],
+                          "spf": [1.0, 1.0]})
+    pvf = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [5.0, -3.0]})
+    p = ConservationProblem(pu, feats, pvf)
+    assert np.array_equal(p.build_pu_feature_csr().toarray(), p.build_pu_feature_matrix())
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -89,15 +104,29 @@ Expected: FAIL — `ConservationProblem` has no `build_pu_feature_csr`.
 
 - [ ] **Step 3: Implement `build_pu_feature_csr`**
 
-Add to `ConservationProblem` (right after `build_pu_feature_matrix`) in `src/pymarxan/models/problem.py`:
+First add a `TYPE_CHECKING` import at the top of `src/pymarxan/models/problem.py` so the
+`-> csr_matrix` annotation type-checks without importing scipy at module-load time (the file
+has `from __future__ import annotations`, so the annotation is a string at runtime):
 
 ```python
-    def build_pu_feature_csr(self):  # -> scipy.sparse.csr_matrix
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from scipy.sparse import csr_matrix
+```
+
+Then add to `ConservationProblem` (right after `build_pu_feature_matrix`) in `src/pymarxan/models/problem.py`:
+
+```python
+    def build_pu_feature_csr(self) -> csr_matrix:
         """Sparse ``(n_pu, n_feat)`` CSR of feature amounts per PU.
 
         Rows in ``planning_units`` order, columns in ``features["id"]`` order.
         Duplicate ``(pu, species)`` rows are summed and unknown-id rows dropped —
         the sparse equivalent of ``build_pu_feature_matrix`` (``csr.toarray()`` equals it).
+        ``sum_duplicates()`` is load-bearing: it makes each row's column indices **unique**,
+        which ``ProblemCache.apply_flip_to_held`` relies on (numpy fancy in-place add is
+        last-wins, not accumulate).
         """
         from scipy.sparse import csr_matrix
 
@@ -154,13 +183,12 @@ import numpy as np
 from pymarxan.solvers.cache import ProblemCache
 
 
-def _random_problem(seed=0):
+def _random_problem(seed=0, n_pu=12, n_feat=4):
     import pandas as pd
 
     from pymarxan.models.problem import ConservationProblem
 
     rng = np.random.default_rng(seed)
-    n_pu, n_feat = 12, 4
     pu = pd.DataFrame({"id": np.arange(1, n_pu + 1), "cost": rng.random(n_pu) + 0.5,
                        "status": np.zeros(n_pu, int)})
     feats = pd.DataFrame({"id": np.arange(1, n_feat + 1), "name": [f"f{j}" for j in range(n_feat)],
@@ -210,27 +238,32 @@ def test_apply_flip_to_held_bit_identical():
         assert np.array_equal(got, expected)  # bit-identical (only omits + 0.0)
 
 
-def test_delta_bit_identical_to_dense_penalty():
-    # Reconstruct the dense penalty-delta and assert the CSR delta matches exactly.
-    p = _random_problem()
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("n_pu, n_feat", [(12, 4), (40, 160)])
+def test_delta_matches_dense_penalty(n_pu, n_feat):
+    # The CSR delta equals the dense-formula delta. NOT bitwise `==` at large n_feat:
+    # the per-nonzero-column np.dot regroups the retained terms (non-associative), so it
+    # drifts <= a few ULP for float targets/SPF. The (40, 160) case exercises that raster
+    # regime; use a relative tolerance. (Integer-amount problems + the 35.0 anchor are exact.)
+    p = _random_problem(n_pu=n_pu, n_feat=n_feat)
     cache = ProblemCache.from_problem(p)
     dense = p.build_pu_feature_matrix()
     rng = np.random.default_rng(2)
     sel = rng.random(cache.n_pu) < 0.5
     held = cache.compute_held(sel)
     total_cost = float(cache.costs[sel].sum())
+    eff = cache.feat_targets * cache.misslevel
     for idx in range(cache.n_pu):
         sign = -1.0 if sel[idx] else 1.0
-        # dense penalty-delta (the pre-refactor formula)
-        eff = cache.feat_targets * cache.misslevel
         old_sf = np.maximum(0.0, eff - held)
         new_sf = np.maximum(0.0, eff - (held + sign * dense[idx]))
         dense_pen = float(np.dot(cache._det_spf, new_sf - old_sf))
-        # With blm=0 the boundary term drops out, so the whole delta is
-        # cost_delta + penalty_delta; the CSR penalty must match the dense one exactly.
+        # blm=0 → boundary term drops out → whole delta == cost_delta + penalty_delta.
         got = cache.compute_delta_objective(idx, sel, held, total_cost, blm=0.0)
-        cost_delta = sign * cache.costs[idx]
-        assert abs(got - (cost_delta + dense_pen)) < 1e-12
+        expected = sign * cache.costs[idx] + dense_pen
+        assert abs(got - expected) <= 1e-9 * (1.0 + abs(expected))
 
 
 def test_expected_var_gated_on_probmode():
@@ -261,7 +294,15 @@ and add the property (anywhere in the class body, e.g. just above `compute_held`
     @cached_property
     def pu_feat_matrix(self) -> np.ndarray:
         """Dense (n_pu, n_feat) view — densified on first access (clumping / separation /
-        probmode-3 / analysis). A plain problem never triggers this."""
+        probmode-3 / analysis). A plain problem never triggers this. NB do not add
+        ``slots=True`` to this dataclass — it would break ``cached_property``."""
+        if self.n_pu * self.n_feat > 20_000_000:  # ~160 MB float64 — the sparse win is lost here
+            warnings.warn(
+                "Densifying a large ProblemCache feature matrix "
+                f"({self.n_pu}x{self.n_feat}); clumping/separation/probmode-3 at raster "
+                "scale is not yet sparse.",
+                stacklevel=2,
+            )
         return np.asarray(self.pu_feat_csr.toarray())
 ```
 
@@ -316,10 +357,13 @@ and add the property (anywhere in the class body, e.g. just above `compute_held`
          pu_to_sep_feats = [np.zeros(0, dtype=np.int32)] * n_pu
      ```
    - In the final `return cls(...)`, replace `pu_feat_matrix=pu_feat_matrix,` with `pu_feat_csr=pu_feat_csr,`.
+   - **Docstrings:** update the class Attributes block (currently documents `pu_feat_matrix : np.ndarray`) to add `pu_feat_csr` and note `pu_feat_matrix` is now a lazily-densified property; update the module's inverse-index-discipline note to say the CSR is the source of truth and `feat_uses_pu` derives from its CSC form.
 
-4. **`compute_held`** (replace the body):
+4. **`compute_held`** (replace the body — `flatnonzero` is unambiguous across scipy versions vs
+   boolean row-indexing):
 ```python
-        result = np.asarray(self.pu_feat_csr[selected].sum(axis=0)).ravel()
+        rows = np.flatnonzero(selected)
+        result = np.asarray(self.pu_feat_csr[rows].sum(axis=0)).ravel()
         return result
 ```
 
@@ -406,6 +450,7 @@ def test_plain_solve_does_not_densify():
     cache = ProblemCache.from_problem(p)
     sel = np.zeros(cache.n_pu, bool)
     held = cache.compute_held(sel)
+    cache.compute_full_objective(sel, held, blm=1.0)  # also once per SA run
     cache.compute_delta_objective(0, sel, held, 0.0, blm=1.0)
     cache.apply_flip_to_held(held, 0, 1.0)
     assert "pu_feat_matrix" not in cache.__dict__  # never densified
@@ -436,8 +481,11 @@ Add under `## [Unreleased]` → `### Changed` (create the header if absent):
   ``(n_pu×n_feat)`` matrix, and builds the PROBMODE-3 ``expected``/``var`` matrices only when
   needed — cutting SA / iterative-improvement cache memory by ~10–40× on large sparse
   (raster) problems. ``cache.pu_feat_matrix`` is preserved as a lazily-densified property for
-  clumping / separation / analysis; the delta is now O(nnz-per-PU) and bit-identical. No
-  change to solver results (MIP still 35.0 on the reference problem).
+  clumping / separation / analysis; the delta is now O(nnz-per-PU). Solver results unchanged
+  on integer-amount problems (MIP still 35.0 on the reference problem; SA/greedy ≥ 35.0); the
+  delta / `compute_held` differ only by float summation order (≤ a few ULP) on arbitrary-float
+  problems. Scope: plain SA / iterative-improvement — clumping / separation / probmode-3 /
+  analysis / zone problems still densify (future work).
 ```
 
 ```bash
