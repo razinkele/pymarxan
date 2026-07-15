@@ -74,8 +74,12 @@ n_restored=int(restored.sum()), mesh_curve=np.asarray(mesh_curve))`.
   multi-cell bridges. restoptr uses an exact constraint-programming (Choco) solver for guarantees;
   ours is the fast heuristic. Documented, not hidden.
 - **Performance.** `O(iterations × candidates × label)` — MESH is not incrementally decomposable
-  (a flip can merge patches), so each candidate is a full `compute_mesh`. Fine for moderate grids;
-  a union-find incremental delta is a deferred optimization.
+  (a flip can merge patches), so each candidate is a full `compute_mesh`. **Gains cannot be cached
+  across iterations**: restoring `c*` changes how a *neighbouring* candidate `d` would merge patches,
+  so every affordable candidate is re-evaluated each step (a "cache the gains once" optimization
+  would be wrong). A union-find incremental delta is a deferred optimization. Fine for moderate
+  grids. After picking `c*`, set `current` to that candidate's already-computed MESH (not a running
+  `+=`) to avoid float drift over many steps.
 - **`criterion` default `gain_per_cost`** — budget-aware; reduces to raw `gain` when cost is uniform
   (the `RestorationProblem.cost` default), so `greedy_mesh_restore(problem, budget=k)` on a
   uniform-cost problem restores the `k` best cells by marginal MESH gain.
