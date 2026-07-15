@@ -107,3 +107,45 @@ def test_inactive_without_space_target():
     assert ss.penalty_total() == 0.0
     assert ss.delta_penalty(0, True) == 0.0
     assert ss.all_targets_met()  # vacuously true
+
+
+# --- B2: SA integration + Solution reporting + supports_space ---
+
+def test_sa_supports_space():
+    from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+    assert SimulatedAnnealingSolver().supports_space() is True
+
+
+def test_build_solution_reports_space():
+    from pymarxan.solvers.utils import build_solution
+    p = _line_problem(5, space_target=0.6)
+    sol = build_solution(p, np.array([True, False, False, False, True]), blm=0.0)
+    assert sol.space_held is not None and 1 in sol.space_held
+    assert sol.space_penalty is not None
+
+
+def test_build_solution_no_space_leaves_none():
+    from pymarxan.solvers.utils import build_solution
+    p = _line_problem(5, space_target=None)
+    sol = build_solution(p, np.ones(5, bool), blm=0.0)
+    assert sol.space_held is None
+    assert sol.space_penalty is None
+
+
+def test_sa_space_penalty_spreads_reserve():
+    # amount target (1.0) is met by any single PU; a large space_spf should push SA to a
+    # spread reserve (higher space_held) than the same solver on a no-space problem.
+    from pymarxan.solvers.base import SolverConfig
+    from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+    base = _line_problem(6, space_target=None)
+    withspace = _line_problem(6, space_target=0.8, space_spf=50.0)
+    cfg = SolverConfig(num_solutions=1, seed=1)
+    solver = SimulatedAnnealingSolver(num_iterations=20_000, num_temp_steps=200)
+    s_base = solver.solve(base, cfg)[0]
+    s_space = solver.solve(withspace, cfg)[0]
+    spec = SpaceSpec()
+    h_base = compute_space_held(base, s_base.selected, spec)[1]
+    h_space = compute_space_held(withspace, s_space.selected, spec)[1]
+    assert h_space > h_base
+    assert s_space.space_penalty is not None
+    assert s_base.space_held is None

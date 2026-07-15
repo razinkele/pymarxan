@@ -465,8 +465,13 @@ def build_solution(
     selected: np.ndarray,
     blm: float,
     metadata: dict | None = None,
+    space_spec=None,
 ) -> Solution:
-    """Build a complete Solution from a selection array."""
+    """Build a complete Solution from a selection array.
+
+    ``space_spec`` (a :class:`~pymarxan.adequacy.model.SpaceSpec`) configures the attribute space
+    for post-hoc space/adequacy reporting; defaults to geographic centroids when omitted.
+    """
     pu_ids = problem.planning_units["id"].tolist()
     pu_index = {pid: i for i, pid in enumerate(pu_ids)}
 
@@ -543,6 +548,31 @@ def build_solution(
             # sep_shortfalls / sep_penalty stay None; deterministic
             # solution still returns.
 
+    # Space/adequacy (raptr-style): populate per-feature space_held and total
+    # space penalty when any feature has space_target > 0. Every solver path
+    # inherits reporting even if it does not optimize toward it (supports_space).
+    # Catch only PUCoordinatesUnavailableError (mirrors the sep block) so a
+    # no-geometry problem with a space_target still returns its selection.
+    space_held: dict[int, float] | None = None
+    space_penalty_val: float | None = None
+    if (
+        "space_target" in problem.features.columns
+        and (problem.features["space_target"] > 0).any()
+    ):
+        from pymarxan.adequacy.space import evaluate_solution_space
+        from pymarxan.solvers.separation import PUCoordinatesUnavailableError
+        try:
+            space_held, space_penalty_val = evaluate_solution_space(
+                problem, selected, space_spec,
+            )
+        except PUCoordinatesUnavailableError as exc:
+            import warnings
+            warnings.warn(
+                f"Space/adequacy evaluation skipped: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+
     return Solution(
         selected=selected.copy(),
         cost=total_cost,
@@ -558,4 +588,6 @@ def build_solution(
         clump_penalty=clump_penalty_val,
         sep_shortfalls=sep_shortfalls,
         sep_penalty=sep_penalty_val,
+        space_held=space_held,
+        space_penalty=space_penalty_val,
     )
