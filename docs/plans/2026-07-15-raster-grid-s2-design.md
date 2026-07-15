@@ -93,9 +93,10 @@ the core has no rasterio/affine dependency. Semantics:
    `build_pu_feature_matrix` and `build_boundary(1..n_pu)` use).
 6. **cost.** `planning_units.cost` = `cost_array` sampled at the valid cells; `1.0` where
    `cost_array` is None or nodata at a valid cell.
-7. **status.** `planning_units.status` = `status_array` sampled and cast to int at the
-   valid cells; `0` where None or nodata. Non-nodata values must be in `{0,1,2,3}`
-   (Marxan codes) else `ValueError`.
+7. **status.** `planning_units.status` = `status_array` sampled at the valid cells; `0`
+   where None or nodata. Each non-nodata value must be integer-valued and in `{0,1,2,3}`
+   (Marxan codes) else `ValueError` — a non-integer status (e.g. `2.7`) raises rather than
+   silently truncating.
 8. **features table.** id = `sorted(feature_arrays)`; `name` = `feature_names[id]` or
    `f"feature_{id}"`; `target = 0.0`, `spf = 1.0` (set later via the existing feature-
    override machinery). Duplicate/missing `feature_names` keys are tolerated (fallback
@@ -124,11 +125,17 @@ def from_rasters(
 ```
 
 1. **Read.** For each `feature_rasters` value: open the path, read band `b` (a plain path
-   → band 1; a `(path, b)` tuple → band `b`) as float. Replace the source nodata with NaN
-   (`src.nodata` when set). Same for `cost_raster` / `status_raster` / `mask_raster`.
+   → band 1; a `(path, b)` tuple → band `b`; rasterio bands are **1-indexed**) as float.
+   Replace the source nodata with NaN (`src.nodata` when set). `cost_raster` /
+   `status_raster` / `mask_raster` are single-band (band 1).
 2. **Reference grid.** Take the transform/shape/CRS from the **first** feature raster:
    `x_min = transform.c`, `y_max = transform.f`, `cell_width = transform.a`,
-   `cell_height = -transform.e` (north-up affine), `crs = src.crs` (as a string).
+   `cell_height = -transform.e`, `crs = src.crs.to_string()` (or `None` if unset).
+   **Guard axis-aligned north-up:** reject a rotated/sheared transform (`transform.b` or
+   `transform.d` non-zero, within tolerance) and a non-north-up transform
+   (`transform.e >= 0`, i.e. rows not top-down) with a clear `ValueError` — `GridGeometry`
+   is axis-aligned with `y_max` at the top, and silently ignoring `b`/`d` would misplace
+   every cell. (Warping/flipping is deferred; this fails loudly instead.)
 3. **Alignment (reprojection deferred).** Every other raster (features, cost, status,
    mask) must have the **same** transform, shape, and CRS as the reference, else
    `ValueError` naming the mismatched input. Transforms are compared with a small
@@ -176,8 +183,11 @@ Wrapper (`from_rasters`, `rasterio.MemoryFile`):
 - **Nodata → NaN:** a raster with `nodata=-9999` drops those cells (validity + amount).
 - **Transform / CRS mismatch:** a second raster with a different transform (or CRS)
   raises `ValueError`.
+- **Non-axis-aligned / non-north-up:** a rotated/sheared transform (`b` or `d` non-zero)
+  and a south-up transform (`e >= 0`) each raise `ValueError`.
+- **Non-integer status:** a status raster with a `2.7` value raises `ValueError`.
 
-**Target:** ~14–18 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
+**Target:** ~16–20 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
 
 ## Parity note
 
