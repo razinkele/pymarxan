@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Landscape fragmentation measure (restoptr-style, `pymarxan.restoration`).** `compute_mesh(grid,
+  habitat_mask)` returns the **effective mesh size** (MESH, Jaeger 2000) of a habitat map on a
+  raster `GridGeometry` — `Σ patchArea² / totalLandscapeArea` over habitat patches (connected
+  components via `scipy.ndimage.label`; rook 4-connectivity by default, queen optional) — the
+  flagship landscape index of restoptr-style ecological restoration planning (Justeau-Allaire et
+  al. 2021). `MeshResult` also exposes Jaeger's coherence `C` and division `D`. Verified against
+  `landscapemetrics::lsm_c_mesh` (the function restoptr calls). Pure measure, no solver change; the
+  restoration data model, IIC/PC connectivity indices, and a MESH-maximizing optimizer are
+  follow-ons.
+
 ## [0.27.0] — 2026-07-15
 
 ### Added
