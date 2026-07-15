@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-15
+
 ### Added
 
 - **Space/adequacy enforcement in the SA & greedy solvers (raptr-style, Phase B).** Features can
@@ -1047,7 +1049,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.27.0
 [0.26.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.26.0
 [0.25.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.25.0
 [0.24.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.24.0
