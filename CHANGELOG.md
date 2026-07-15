@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MIP-at-scale warning (`MIPSolver(warn_above_pu=...)`, S3b).** `MIPSolver.solve` now emits an
+  early, actionable warning (before building the model) when the planning-unit count exceeds
+  `warn_above_pu` (default 200 000) — CBC/HiGHS don't scale to ~1e6 binary variables, so it points
+  to the `sa` / `greedy` / `zonation` solvers. Warn-and-proceed (not a hard block); pass
+  `warn_above_pu=None` to silence.
+
 ## [0.22.0] — 2026-07-15
 
 ### Changed

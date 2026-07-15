@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import numpy as np
 import pulp
@@ -51,6 +52,23 @@ def _validate_mip_strategy(
 # `from pymarxan.solvers.mip_solver import _available_backends, _make_pulp_solver`.
 
 
+def _warn_if_large_mip(n_pu: int, threshold: int | None) -> None:
+    """Warn (once) when a MIP is likely too large to build/solve in practice.
+
+    The MILP has one binary variable per planning unit (plus boundary variables when
+    BLM > 0); CBC/HiGHS do not scale to ~1e6 binary variables and pulp is slow to even
+    build the model at that size. Shared with the zone/river MIP solvers if they adopt it.
+    """
+    if threshold is not None and n_pu > threshold:
+        warnings.warn(
+            f"MIP on {n_pu} planning units (> warn_above_pu={threshold}): building and "
+            "solving the MILP may be very slow or exhaust memory — CBC/HiGHS do not scale "
+            "to ~1e6 binary variables (BLM adds boundary variables on top). Consider the "
+            "'sa', 'greedy', or 'zonation' solvers, or pass warn_above_pu=None to silence.",
+            stacklevel=3,
+        )
+
+
 class MIPSolver(Solver):
     """Solver that formulates the Marxan minimum-set problem as a MILP.
 
@@ -87,6 +105,7 @@ class MIPSolver(Solver):
         mip_sep_strategy: str = "drop",
         mip_backend: str = "auto",
         objective: str = "min_set",
+        warn_above_pu: int | None = 200_000,
     ) -> None:
         _validate_mip_strategy(
             "mip_chance_strategy", mip_chance_strategy,
@@ -126,6 +145,7 @@ class MIPSolver(Solver):
         self.mip_sep_strategy = mip_sep_strategy
         self.mip_backend = mip_backend
         self.objective = objective
+        self.warn_above_pu = warn_above_pu
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -141,6 +161,9 @@ class MIPSolver(Solver):
     ) -> list[Solution]:
         if config is None:
             config = SolverConfig()
+
+        # S3b: heads-up before building the model when the MILP is likely too large.
+        _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
 
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = int(problem.parameters.get("PROBMODE", 0))
