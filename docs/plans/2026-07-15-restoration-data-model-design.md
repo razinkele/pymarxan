@@ -57,24 +57,28 @@ The field type stays `np.ndarray | None`, but after `__post_init__` `cost` is al
 ## Ingestion
 
 Two classmethods. The core (`RestorationProblem` + `from_arrays`) stays **rasterio-free** so
-`import pymarxan.restoration` works without rasterio (as `compute_mesh` does); `from_rasters` lazily
-imports the S2 rasterio helpers.
+`import pymarxan.restoration` works without rasterio (as `compute_mesh` does). Because
+`pymarxan.spatial.raster` imports `rasterio` at module top, `from_arrays` **must not** import from
+it — it uses a tiny **inlined** pure-numpy nodata helper (`_nodata_mask` copied into
+`restoration/problem.py` — it is 6 trivial lines, NaN-or-`== nodata`). Only `from_rasters` reaches
+into `spatial.raster`, via a **lazy import inside the method**.
 
 - `RestorationProblem.from_arrays(existing_habitat_2d, restorable_2d, *, cost_2d=None, x_min, y_max,
   cell_width, cell_height, crs=None, mask_array=None, nodata=None) -> RestorationProblem`
-  — pure numpy. **Validity (study region) precedence:** explicit `mask_array` (non-zero, non-nodata)
-  → else the **non-nodata footprint of `existing_habitat`** (the habitat layer defines the landscape
-  extent; value `0` = in-landscape non-habitat, nodata = outside). Build `GridGeometry(x_min, y_max,
-  cell_width, cell_height, valid_mask, crs)`. Flatten each layer to PU order (`arr[rows, cols]` on
-  `np.nonzero(valid)`): **binarize** `existing_habitat`/`restorable` as `> 0` (nodata → False), cost
-  → float with nodata → default `1.0` (+ a warning, as S2 does). Shape-check all layers share one
-  2-D shape.
-- `RestorationProblem.from_rasters(existing_habitat, restorable, *, cost=None, band=1, crs=None)
-  -> RestorationProblem` — rasterio wrapper reusing S2's `_read` / `_check_align` /
-  `_transforms_close` / `_require_north_up` (lazy `from pymarxan.spatial import raster`): read
-  `existing_habitat` as the reference grid, align `restorable` / `cost` to it (shape + transform +
-  CRS), derive `x_min`/`y_max`/`cell_width`/`cell_height` from the reference transform, delegate to
-  `from_arrays`. Single-band; north-up axis-aligned only (guarded by `_require_north_up`).
+  — pure numpy (no rasterio). **Validity (study region) precedence:** explicit `mask_array`
+  (non-zero, non-nodata) → else the **non-nodata footprint of `existing_habitat`** (the habitat
+  layer defines the landscape extent; value `0` = in-landscape non-habitat, nodata = outside). Build
+  `GridGeometry(x_min, y_max, cell_width, cell_height, valid_mask, crs)`. Flatten each layer to PU
+  order (`arr[rows, cols]` on `np.nonzero(valid)`): **binarize** `existing_habitat`/`restorable` as
+  `> 0` (nodata → False), cost → float with nodata → default `1.0` (+ a warning, as S2 does).
+  Shape-check all layers share one 2-D shape; empty validity mask → `ValueError`.
+- `RestorationProblem.from_rasters(existing_habitat, restorable, *, cost=None, band=1)
+  -> RestorationProblem` — rasterio wrapper. **Lazily** `from pymarxan.spatial.raster import _read,
+  _check_align, _require_north_up` inside the method (keeps the module rasterio-free at import).
+  Read `existing_habitat` as the reference grid, align `restorable` / `cost` to it (shape +
+  transform + CRS via `_check_align`), guard north-up (`_require_north_up`), derive
+  `x_min`/`y_max`/`cell_width`/`cell_height` from the reference transform, delegate to `from_arrays`.
+  Single-band; north-up axis-aligned only.
 
 ## Edge cases / validation
 
@@ -122,6 +126,7 @@ change).
 - restoptr: Justeau-Allaire et al. (2023) *Restoration Ecology* doi:10.1111/rec.13910;
   Justeau-Allaire et al. (2021) *J. Appl. Ecol.* doi:10.1111/1365-2664.13803 — `restopt_problem`
   (existing habitat + restorable area) is the model this mirrors.
-- Reuses `pymarxan.models.grid.GridGeometry`, `pymarxan.restoration.compute_mesh` (v0.28.0), and the
-  S2 raster helpers in `pymarxan.spatial.raster` (`_read` / `_check_align` / `_transforms_close` /
-  `_require_north_up` / `_nodata_mask`).
+- Reuses `pymarxan.models.grid.GridGeometry`, `pymarxan.restoration.compute_mesh` (v0.28.0), and —
+  **lazily, only in `from_rasters`** — the rasterio S2 helpers `_read` / `_check_align` /
+  `_require_north_up` from `pymarxan.spatial.raster`. `_nodata_mask` is **inlined** in
+  `restoration/problem.py` (pure numpy) so `from_arrays` and the core stay rasterio-free.
