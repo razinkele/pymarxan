@@ -114,7 +114,8 @@ def test_space_held_zscored_attribute_columns():
     feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
     pvf = pd.DataFrame({"species": 1, "pu": ids, "amount": 1.0})
     p = ConservationProblem(pu, feats, pvf)
-    spec = SpaceSpec(attribute_columns=["env"])
+    # Review BUG-A: env-only space (no coords on this problem) -> include_geographic=False.
+    spec = SpaceSpec(attribute_columns=["env"], include_geographic=False)
     # centre PU alone -> held 0.0 (same structure as the line, post z-score)
     assert compute_space_held(p, np.array([False, True, False]), spec)[1] == 0.0
 ```
@@ -155,15 +156,22 @@ class SpaceSpec:
 
 
 def pu_attribute_space(problem: ConservationProblem, spec: SpaceSpec) -> np.ndarray:
-    """(n_pu, n_dim) attribute positions, z-scored per dimension when ``spec.zscore``."""
+    """(n_pu, n_dim) attribute positions, z-scored per dimension when ``spec.zscore``.
+
+    Geographic centroids (when ``include_geographic``) and/or ``attribute_columns``, in that
+    order; raises if neither is configured. (Review BUG-A: a single clean dim-collection loop —
+    no duplicate geographic append.)
+    """
     dims = []
-    if spec.include_geographic and not spec.attribute_columns:
+    if spec.include_geographic:
         dims.append(np.asarray(get_pu_coordinates(problem), dtype=float))  # (n_pu, 2)
-    elif spec.include_geographic and spec.attribute_columns:
-        dims.append(np.asarray(get_pu_coordinates(problem), dtype=float))
     if spec.attribute_columns:
-        cols = problem.planning_units[spec.attribute_columns].to_numpy(dtype=float)
-        dims.append(cols)
+        dims.append(problem.planning_units[spec.attribute_columns].to_numpy(dtype=float))
+    if not dims:
+        raise ValueError(
+            "SpaceSpec has no attribute dimensions "
+            "(set include_geographic=True or provide attribute_columns)."
+        )
     pos = np.column_stack(dims) if len(dims) > 1 else dims[0]
     if spec.zscore:
         mu = pos.mean(axis=0)
@@ -204,8 +212,13 @@ def compute_space_held(
     held: dict[int, float] = {}
     for fid, grp in pv.groupby("species"):
         rows = grp[grp["amount"] > 0]
-        occ = np.array([idx[int(p)] for p in rows["pu"] if int(p) in idx])
-        w = np.asarray(rows["amount"].values, dtype=float)[: len(occ)]
+        # Review BUG-B: keep-mask so weights stay aligned to demand points even when
+        # pu_vs_features references PU ids absent from planning_units (defensive, per
+        # separation.py:274-278). A positional `[:len(occ)]` slice misaligns.
+        pu_ids = rows["pu"].to_numpy()
+        keep = np.array([int(p) in idx for p in pu_ids], dtype=bool)
+        occ = np.array([idx[int(p)] for p in pu_ids[keep]], dtype=int)
+        w = np.asarray(rows["amount"].to_numpy(), dtype=float)[keep]
         if len(occ) == 0:
             held[int(fid)] = 0.0
             continue
@@ -237,7 +250,7 @@ __all__ = ["SpaceSpec", "compute_space_held", "pu_attribute_space"]
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/adequacy/test_space.py -q`
-Expected: PASS (7 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -250,14 +263,37 @@ git commit -m "feat(adequacy): compute_space_held — raptr 1-WSS/TSS space/adeq
 
 ### Task 2: `SpaceState` + SA integration
 
+> **⚠ REDESIGNED — Phase B.** The engineering design review
+> (`...-engineering-review.md`) revised this task. Build it as **Phase B** with these findings
+> folded in (superseding the code sketch below where they conflict):
+> - `SpaceState` lives in **`solvers/space_state.py`** (a `ProblemCache` companion, like
+>   `SepState`), NOT `adequacy/state.py`. Its stateless `selected`-passing design is valid but
+>   *not* SepState's `cache`-passing/`apply_flip` design — don't "mirror SepState exactly".
+> - **`delta_penalty` MUST use a precomputed numpy kernel** over the affected features' demand
+>   points (per-feature demand positions/weights/TSS + a `pu_to_space_feats` inverse index
+>   precomputed once) — **never** call the Task-1 `compute_space_held` per flip (it re-groups the
+>   DataFrame + re-z-scores every call → blows the per-flip budget the `bench` marker guards).
+> - Space is **ADDITIVE**: a feature has both an amount and a space target; both penalties apply.
+>   Do **NOT** exclude space features from `_det_spf` (unlike clump/sep, which replace it).
+> - Add `Solution.space_held`/`space_penalty` + `build_solution` population + a `supports_space()`
+>   gate (every prior constraint type did — MIP/zone report the gap).
+> - `space_target` / `space_spf` are **`features` columns** (like `spf`/`target2`/`sepnum`);
+>   `SpaceSpec` is a **solver constructor arg**, NOT `SolverConfig` and NOT `problem.parameters`.
+> - SA wiring: init penalty (`:172`), the **temp-estimation** delta site (`:183-193`), AND the main
+>   trial delta (`:249-252`) — but **no** `apply_flip`/accept-site work (stateless → nothing to
+>   commit).
+
 **Files:**
-- Create: `src/pymarxan/adequacy/state.py` (`SpaceState`)
-- Modify: `src/pymarxan/solvers/simulated_annealing.py`
+- Create: `src/pymarxan/solvers/space_state.py` (`SpaceState`)
+- Modify: `src/pymarxan/solvers/simulated_annealing.py`, `src/pymarxan/solvers/base.py`
+  (`Solution.space_held`/`space_penalty`, `supports_space()`)
 - Test: `tests/pymarxan/adequacy/test_space_state.py`
 
 **Interfaces:**
-- Consumes: `compute_space_held` (Task 1).
-- Produces: `SpaceState.from_problem(problem, spec, space_spf)` / `.penalty_total(selected)` / `.delta_penalty(selected, idx, adding)`, mirroring `SepState`.
+- Consumes: `compute_space_held` (Task 1) — for the reference/oracle test only, NOT the hot loop.
+- Produces: `SpaceState.from_problem(problem, spec)` (reads `space_target`/`space_spf` feature
+  columns) / `.penalty_total(selected)` / `.delta_penalty(selected, idx, adding)` via a precomputed
+  kernel; `active` gate.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -307,17 +343,24 @@ points/weights/TSS (precomputed once). `active = any(space_target > 0)`.
 
 ### Task 3: greedy integration + parity + CHANGELOG
 
+> **⚠ REDESIGNED — two-phase greedy (Phase B).** The engineering review found that `_score_pu`
+> returns `None` once **amount** targets are met (`if not unmet: return None`), so the loop breaks
+> *before* adding any space-only PU — "extend the stopping criterion" cannot work, and mixing a
+> space term into the incommensurable HEURTYPE scales distorts rankings. **Redesign:** Phase 1 =
+> existing HEURTYPE greedy to meet amount targets (unchanged); **Phase 2** (gated on
+> `space_active`) = keep adding the PU with the largest marginal space-penalty reduction until
+> `space_held_f ≥ space_target_f ∀f` or no candidate improves. Non-space greedy is bit-identical.
+
 **Files:**
 - Modify: `src/pymarxan/solvers/heuristic.py`
 - Modify: `CHANGELOG.md`
 - Test: `tests/pymarxan/adequacy/test_space.py` (append greedy test)
 
-- [ ] **Step 1: Greedy marginal-space term.** In `heuristic.py`, when space targets are active,
-  add to `_score_pu` a **marginal space term** — the reduction in the space penalty from adding
-  candidate `idx` (a `SpaceState.delta_penalty(selected, idx, adding=True)`, negated so a larger
-  penalty-reduction = higher score) — and extend the stopping criterion so the greedy keeps adding
-  until **amount and space** targets are met (or no candidate improves). Inactive → unchanged.
-  (Verify the exact `_score_pu` signature + the loop's stopping check during implementation.)
+- [ ] **Step 1: Two-phase greedy.** Phase 1 unchanged. Phase 2 (only when `space_active`): after
+  amount targets are met, repeatedly pick the remaining candidate maximising the space-penalty
+  reduction (`−SpaceState.delta_penalty(selected, idx, adding=True)`) and add it, stopping when all
+  space targets are met or no candidate reduces the penalty. Do NOT thread a space term into
+  `_score_pu` (scale-distortion). Inactive → the loop never enters Phase 2.
 
 - [ ] **Step 2: Test** — greedy on a space-target problem yields a reserve whose `space_held ≥
   target` (or improves toward it) vs the no-space greedy; a no-space problem's greedy is unchanged.
@@ -343,6 +386,11 @@ points/weights/TSS (precomputed once). `active = any(space_target > 0)`.
 
 ## Post-plan notes
 
-- **Design review:** the **scientific lens is already done** (`...-review.md`, `1 − WSS/TSS` verified vs raptr source). Run architect / grounding / independent-redesign on the **engineering**: the `SpaceState` recompute-delta correctness + wiring (does it mirror `SepState` faithfully?), the greedy marginal-space integration (does `_score_pu` support it cleanly?), the attribute-space plumbing, and no-space parity.
+- **Design review — DONE.** Scientific lens (`...-review.md`, `1 − WSS/TSS` verified vs raptr
+  source) + engineering lenses (architect + grounding; `...-engineering-review.md`). The grounding
+  agent RAN the Task-1 code and confirmed the maths, and found 2 fixable Task-1 bugs (folded above:
+  BUG-A `include_geographic` default, BUG-B `w` alignment) + the Tasks 2-3 redesign (folded into the
+  Task 2/3 banners). **Sequencing:** ship Task 1 (`compute_space_held`) as the clean verified first
+  piece; build Tasks 2-3 (SA `SpaceState` + two-phase greedy + `Solution` reporting) as Phase B.
 - **Parity:** UI-free solver feature; the 35.0 anchor is untouched (no `space_target` on the simple project → the whole path is skipped).
 - **Deferred (own specs):** the exact p-median MILP (hard-constraint) formulation; raptr's KDE-sampled demand points + the "reliable"/probabilistic variant; the true incremental `WSS` facility-location delta.
