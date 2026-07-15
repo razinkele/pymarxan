@@ -14,6 +14,14 @@ rasterio helpers from `pymarxan.spatial.raster`. Bridges to `compute_mesh` (v0.2
 **Tech stack:** Python 3.12+, numpy; rasterio only inside `from_rasters` (lazy). `from __future__
 import annotations`, full type hints.
 
+> **⚠ Review fixes folded** (`...-review.md`; grounding RAN 17/17 Task-1 tests, no CRITICAL/HIGH).
+> Superseding the code below where they conflict: `from_arrays` **warns** when `restorable`/`cost`
+> carry data outside the study region (M1) + docstring notes the validity mask sets `A_total`;
+> `from_rasters` uses `spatial.raster._read_aligned` directly (delete `_read_aligned_layer`, L1),
+> `crs.to_string()`, and gains a `mask_raster=` passthrough (M1); add a `restorable_indices` property
+> (L2) and a regression test pinning the reused S2 signatures + inline-`_nodata_mask` parity (M2);
+> `restore_mesh` docstring notes hot loops should call `compute_mesh` directly (L3).
+
 ## Global constraints
 
 - All arrays `(grid.n_pu,)` in the grid's row-major valid-cell (== PU) order.
