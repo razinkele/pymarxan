@@ -24,11 +24,19 @@ support goes through a new predicate + a shared dispatcher.
   2. `has_grid(problem)` → `create_grid_map(_grid_bounds_latlon(problem.grid), colors)`.
   3. else → `create_grid_map(generate_grid(n_pu), colors)` (synthetic, unchanged).
   Returns `None` when ipyleaflet is missing **or** the problem is a grid with `n_pu > max_cells`
-  (one `Rectangle` per cell would freeze the browser). Callers render a "grid too large to map
-  (N cells) — use the analysis/table views" message on `None`. The cap applies to the **grid
-  branch only** — the vector (`create_geo_map`) and synthetic (`generate_grid`) branches keep their
-  current uncapped behaviour (a classic large-`n_pu` Marxan project is a pre-existing concern
-  outside S4b's raster scope).
+  (one `Rectangle` per cell would freeze the browser). The cap applies to the **grid branch only**
+  — the vector (`create_geo_map`) and synthetic (`generate_grid`) branches keep their current
+  uncapped behaviour (a classic large-`n_pu` Marxan project is a pre-existing concern outside
+  S4b's raster scope).
+
+  **Surfacing the cap message.** `@render_widget` renders a *widget*, so it cannot itself show
+  text — on `None` the map area simply stays blank. The "grid too large to map (N cells) — use the
+  analysis/table views" message is therefore surfaced through each module's **existing summary /
+  status `render.text`** (e.g. `frequency_map.map_summary`), which checks the same
+  `has_grid(p) and n_pu > max_cells` condition. A tiny helper
+  `map_utils.too_large_for_map(problem, max_cells=5000) -> bool` centralizes the predicate so the
+  map render (`build_pu_map` → None) and the summary text stay in lockstep. Where a module has no
+  summary text, the map is simply blank above the cap.
 - **`map_utils.pu_centroids_latlon(problem)`** — companion 3-way helper returning
   `list[(lat, lon)]` for network overlays: geometry → reprojected polygon centroids;
   `has_grid` → `grid.cell_centroids()` reprojected; else → `compute_centroids(generate_grid(n_pu))`.
@@ -88,12 +96,17 @@ Tests that build an `ipyleaflet.Map` outside a Shiny session use the
   `max_cells`-sized grid renders.
 - **`pu_centroids_latlon`:** grid branch → `len == n_pu`, values in the reprojected range; matches
   `build_pu_map`'s cell order.
-- **Module render:** each refactored module's map render returns a Map for a small grid problem and
-  the too-large message for an over-cap one (unit-level, mocking the reactive `problem`), and still
-  returns a Map for a vector problem (no regression).
+- **`too_large_for_map`:** `True` for a grid over the cap, `False` for a small grid / vector /
+  classic problem — the predicate the map render and summary text share.
+- **Module refactor (guarded, not unit-tested in isolation):** Shiny `@render_widget` functions
+  aren't cleanly unit-testable outside a reactive session, so the module refactor is guarded by
+  (a) the helper tests above (the map/centroid/predicate logic all lives in `map_utils`, not the
+  modules), (b) the **existing module tests staying green** (no vector-path regression), and
+  (c) the live check. Each module becomes a thin `build_pu_map(p, colors)` call + a summary-text
+  branch on `too_large_for_map`.
 - **Live (best-effort):** launch the app, load a small grid problem, screenshot the map showing
   cells (Playwright; the dir-load modal may resist headless automation as in Zonation Phase D — the
-  unit tests are the hard guard).
+  helper unit tests are the hard guard).
 
 **Target:** ~14–18 tests, `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
 
