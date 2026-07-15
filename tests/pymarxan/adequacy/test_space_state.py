@@ -149,3 +149,31 @@ def test_sa_space_penalty_spreads_reserve():
     assert h_space > h_base
     assert s_space.space_penalty is not None
     assert s_base.space_held is None
+
+
+# --- B3: two-phase greedy ---
+
+def test_greedy_supports_space():
+    from pymarxan.solvers.heuristic import HeuristicSolver
+    assert HeuristicSolver().supports_space() is True
+
+
+def test_greedy_two_phase_meets_space_target():
+    # Amount target (1.0) is met by one PU (Phase 1 → clustered, held 0). Phase 2 must add
+    # PUs until the space target (0.8) is met.
+    from pymarxan.solvers.base import SolverConfig
+    from pymarxan.solvers.heuristic import HeuristicSolver
+    p = _line_problem(6, space_target=0.8)
+    sol = HeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=0))[0]
+    assert sol.space_held is not None
+    assert sol.space_held[1] >= 0.8
+    assert sol.all_targets_met  # amount target still met
+
+
+def test_greedy_no_space_unchanged():
+    from pymarxan.solvers.base import SolverConfig
+    from pymarxan.solvers.heuristic import HeuristicSolver
+    p = _line_problem(6, space_target=None)
+    sol = HeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=0))[0]
+    assert sol.space_held is None
+    assert sol.all_targets_met
