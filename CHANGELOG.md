@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-15
+
 ### Changed
 
 - **Vectorized `GridGeometry.build_boundary`.** The analytic rook-adjacency boundary is now
@@ -974,7 +976,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.21.0
 [0.20.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.20.0
 [0.19.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.19.0
 [0.18.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.18.0
