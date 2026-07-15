@@ -80,10 +80,11 @@ connected-components tool — rather than the vector-PU BFS in
 `constraints/contiguity.py::count_connected_components` (which returns only a *count*, not patch
 sizes, and is keyed on a boundary DataFrame; the raster tool is the right fit here).
 
-1. Lift `habitat_mask` back onto the 2-D grid: `hab2d = np.zeros(grid.shape, bool);
+1. Coerce and validate: `habitat_mask = np.asarray(habitat_mask).astype(bool)`; require
+   `len(habitat_mask) == grid.n_pu` (else `ValueError`) and `connectivity in {"rook", "queen"}`
+   (else `ValueError`). Lift onto the 2-D grid: `hab2d = np.zeros(grid.shape, bool);
    hab2d[grid.mask] = habitat_mask`. (Boolean-mask assignment fills the `mask==True` positions in
-   row-major order — exactly the valid-cell/PU order, per S1/S2.) Validate
-   `len(habitat_mask) == grid.n_pu`.
+   row-major order — exactly the valid-cell/PU order, per S1/S2.)
 2. `structure` = rook cross (`[[0,1,0],[1,1,1],[0,1,0]]`) or queen (`np.ones((3,3))`).
 3. `labels, n = scipy.ndimage.label(hab2d, structure)`; patch cell-counts =
    `np.bincount(labels.ravel())[1:]` (drop background label 0).
@@ -101,6 +102,7 @@ independently testable measure like `compute_space_held` / `compute_phylogenetic
 - **Degenerate empty grid** (`grid.n_pu == 0`, `A_total == 0`) → `mesh=0.0` (guard the division).
 - **All valid cells are habitat & connected** → `n_patches=1`, `mesh = A_total` (maximum).
 - **`habitat_mask` length ≠ `grid.n_pu`** → `ValueError`.
+- **`connectivity` not in `{"rook", "queen"}`** → `ValueError`.
 - **`cell_area=1.0`** → MESH in cells² (unit-cell convenience).
 - Rook vs queen changes patch membership (diagonal-only touching cells): queen merges them, rook
   does not — asserted in tests.
@@ -116,7 +118,8 @@ independently testable measure like `compute_space_held` / `compute_phylogenetic
 - **cell_area:** MESH scales linearly with `cell_area` (units) — cell_area=k → MESH×k vs cells².
 - **Grid mapping:** a masked (invalid-cell / non-rectangular) grid maps `habitat_mask` to the
   correct 2-D positions (row-major); a non-square grid (nrow≠ncol) is handled.
-- **Validation:** wrong-length mask raises `ValueError`.
+- **Validation:** wrong-length mask raises `ValueError`; `connectivity="diagonal"` (unknown) raises
+  `ValueError`.
 
 **Target:** ~10–14 tests, `make check` green, parity 35.0 untouched (pure new subpackage, no solver
 change). Scientifically validated by the design-review scite lens (MESH formula + `A_total`
