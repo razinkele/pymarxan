@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from pymarxan.models import boundary as boundary_mod
+from pymarxan.models.grid import GridGeometry
 
 # Planning unit status constants (Marxan spec)
 STATUS_NORMAL = 0
@@ -45,6 +46,7 @@ class ConservationProblem:
     # --- Keyword-only fields (new capabilities) ---
     probability: pd.DataFrame | None = field(default=None, kw_only=True)
     connectivity: pd.DataFrame | None = field(default=None, kw_only=True)
+    grid: GridGeometry | None = field(default=None, kw_only=True)
 
     def __post_init__(self):
         """Validate critical data integrity constraints."""
@@ -267,6 +269,13 @@ class ConservationProblem:
                         f"connectivity references planning unit IDs not "
                         f"in planning_units: {sorted(unknown_conn_pus)}"
                     )
+
+        # --- Grid validation ---
+        if self.grid is not None and self.grid.n_pu != len(self.planning_units):
+            errors.append(
+                f"grid.n_pu ({self.grid.n_pu}) does not match the number of "
+                f"planning_units ({len(self.planning_units)})"
+            )
 
         return errors
 

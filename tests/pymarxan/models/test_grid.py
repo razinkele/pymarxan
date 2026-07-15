@@ -157,3 +157,39 @@ def test_build_boundary_matches_shapely_non_square():
     analytic = grid.build_boundary(ids).sort_values(["id1", "id2"]).reset_index(drop=True)
     shapely_b = compute_boundary(gdf).sort_values(["id1", "id2"]).reset_index(drop=True)
     pd.testing.assert_frame_equal(analytic, shapely_b, check_dtype=False)
+
+
+def _tiny_problem():
+    from pymarxan.models.problem import ConservationProblem
+
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    pvf = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [1.0, 1.0]})
+    return ConservationProblem(pu, feats, pvf)
+
+
+def test_problem_grid_defaults_none():
+    assert _tiny_problem().grid is None
+
+
+def test_copy_with_and_clone_preserve_grid():
+    g = GridGeometry(0.0, 2.0, 1.0, 1.0, np.ones((2, 2), dtype=bool))
+    p = _tiny_problem().copy_with(grid=g)
+    assert p.grid is g
+    # preserved through a later copy_with that overrides an unrelated field
+    assert p.copy_with(parameters={"BLM": 1.0}).grid is g
+    # clone deep-copies (independent grid, still present)
+    cloned = p.clone()
+    assert cloned.grid is not None and cloned.grid is not g
+    assert cloned.grid.n_pu == 4
+
+
+def test_validate_grid_count_mismatch():
+    # _tiny_problem has 2 PUs; a 2x2 grid (n_pu=4) disagrees -> validate error
+    g4 = GridGeometry(0.0, 2.0, 1.0, 1.0, np.ones((2, 2), dtype=bool))
+    errs = _tiny_problem().copy_with(grid=g4).validate()
+    assert any("grid" in e and "planning" in e for e in errs)
+    # a matching grid (n_pu == 2) yields no grid error
+    g2 = GridGeometry(0.0, 2.0, 1.0, 1.0, np.array([[True, True]], dtype=bool))
+    errs_ok = _tiny_problem().copy_with(grid=g2).validate()
+    assert not any("grid" in e for e in errs_ok)

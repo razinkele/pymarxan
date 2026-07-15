@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Grid-geometry model for raster-grid planning units (`GridGeometry`, S1).**
+  ``models/grid.py`` — a pure-NumPy grid descriptor (origin + cell size + validity
+  mask + CRS) whose valid cells are planning units, with an analytic rook-adjacency
+  ``build_boundary()`` (matches the shapely ``compute_boundary``, without materializing
+  a polygon per cell) — carried as a ``kw_only`` ``grid`` field on
+  ``ConservationProblem`` (validated for cell-count/PU-count agreement). First step
+  toward raster-grid PUs; ingestion (S2) follows. +16 tests.
+
 ## [0.16.0] — 2026-07-15
 
 ### Added
