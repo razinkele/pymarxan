@@ -13,6 +13,14 @@ change.
 
 **Tech stack:** Python 3.12+, numpy. `from __future__ import annotations`, full type hints.
 
+> **⚠ Review fixes folded** (`...-review.md`; grounding RAN 10/11, caught a real bug). Superseding
+> the code below where they conflict: (HIGH) `score` **branches on `criterion`** — `score = gain if
+> criterion == "gain" else (np.inf if cc == 0.0 else gain / cc)` (the sketch dropped the branch and
+> failed its own test); (HIGH) the result gains `cost_curve` (cumulative cost, `[0]=0.0`) + `order`
+> (pick sequence) so the frontier is cost-indexed and sub-budget plans reconstruct; (MEDIUM) the
+> result type is renamed **`MeshRestorationResult`** (leaves `RestorationResult` open for IIC/PC);
+> (LOW) the docstring names a grid-size ceiling. Add a test for `cost_curve`/`order`.
+
 ## Global constraints
 
 - `MESH = compute_mesh(grid, existing_habitat | restored)` — the optimizer never re-implements the
