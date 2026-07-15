@@ -8,14 +8,16 @@ per-feature *space targets* (spatial adequacy) on top of the existing *amount ta
 (representation), evaluated by `compute_space_held` and enforced as an SA/greedy penalty.
 Named-competitor gap: **raptr** (Hanson et al. 2018, MEE, doi:10.1111/2041-210x.12862).
 
-## ⚠ Scientific-accuracy gate
+## ✅ Scientific model — verified against raptr source
 
-The **space-held** formula and **demand-point generation** below are my best reading of raptr;
-they are the crux of correctness and MUST be verified by the design-review **scite lens** against
-the raptr paper (doi:10.1111/2041-210x.12862) + the raptr package docs (and the surrogate
-application doi:10.1073/pnas.1711009114) before TDD. If the paper's normalization differs, the
-formula changes — treat the maths here as provisional. (Both DOIs verified real via scite; full
-text not yet extracted.)
+A scientific-accuracy review (`docs/plans/2026-07-15-tierc-raptr-space-targets-review.md`) verified
+the model directly against **raptr's source code** (jeffreyhanson/raptr — `rcpp_generate_model_
+object.cpp`, `functions.cpp`, `rcpp_proportion_held.cpp`, `DemandPoints.R`, `RapData.R`), the
+authoritative implementation of Hanson et al. 2018 (doi:10.1111/2041-210x.12862). The corrected
+model below reflects that review. Key correction it caught: **the normalization is `1 − WSS/TSS`
+(proportion of attribute-space variation captured), not a worst/best-PU normalization.** Two honest
+deviations from raptr (documented below): pymarxan uses a **soft penalty** where raptr uses a **hard
+IP constraint**, and the default demand points are the **occupied PUs** where raptr KDE-samples.
 
 ## Motivation
 
@@ -44,55 +46,57 @@ dominates the distance metric. **[scite/design-review: confirm whether raptr z-s
 default.]**
 
 **Demand points (per feature).** Discretize the feature's distribution into demand points in
-attribute space. First cut: each PU where the feature occurs (amount > 0) is a demand point at
-its attribute position, with **demand weight = the feature amount there**. (raptr samples points
-from the feature's distribution; occupied-PUs-as-demand-points is a faithful, deterministic
-discretization — the scite lens confirms whether raptr's sampling materially differs. An optional
-`max_demand_points` sub-samples large distributions.)
+attribute space. **Default (a documented deviation from raptr):** each PU where the feature occurs
+(amount > 0) is a demand point at its attribute position, with **demand weight = the feature amount
+there**. raptr's *actual* default is a **KDE-sample** (fit a kernel to the feature's occurrence
+points, draw `n=100` points inside its support, weight = estimated kernel density). The occupied-PU
+discretization is a legitimate, deterministic special case (raptr's own vignette uses PU centroids),
+but it ties #demand-points to #occupied-PUs and uses raw amount rather than density as the weight —
+so results shift where occupancy is uneven. **KDE-sampled demand points are a documented future
+option**; the occupied-PU form is the tractable first cut.
 
-## `compute_space_held` (the crux)
+## `compute_space_held` (the crux — verified vs raptr source)
 
 For feature `f` with demand points `D_f` (weights `w_d`, positions `p_d`) and the set `S_f` of
-**selected** PUs carrying `f` (positions), define the assignment cost as the weighted squared
-distance from each demand point to its **nearest selected PU carrying f**:
+**selected** PUs carrying `f` (attribute positions), raptr's measure is the **proportion of the
+feature's attribute-space variation captured** — an R²-like `1 − WSS/TSS`:
 ```
-cost(S_f) = Σ_{d ∈ D_f} w_d · min_{i ∈ S_f} ‖p_d − pos_i‖²
+WSS_f = Σ_{d ∈ D_f} w_d · min_{i ∈ S_f} ‖p_d − pos_i‖²      # within: nearest SELECTED PU
+TSS_f = Σ_{d ∈ D_f} w_d · ‖p_d − c_f‖²                       # total: about the demand centroid
+c_f   = (1/|D_f|) Σ_{d ∈ D_f} p_d                            # UNWEIGHTED mean of demand coords
+space_held_f = 1 − WSS_f / TSS_f
 ```
-**Space held** normalizes this between the best and worst achievable, so it is a proportion in
-`[0, 1]` (1 = as adequate as selecting *all* relevant PUs, 0 = worst single PU):
-```
-space_held_f = clip( (cost_worst − cost(S_f)) / (cost_worst − cost_best), 0, 1 )
-cost_best  = cost(all PUs carrying f)          # every demand point served by its own PU
-cost_worst = max_i cost({i})                    # the single worst PU serves everything
-```
-Empty `S_f` (feature absent from the selection) → `space_held_f = 0`. `cost_worst == cost_best`
-(degenerate: one candidate PU) → `space_held_f = 1` when `S_f` non-empty. **[scite-verify the
-worst/best normalization — raptr may define held as a proportion-of-variation-captured with a
-different denominator.]**
+- `TSS_f` is a **per-feature constant** (the weighted sum-of-squares of the demand points about
+  their unweighted centroid `c_f`) — this is raptr's exact denominator (`rcpp_generate_model_
+  object.cpp`), **not** a worst-single-PU value. A numeric space target therefore means the same
+  thing it means in raptr.
+- Empty `S_f` (feature absent from the selection) → `WSS_f` undefined → `space_held_f = 0`.
+- `TSS_f == 0` (all demand points coincident in attribute space) → the feature has no spatial
+  variation to capture → `space_held_f = 1` (target trivially met) when `S_f` non-empty.
+- raptr's *best achievable* is `1 − WSS_all/TSS < 1` (`WSS_all` = nearest over **all** occupied PUs),
+  since PU points don't sit exactly on the KDE demand points; with the occupied-PU discretization
+  every `p_d` is a PU so `WSS_all = 0` and best `space_held = 1`. Reported for diagnostics.
 
-**Simplification for the occupied-PU discretization.** When demand points *are* the occupied PUs
-(each `p_d` = that PU's attribute position), `cost_best = cost(all occupied PUs) = 0` — every
-demand point is served by itself at distance 0. So the formula collapses to a clean, div-by-zero-
-free measure:
-```
-space_held_f = 1 − cost(S_f) / cost_worst
-```
-i.e. `cost(S_f) = Σ_{d not selected} w_d · dist²(d, nearest selected occupied PU)` — how far the
-*unselected* occupied cells sit from the nearest selected one (0 when all occupied cells are
-selected → held 1). This is the concrete formula the implementation uses; the general worst/best
-form above is the fallback if the scite lens shows raptr sub-samples demand points (making
-`cost_best ≠ 0`).
-
-Returns a `dict[feature_id, space_held]`. Pure numpy; `O(|D_f| · |S_f|)` per feature (nearest of
-selected). `pos` in the standardized attribute space.
+Returns a `dict[feature_id, space_held]`. Pure numpy; `O(|D_f| · |S_f|)` per feature. `pos`/`p_d` in
+the standardized (z-scored) attribute space.
 
 ## Solver integration (SA / greedy penalty; MILP deferred)
 
+**Mechanism note (honest deviation):** raptr enforces `space_held ≥ target` as a **hard constraint
+in an exact integer program (Gurobi), with no SPF and no penalty** — both amount and space targets
+are `≥`/`≤` rows, not objective terms. pymarxan's heuristic (SA/greedy) path instead re-casts the
+space target as a **Marxan-style soft shortfall penalty** (as it already does for amount targets via
+MISSLEVEL/SPF). This is a legitimate adaptation to the heuristic paradigm — **but it is not
+raptr-exact**; the docs must say so. The exact hard-constraint form is the deferred MILP (facility-
+location / p-median) path.
+
 A **space-target penalty** parallel to the amount penalty, added to the objective:
 ```
-space_penalty = Σ_f  spf_f · max(0, space_target_f − space_held_f)
+space_penalty = Σ_f  space_spf_f · max(0, space_target_f − space_held_f)
 ```
-(`spf_f` reuses the feature's SPF, or a dedicated `space_spf`; scite/design-review decides.)
+`space_spf_f` is a **pymarxan design choice** (raptr has no analogue) — a dedicated per-feature
+space penalty weight, defaulting to the feature's amount `spf` for consistency with the existing
+penalty scale.
 - **Greedy** evaluates candidates via the full objective → the space penalty slots in directly.
   **[verify in the plan/grounding: whether pymarxan's greedy scores candidates by full objective or
   by a marginal amount-benefit heuristic — the space integration is a clean slot-in only for the
@@ -130,8 +134,10 @@ verified either way before any solver code lands.
   higher objective for the clustered solution than for a spread one; greedy/SA prefer the spread
   reserve; a problem with **no** space target is bit-identical to today (35.0 anchor via
   `validate_marxan_parity.py`).
-- **Scientific:** `compute_space_held` on a hand-worked tiny example matches the raptr definition
-  the scite lens confirms.
+- **Scientific:** `compute_space_held` on a hand-worked tiny example matches the verified
+  `1 − WSS/TSS` formula (TSS = weighted SS of demand points about their unweighted centroid); a
+  fully-selected occupied-PU problem → `space_held = 1` (WSS 0); TSS==0 (coincident demand points)
+  → `space_held = 1`.
 
 **Target:** ~14–20 tests, `make check` green, parity 35.0 intact. Scientifically validated by the
 design-review scite lens before merge.
