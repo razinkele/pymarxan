@@ -138,12 +138,14 @@ def from_rasters(
    every cell. (Warping/flipping is deferred; this fails loudly instead.)
 3. **Alignment (reprojection deferred).** Every other raster (features, cost, status,
    mask) must have the **same** transform, shape, and CRS as the reference, else
-   `ValueError` naming the mismatched input. Transforms are compared with a small
-   tolerance (e.g. `Affine.almost_equals` / `np.allclose` on the 6 coefficients), since
-   two independently-written rasters describing the same grid can differ by FP epsilon;
-   shape is compared exactly; CRS via rasterio's own `CRS` equality (`src.crs ==
-   ref_crs`, not string comparison, so an EPSG-code and an equivalent-WKT serialization
-   of the same CRS don't falsely mismatch). No warping.
+   `ValueError` naming the mismatched input. Transforms are compared coefficient-wise with
+   a tolerance **scaled to cell size** (each of the 6 affine terms within `tol · max(|cell_
+   width|, |cell_height|, 1)`), since two independently-written rasters describing the same
+   grid can differ by FP epsilon — and at projected-CRS origins (easting ~1e6–1e7) one ULP
+   already exceeds a fixed `1e-9`, so a fixed absolute tolerance would false-reject aligned
+   rasters. Shape is compared exactly; CRS via rasterio's own `CRS` equality (`src.crs ==
+   ref_crs`, not string comparison, so an EPSG-code and an equivalent-WKT serialization of
+   the same CRS don't falsely mismatch). No warping.
 4. **Delegate** the assembled arrays + grid scalars to `from_arrays` (nodata already NaN,
    so no sentinel needed).
 
@@ -155,7 +157,19 @@ S2 constructs the existing `ConservationProblem` — no model change (S1 already
   holds by construction);
 - has `boundary` populated (so BLM/`compute_boundary`-shaped consumers work);
 - `has_geometry(problem)` returns **False** (no vector `geometry` column — grid-aware
-  mapping is S4); solvers don't call it.
+  mapping is S4). Every solver path used here (MIP/SA/greedy/objective/BLM) works without
+  it. **One exception:** the separation-distance path (`solvers/separation.py`) *does*
+  call `has_geometry` and resolves PU coordinates from a geometry column or `xloc`/`yloc`
+  — a grid problem has neither, so an *active* separation feature would raise. This is
+  inert for S2 (the generated `features` table has no `sepdistance`/`sepnum` columns, so
+  separation is off unless the user adds them). Teaching the resolver to fall back to
+  `grid.cell_centroids()` is a small solver change deferred to S4/later; until then,
+  separation on grid problems is explicitly unsupported rather than silently broken.
+
+Naming: these are `from_*` constructors (not `read_*`/`load_*`) because ingestion is
+one-way — there is no symmetric `write_rasters` pair, unlike the Marxan-`.dat` format
+readers in `io/`; keeping them in `spatial/` (the geo-ops layer, with rasterio) rather
+than `io/` (format read/write pairs) reflects that.
 
 ## Testing strategy (TDD)
 

@@ -61,6 +61,7 @@ def test_from_arrays_basic_roundtrip():
     assert len(p.planning_units) == 9
     assert list(p.planning_units["id"]) == list(range(1, 10))
     assert p.grid is not None and p.grid.n_pu == 9
+    assert p.validate() == []  # a constructed grid problem is valid
     m = p.build_pu_feature_matrix()  # (9, 2); columns sorted feature ids [1, 2]
     assert np.allclose(m[:, 0], f1.ravel())  # 0-amount cells fill 0 in the dense matrix
     assert np.allclose(m[:, 1], f2.ravel())
@@ -108,6 +109,38 @@ def test_cost_default_one_and_status():
     )
     assert list(p.planning_units["cost"]) == [1.0, 1.0, 1.0, 1.0]
     assert list(p.planning_units["status"]) == [0, 2, 0, 3]
+
+
+def test_cost_nodata_in_mask_warns_and_defaults():
+    # mask admits a cell the cost layer marks nodata -> warn + default cost 1.0
+    f1 = np.ones((2, 2))
+    cost = np.array([[5.0, np.nan], [7.0, 9.0]])
+    mask = np.array([[1, 1], [0, 0]])  # (0,0) and (0,1) valid; (0,1) cost is nodata
+    with pytest.warns(UserWarning, match="nodata cost"):
+        p = from_arrays(
+            {1: f1}, x_min=0, y_max=2, cell_width=1, cell_height=1,
+            cost_array=cost, mask_array=mask,
+        )
+    assert list(p.planning_units["cost"]) == [5.0, 1.0]  # nodata cost -> 1.0
+
+
+def test_holey_mask_cross_layer_alignment():
+    # Non-symmetric validity + distinct cost + distinct per-feature values: catches any
+    # cross-layer transpose/misindex. Mask keeps (0,0),(1,2),(2,1) (row-major PU order).
+    mask = np.zeros((3, 3), dtype=int)
+    mask[0, 0] = 1
+    mask[1, 2] = 1
+    mask[2, 1] = 1
+    cost = np.arange(9, dtype=float).reshape(3, 3)  # cost = row-major index
+    f1 = (np.arange(9, dtype=float).reshape(3, 3) + 1) * 10  # (idx+1)*10
+    p = from_arrays(
+        {1: f1}, x_min=0, y_max=3, cell_width=1, cell_height=1,
+        cost_array=cost, mask_array=mask,
+    )
+    # valid cells row-major: (0,0)=idx0, (1,2)=idx5, (2,1)=idx7
+    assert list(p.planning_units["cost"]) == [0.0, 5.0, 7.0]
+    amt = dict(zip(p.pu_vs_features["pu"], p.pu_vs_features["amount"]))
+    assert amt == {1: 10.0, 2: 60.0, 3: 80.0}  # (idx+1)*10 at those cells
 
 
 def test_invalid_status_raises():
@@ -186,6 +219,8 @@ GridGeometry); ``from_rasters`` is the thin rasterio wrapper (Task 2).
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -224,7 +259,11 @@ def from_arrays(
     """Build a ConservationProblem (with a GridGeometry) from aligned numpy arrays.
 
     Valid grid cells (see the validity precedence) become planning units in row-major
-    order, ids ``1..n_pu``. See the S2 design spec for full semantics.
+    order, ids ``1..n_pu``. Feature amounts must be non-negative; values ``<= 0`` (and
+    nodata) yield no ``pu_vs_features`` row (the dense matrix restores 0). The generated
+    ``features`` table uses placeholder ``target=0.0`` / ``spf=1.0`` — set real targets
+    afterwards (e.g. via the feature-override machinery) before solving. See the S2 design
+    spec for full semantics.
     """
     if not feature_arrays:
         raise ValueError("feature_arrays must be non-empty")
@@ -267,7 +306,15 @@ def from_arrays(
     if cost_array is not None:
         c = np.asarray(cost_array, dtype=float)
         cost_vals = c[rows, cols]
-        cost_vals = np.where(_nodata_mask(c, nodata)[rows, cols], 1.0, cost_vals)
+        cost_nd = _nodata_mask(c, nodata)[rows, cols]
+        if cost_nd.any():
+            # Only reachable when a mask/feature-union admits a cell the cost layer
+            # marks nodata (in the cost-footprint case those cells are already excluded).
+            warnings.warn(
+                f"{int(cost_nd.sum())} valid cell(s) have nodata cost; defaulting to 1.0",
+                stacklevel=2,
+            )
+        cost_vals = np.where(cost_nd, 1.0, cost_vals)
     else:
         cost_vals = np.ones(n_pu, dtype=float)
 
@@ -325,7 +372,7 @@ def from_arrays(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/spatial/test_raster.py -q`
-Expected: PASS (13 tests).
+Expected: PASS (15 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -457,10 +504,36 @@ def test_from_rasters_rotated_transform_raises(tmp_path):
 
 @pytest.mark.spatial
 def test_from_rasters_south_up_transform_raises(tmp_path):
-    south_up = Affine(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)  # e >= 0
+    south_up = Affine(1.0, 0.0, 100.0, 0.0, 1.0, 0.0)  # e >= 0 (non-identity → georeferenced)
     a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), transform=south_up)
     with pytest.raises(ValueError, match="north-up"):
         from_rasters({1: a})
+
+
+@pytest.mark.spatial
+def test_from_rasters_aligned_large_origin_no_false_reject(tmp_path):
+    # Two truly-aligned rasters at a projected origin (~4.3e6) whose origin differs by a
+    # sub-micron amount must NOT be rejected (the tolerance scales to cell size); a real
+    # half-cell shift MUST be rejected.
+    tf = Affine(100.0, 0.0, 4_321_000.0, 0.0, -100.0, 3_210_000.0)
+    tf_eps = Affine(100.0, 0.0, 4_321_000.0000005, 0.0, -100.0, 3_210_000.0)
+    tf_shift = Affine(100.0, 0.0, 4_321_050.0, 0.0, -100.0, 3_210_000.0)  # +0.5 cell
+    a = _write(tmp_path, "a.tif", np.ones((3, 3), dtype="float32"), transform=tf)
+    b = _write(tmp_path, "b.tif", np.ones((3, 3), dtype="float32"), transform=tf_eps)
+    p = from_rasters({1: a, 2: b})  # must not raise
+    assert p.grid.n_pu == 9
+    c = _write(tmp_path, "c.tif", np.ones((3, 3), dtype="float32"), transform=tf_shift)
+    with pytest.raises(ValueError, match="transform"):
+        from_rasters({1: a, 2: c})
+
+
+@pytest.mark.spatial
+def test_from_rasters_no_crs_builds(tmp_path):
+    # All rasters lack a CRS → build succeeds, grid.crs is None.
+    a = _write(tmp_path, "a.tif", np.ones((2, 2), dtype="float32"), crs=None,
+               transform=Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0))
+    p = from_rasters({1: a})
+    assert p.grid.n_pu == 4 and p.grid.crs is None
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -475,6 +548,7 @@ order: stdlib `pathlib`, then third-party `affine`/`rasterio`, before the first-
 `pymarxan.*` block):
 
 ```python
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -490,8 +564,12 @@ from pymarxan.models.problem import ConservationProblem
 Then append the wrapper + helpers:
 
 ```python
-def _transforms_close(a: Affine, b: Affine, tol: float = 1e-9) -> bool:
-    return all(abs(x - y) <= tol for x, y in zip(a[:6], b[:6]))
+def _transforms_close(a: Affine, b: Affine, tol: float = 1e-6) -> bool:
+    # Scale the tolerance to cell size: at projected-CRS origins (easting ~1e6-1e7)
+    # one float64 ULP already exceeds a fixed 1e-9, so a fixed absolute tolerance would
+    # false-reject two truly-aligned rasters whose origin was recomputed differently.
+    scale = max(abs(a.a), abs(a.e), 1.0)
+    return all(abs(x - y) <= tol * scale for x, y in zip(a[:6], b[:6]))
 
 
 def _require_north_up(tf: Affine) -> None:
@@ -598,7 +676,7 @@ def from_rasters(
 - [ ] **Step 4: Run the wrapper tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/spatial/test_raster.py -q`
-Expected: PASS (21 tests — 13 core + 8 wrapper).
+Expected: PASS (25 tests — 15 core + 10 wrapper).
 
 - [ ] **Step 5: Export from `spatial/__init__.py`**
 
@@ -621,13 +699,13 @@ Under `## [Unreleased]` → `### Added` in `CHANGELOG.md` (create the headers if
   One feature container (``dict[int, path | (path, band)]``) covers separate files and a
   multi-band stack; validity precedence mask → cost → feature-union; sparse
   ``pu_vs_features``; the analytic boundary is wired in by default. Rotated / non-north-up /
-  misaligned rasters raise (reprojection deferred). +21 tests.
+  misaligned rasters raise (reprojection deferred). +25 tests.
 ```
 
 - [ ] **Step 7: Run the full check**
 
 Run: `PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make check`
-Expected: green — 0 ruff, 0 mypy, full suite + 21 new. (`test_solutions_are_different` flake → rerun once.)
+Expected: green — 0 ruff, 0 mypy, full suite + 25 new. (`test_solutions_are_different` flake → rerun once.)
 
 Note: the CLAUDE.md `micromamba.sh` activation path may not exist on this machine; the `PATH=...` prefix above is the working invocation.
 
