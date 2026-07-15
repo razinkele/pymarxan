@@ -290,3 +290,191 @@ def test_from_rasters_no_crs_builds(tmp_path):
                transform=Affine(1.0, 0.0, 0.0, 0.0, -1.0, 2.0))
     p = from_rasters({1: a})
     assert p.grid.n_pu == 4 and p.grid.crs is None
+
+
+# --- S3c: windowed ingestion -------------------------------------------------
+
+from pymarxan.spatial import raster as _raster_mod  # noqa: E402  (for monkeypatch)
+
+# 5x5 north-up grid, x_min=0 y_max=5 cell 1x1.
+TF5 = Affine(1.0, 0.0, 0.0, 0.0, -1.0, 5.0)
+
+
+@pytest.mark.spatial
+def test_windowed_equals_full(tmp_path):
+    f1 = np.arange(25, dtype="float32").reshape(5, 5)
+    f2 = (np.arange(25, dtype="float32").reshape(5, 5) % 3)  # some zeros
+    f1[2, 2] = -1.0
+    f2[2, 2] = -1.0
+    p1 = _write(tmp_path, "f1.tif", f1, transform=TF5, nodata=-1)
+    p2 = _write(tmp_path, "f2.tif", f2, transform=TF5, nodata=-1)
+    win = from_rasters({1: p1, 2: p2}, window_size=2, include_boundary=True)
+    full = from_rasters({1: p1, 2: p2}, window_size=None, include_boundary=True)
+    assert list(win.planning_units["id"]) == list(full.planning_units["id"])
+    assert np.array_equal(win.grid.mask, full.grid.mask)
+    assert list(win.planning_units["cost"]) == list(full.planning_units["cost"])
+    assert list(win.planning_units["status"]) == list(full.planning_units["status"])
+    assert np.allclose(win.build_pu_feature_matrix(), full.build_pu_feature_matrix())
+
+    def _sort(d):
+        return d.sort_values(["species", "pu"]).reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(_sort(win.pu_vs_features), _sort(full.pu_vs_features),
+                                  check_dtype=False)
+    pd.testing.assert_frame_equal(
+        win.boundary.sort_values(["id1", "id2"]).reset_index(drop=True),
+        full.boundary.sort_values(["id1", "id2"]).reset_index(drop=True),
+        check_dtype=False,
+    )
+
+
+@pytest.mark.spatial
+def test_windowed_pu_ids_row_major_across_tiles(tmp_path):
+    # nodata hole at (1,1) so ids after it shift — a full-grid test would be vacuous.
+    f1 = np.arange(25, dtype="float32").reshape(5, 5) + 1.0  # values 1..25, all > 0
+    f1[1, 1] = -1.0  # nodata hole (flat index 6)
+    p1 = _write(tmp_path, "f.tif", f1, transform=TF5, nodata=-1)
+    p = from_rasters({1: p1}, window_size=2)  # tiles straddle rows
+    assert p.grid.n_pu == 24
+    amt = dict(zip(p.pu_vs_features["pu"], p.pu_vs_features["amount"]))
+    # cell (1,2) flat=7; with (1,1) removed its row-major rank -> id 7; amount f1[1,2]=8.
+    # A naive processing-order counter (the classic tile bug) would give the wrong id.
+    assert amt[7] == 8.0
+    assert amt[1] == 1.0  # (0,0) -> id 1
+
+
+@pytest.mark.spatial
+def test_windowed_validity_precedence(tmp_path):
+    f1 = np.ones((5, 5), dtype="float32")
+    cost = np.full((5, 5), 2.0, dtype="float32")
+    cost[3, 3] = -1.0  # nodata
+    mask = np.ones((5, 5), dtype="float32")
+    mask[0, 4] = 0.0
+    pf = _write(tmp_path, "f.tif", f1, transform=TF5)
+    pc = _write(tmp_path, "c.tif", cost, transform=TF5, nodata=-1)
+    pm = _write(tmp_path, "m.tif", mask, transform=TF5)
+    # cost footprint (no mask): the nodata-cost cell drops
+    cwin = from_rasters({1: pf}, cost_raster=pc, window_size=2)
+    cfull = from_rasters({1: pf}, cost_raster=pc, window_size=None)
+    assert cwin.grid.n_pu == cfull.grid.n_pu == 24
+    # mask wins over cost/features
+    mwin = from_rasters({1: pf}, mask_raster=pm, window_size=2)
+    mfull = from_rasters({1: pf}, mask_raster=pm, window_size=None)
+    assert mwin.grid.n_pu == mfull.grid.n_pu == 24
+    assert np.array_equal(mwin.grid.mask, mfull.grid.mask)
+
+
+@pytest.mark.spatial
+def test_windowed_cost_status(tmp_path):
+    f1 = np.ones((5, 5), dtype="float32")
+    cost = np.full((5, 5), 4.0, dtype="float32")
+    status = np.zeros((5, 5), dtype="float32")
+    status[0, 0] = 2
+    status[4, 4] = 3
+    p = from_rasters(
+        {1: _write(tmp_path, "f.tif", f1, transform=TF5)},
+        cost_raster=_write(tmp_path, "c.tif", cost, transform=TF5),
+        status_raster=_write(tmp_path, "s.tif", status, transform=TF5),
+        window_size=2,
+    )
+    assert set(p.planning_units["cost"]) == {4.0}
+    assert p.planning_units.iloc[0]["status"] == 2   # (0,0) -> id 1
+    assert p.planning_units.iloc[-1]["status"] == 3  # (4,4) -> id 25
+
+
+@pytest.mark.spatial
+def test_windowed_cost_nodata_warns_once(tmp_path):
+    f1 = np.ones((5, 5), dtype="float32")
+    cost = np.full((5, 5), 3.0, dtype="float32")
+    cost[2, 2] = -1.0  # nodata cost in one tile
+    cost[3, 3] = -1.0  # nodata cost in another tile
+    mask = np.ones((5, 5), dtype="float32")  # mask keeps all cells
+    pf = _write(tmp_path, "f.tif", f1, transform=TF5)
+    pc = _write(tmp_path, "c.tif", cost, transform=TF5, nodata=-1)
+    pm = _write(tmp_path, "m.tif", mask, transform=TF5)
+    with pytest.warns(UserWarning, match="nodata cost") as record:
+        p = from_rasters({1: pf}, cost_raster=pc, mask_raster=pm, window_size=2)
+    assert len([w for w in record if "nodata cost" in str(w.message)]) == 1  # once, not per-tile
+    costs = dict(zip(p.planning_units["id"], p.planning_units["cost"]))
+    assert costs[13] == 1.0 and costs[19] == 1.0  # (2,2)->13, (3,3)->19 default to 1.0
+    assert costs[1] == 3.0
+
+
+@pytest.mark.spatial
+def test_windowed_invalid_status_raises(tmp_path):
+    f1 = np.ones((5, 5), dtype="float32")
+    status = np.zeros((5, 5), dtype="float32")
+    status[2, 2] = 7  # out of range, interior tile
+    with pytest.raises(ValueError, match="status"):
+        from_rasters(
+            {1: _write(tmp_path, "f.tif", f1, transform=TF5)},
+            status_raster=_write(tmp_path, "s.tif", status, transform=TF5),
+            window_size=2,
+        )
+
+
+@pytest.mark.spatial
+def test_windowed_guards_fire(tmp_path):
+    rot = Affine(1.0, 0.5, 0.0, 0.5, -1.0, 5.0)
+    a = _write(tmp_path, "a.tif", np.ones((5, 5), dtype="float32"), transform=rot)
+    with pytest.raises(ValueError, match="rotat|north"):
+        from_rasters({1: a}, window_size=2)
+    b = _write(tmp_path, "b.tif", np.ones((5, 5), dtype="float32"), transform=TF5)
+    c = _write(tmp_path, "c.tif", np.ones((5, 5), dtype="float32"),
+               transform=Affine(2.0, 0.0, 0.0, 0.0, -2.0, 10.0))
+    with pytest.raises(ValueError, match="transform"):
+        from_rasters({1: b, 2: c}, window_size=2)
+
+
+@pytest.mark.spatial
+def test_windowed_include_boundary_resolution(tmp_path):
+    p1 = _write(tmp_path, "f.tif", np.ones((5, 5), dtype="float32"), transform=TF5)
+    assert from_rasters({1: p1}, window_size=2).boundary is None
+    assert from_rasters({1: p1}, window_size=2, include_boundary=True).boundary is not None
+    assert from_rasters({1: p1}, window_size=None).boundary is not None
+
+
+@pytest.mark.spatial
+def test_window_size_larger_than_grid_equals_full(tmp_path):
+    f1 = np.arange(25, dtype="float32").reshape(5, 5)
+    p1 = _write(tmp_path, "f.tif", f1, transform=TF5)
+    big = from_rasters({1: p1}, window_size=100, include_boundary=True)  # 1 tile
+    full = from_rasters({1: p1}, window_size=None, include_boundary=True)
+    assert np.allclose(big.build_pu_feature_matrix(), full.build_pu_feature_matrix())
+
+
+@pytest.mark.spatial
+def test_window_size_invalid_raises(tmp_path):
+    p1 = _write(tmp_path, "f.tif", np.ones((3, 3), dtype="float32"))
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="positive"):
+            from_rasters({1: p1}, window_size=bad)
+
+
+@pytest.mark.spatial
+def test_auto_small_takes_full_path(tmp_path):
+    f1 = np.arange(25, dtype="float32").reshape(5, 5)
+    p1 = _write(tmp_path, "f.tif", f1, transform=TF5)
+    auto = from_rasters({1: p1}, window_size="auto")  # tiny -> full path
+    assert auto.boundary is not None
+    ref = from_rasters({1: p1}, window_size=None)
+    assert np.allclose(auto.build_pu_feature_matrix(), ref.build_pu_feature_matrix())
+
+
+@pytest.mark.spatial
+def test_auto_large_takes_windowed_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(_raster_mod, "_WINDOW_AUTO_BYTES", 8)  # force windowed
+    f1 = np.arange(25, dtype="float32").reshape(5, 5)
+    p1 = _write(tmp_path, "f.tif", f1, transform=TF5)
+    auto = from_rasters({1: p1}, window_size="auto", include_boundary=True)
+    ref = from_rasters({1: p1}, window_size=None, include_boundary=True)
+    assert np.allclose(auto.build_pu_feature_matrix(), ref.build_pu_feature_matrix())
+
+
+@pytest.mark.spatial
+def test_auto_windowed_skips_boundary_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(_raster_mod, "_WINDOW_AUTO_BYTES", 8)  # force auto -> windowed
+    p1 = _write(tmp_path, "f.tif", np.ones((5, 5), dtype="float32"), transform=TF5)
+    with pytest.warns(UserWarning, match="boundary skipped"):
+        p = from_rasters({1: p1}, window_size="auto")  # include_boundary None
+    assert p.boundary is None

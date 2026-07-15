@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Windowed raster ingestion (`from_rasters(window_size=...)`, S3c).** Large rasters ingest
+  in tiles without loading full ``(H×W)`` arrays: a two-pass windowed builder (bool validity
+  mask → ``flat_valid`` index → sparse ``pu_vs_features`` via row-major ``searchsorted``),
+  bit-identical to the full-array path. ``window_size`` (``int | "auto" | None``, default
+  ``"auto"``) auto-switches on the estimated dense-stack size; on the windowed path
+  ``include_boundary`` defaults off (the analytic ``build_boundary`` is a per-cell Python
+  loop — a scale bottleneck to vectorize later) and an auto-skipped boundary warns. +13 tests.
+
 ## [0.18.0] — 2026-07-15
 
 ### Added
