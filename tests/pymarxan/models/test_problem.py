@@ -1,4 +1,5 @@
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -281,3 +282,45 @@ def test_validate_accepts_phase19_clumping_columns():
     problem = problem.copy_with(features=features)
     errors = problem.validate()
     assert errors == [], f"validate() flagged Phase 19 columns: {errors}"
+
+
+def test_build_pu_feature_csr_matches_dense(tiny_problem):
+    csr = tiny_problem.build_pu_feature_csr()
+    assert np.array_equal(csr.toarray(), tiny_problem.build_pu_feature_matrix())
+
+
+def test_build_pu_feature_csr_sums_duplicates_and_drops_unknown():
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    pvf = pd.DataFrame(
+        {
+            "species": [1, 1, 1, 99],       # 99 = unknown feature -> dropped
+            "pu": [1, 1, 2, 1],             # (1,1) appears twice -> summed
+            "amount": [2.0, 3.0, 4.0, 5.0],
+        }
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    csr = p.build_pu_feature_csr()
+    assert np.array_equal(csr.toarray(), p.build_pu_feature_matrix())
+    assert csr.toarray()[0, 0] == 5.0  # 2 + 3 summed
+    assert csr.toarray()[1, 0] == 4.0
+
+
+def test_build_pu_feature_csr_empty_pvf():
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    pvf = pd.DataFrame({"species": [], "pu": [], "amount": []})
+    csr = ConservationProblem(pu, feats, pvf).build_pu_feature_csr()
+    assert csr.shape == (2, 1)
+    assert csr.nnz == 0
+
+
+def test_build_pu_feature_csr_edge_cases():
+    # feature 2 present in no PU (empty column); PU 3 has no features (empty row);
+    # a negative amount is stored but does not count as "present".
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
+    feats = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0],
+                          "spf": [1.0, 1.0]})
+    pvf = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [5.0, -3.0]})
+    p = ConservationProblem(pu, feats, pvf)
+    assert np.array_equal(p.build_pu_feature_csr().toarray(), p.build_pu_feature_matrix())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
@@ -12,6 +13,9 @@ import pandas as pd
 
 from pymarxan.models import boundary as boundary_mod
 from pymarxan.models.grid import GridGeometry
+
+if TYPE_CHECKING:
+    from scipy.sparse import csr_matrix
 
 # Planning unit status constants (Marxan spec)
 STATUS_NORMAL = 0
@@ -124,6 +128,36 @@ class ConservationProblem:
                 # behaviour. Assignment would silently drop all but the last.
                 matrix[ri, ci] += float(pv_am[k])
         return matrix
+
+    def build_pu_feature_csr(self) -> csr_matrix:
+        """Sparse ``(n_pu, n_feat)`` CSR of feature amounts per PU.
+
+        Rows in ``planning_units`` order, columns in ``features["id"]`` order.
+        Duplicate ``(pu, species)`` rows are summed and unknown-id rows dropped —
+        the sparse equivalent of ``build_pu_feature_matrix`` (``csr.toarray()`` equals it).
+        ``sum_duplicates()`` is load-bearing: it makes each row's column indices **unique**,
+        which ``ProblemCache.apply_flip_to_held`` relies on (numpy fancy in-place add is
+        last-wins, not accumulate).
+        """
+        from scipy.sparse import csr_matrix
+
+        n_pu = self.n_planning_units
+        n_feat = self.n_features
+        feat_ids = self.features["id"].values
+        feat_id_to_col = {int(fid): j for j, fid in enumerate(feat_ids)}
+
+        pv = self.pu_vs_features
+        rows = pd.Series(pv["pu"].values).map(self.pu_id_to_index).to_numpy()
+        cols = pd.Series(pv["species"].values).map(feat_id_to_col).to_numpy()
+        amt = np.asarray(pv["amount"].values, dtype=np.float64)
+        keep = ~(pd.isna(rows) | pd.isna(cols))
+
+        csr = csr_matrix(
+            (amt[keep], (rows[keep].astype(np.int64), cols[keep].astype(np.int64))),
+            shape=(n_pu, n_feat),
+        )
+        csr.sum_duplicates()
+        return csr
 
     def feature_amounts(self) -> dict[int, float]:
         """Total amount of each feature across all planning units.
