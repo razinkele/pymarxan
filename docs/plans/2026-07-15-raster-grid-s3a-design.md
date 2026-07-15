@@ -119,11 +119,15 @@ This rewrites hot loops in SA, iterative-improvement, and the cache — all Marx
 surface. The anchor is direct: the `{2, 4, 6} = 35.0` simple project is **plain** (no
 `target2`/`sepnum`/`prob`), so it runs entirely through the CSR path — MIP must still return
 35.0 and SA/greedy land **at or above** it, and `examples/validate_marxan_parity.py` must pass
-unchanged. Additional guards: dense-vs-CSR unit tests on `build_pu_feature_csr`, `compute_held`,
-`apply_flip_to_held`, and `compute_delta_objective` (identical to the pre-refactor dense
-values on a random problem incl. duplicate `(pu,species)` rows and unknown-id rows); and a
-**`bench` run** to confirm the O(nnz_row) delta does not regress per-flip cost (it should be
-≤ the current O(n_feat)).
+unchanged. The **delta** and **held-update** are bit-identical (they only insert/omit exact-zero
+terms), so the SA trajectory on the integer-amount simple project is unchanged; only
+`compute_held` (a reordered float sum) can differ in the last bit on arbitrary-float problems,
+which SA tolerates (it's already stochastic, and the simple project's integer amounts sum
+exactly). Additional guards: dense-vs-CSR unit tests on `build_pu_feature_csr` (`==`),
+`apply_flip_to_held`/`compute_delta_objective` (bit-identical `==`), `compute_held` (`allclose`)
+on random problems incl. duplicate `(pu,species)` and unknown-id rows; and a **`bench` run** to
+confirm the O(nnz_row) delta does not regress per-flip cost (it should be ≤ the current
+O(n_feat)).
 
 ## Testing strategy (TDD)
 
@@ -132,13 +136,18 @@ values on a random problem incl. duplicate `(pu,species)` rows and unknown-id ro
   CSR), `build_pu_feature_csr().toarray()` equals `build_pu_feature_matrix()`.
 - **`ProblemCache` is hashable/eq-safe:** the CSR field does not break the frozen dataclass —
   building a cache does not raise, and (if the class is ever compared) `compare=False` holds.
-- **`compute_held` dense-vs-CSR:** for several random selections, the CSR `compute_held` equals
-  the old dense `pu_feat_matrix[selected].sum(0)`.
-- **`apply_flip_to_held`:** for random `idx`/`sign`, `apply_flip_to_held(held, idx, sign)` equals
-  `held + sign * dense_matrix[idx]`.
+- **`compute_held` dense-vs-CSR (`allclose`, not bitwise):** for several random selections, the
+  CSR `compute_held` ≈ the old dense `pu_feat_matrix[selected].sum(0)`. **Use `np.allclose`, not
+  `==`** — scipy's sparse column-sum orders the float additions differently from numpy's dense
+  sum, so the last bit can differ for arbitrary floats. (The 35.0 anchor is unaffected: the
+  simple project has integer amounts → both sum exactly.)
+- **`apply_flip_to_held` (bit-identical):** for random `idx`/`sign`, `apply_flip_to_held(held,
+  idx, sign)` equals `held + sign * dense_matrix[idx]` **exactly** — `held[cols] += sign*amts`
+  differs from the dense update only by omitting `+ 0.0` on absent features (`x + 0.0 == x`).
 - **`compute_delta_objective` bit-identical:** on the simple project and a random plain problem,
-  the CSR delta equals the value the dense implementation produced for the same flip (guard the
-  bit-exact penalty-delta).
+  the CSR delta equals the dense implementation's value for the same flip **exactly** — the
+  per-column dot omits only exact-zero terms, which never change a sum. This is the bit-exact
+  penalty-delta guard.
 - **`pu_feat_matrix` property:** densifies to the right dense matrix, is cached (same object on
   second access), and a plain-problem solve never triggers it (assert via a spy /
   `pu_feat_csr` present and the property's `__dict__` slot absent after `compute_held`+delta).
