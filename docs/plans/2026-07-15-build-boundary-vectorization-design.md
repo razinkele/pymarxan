@@ -46,7 +46,10 @@ vectorized.
    id_grid.reshape(-1)[np.flatnonzero(mask.reshape(-1))] = pu_ids
    ```
    Cell validity is always taken from `mask` (never from a sentinel), so invalid cells'
-   `id_grid` values are never read.
+   `id_grid` values are never read. `id_grid` is a fresh C-contiguous `zeros`, so
+   `id_grid.reshape(-1)` is a writable view; `reshape(-1)` and `flatnonzero` both flatten in
+   **C-order (row-major)**, the same order as `valid_cells()`'s `np.nonzero`, so `pu_ids[i]`
+   lands on the `i`-th valid cell regardless of `mask`'s memory layout.
 
 2. **Right edges** (each valid cell and its valid right neighbor share a vertical edge of
    length `cell_height`):
@@ -126,8 +129,9 @@ vectorized output equals a reference-loop implementation on random masks (multis
   `sort_values(["id1","id2"]).reset_index(drop=True)` (`assert_frame_equal`, `check_dtype
   =False`).
 - **Scale smoke:** `build_boundary` on a moderately large grid (e.g. `200×200 = 40k` cells)
-  returns the right row count quickly (guards against an accidental O(n²) regression);
-  optionally a `bench` marker.
+  returns the correct row count and runs fast — a supplementary check that no per-cell
+  Python loop (e.g. a leftover `valid_cells()` / dict build) survives. Not a hard perf gate;
+  a `bench` marker at larger scale is optional.
 - **Anchor:** `make check` green (0 ruff / 0 mypy), coverage ≥ 75%.
 
 ## References
