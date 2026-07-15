@@ -371,6 +371,15 @@ class ProblemCache:
             # (a) geographic CRS + sepdistance > 0 → distance in degrees,
             # nearly meaningless.
             crs = getattr(pu_df, "crs", None)
+            # S4a: a grid problem's planning_units is a plain DataFrame (no crs),
+            # but the GridGeometry carries a CRS string — resolve it so a
+            # geographic-grid separation problem still gets the warning.
+            if crs is None and problem.grid is not None and problem.grid.crs is not None:
+                try:
+                    from pyproj import CRS as _PyprojCRS
+                    crs = _PyprojCRS.from_user_input(problem.grid.crs)
+                except Exception:
+                    crs = None
             if crs is not None and getattr(crs, "is_geographic", False):
                 warnings.warn(
                     "Separation distance specified on a geographic CRS "

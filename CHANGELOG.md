@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Separation distance on raster-grid planning units (S4a).** `get_pu_coordinates` now falls
+  back to `GridGeometry.cell_centroids()` (geometry → `xloc`/`yloc` → **grid** → raise), so
+  SEPDISTANCE/SEPNUM work on grid-ingested problems (previously raised
+  `PUCoordinatesUnavailableError`). The geographic-CRS "distances in degrees" warning now also
+  reads `grid.crs`, so a geographic-grid separation problem is still flagged.
+
 ## [0.23.0] — 2026-07-15
 
 ### Added

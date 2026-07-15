@@ -493,13 +493,15 @@ class PUCoordinatesUnavailableError(ValueError):
 def get_pu_coordinates(problem: ConservationProblem) -> np.ndarray:
     """Resolve per-PU 2D coordinates for separation distance calculation.
 
-    Three-tier fallback:
+    Four-tier fallback:
 
     1. If ``problem.planning_units`` is a GeoDataFrame with a non-empty
        geometry column, use ``geometry.centroid``.
     2. Else if ``planning_units`` has both ``xloc`` and ``yloc`` columns
        (Marxan's classic ``pu.dat`` convention), use those.
-    3. Else raise :exc:`PUCoordinatesUnavailableError`.
+    3. Else if ``problem.grid`` is set (a raster-grid problem), use
+       ``grid.cell_centroids()`` (S4a).
+    4. Else raise :exc:`PUCoordinatesUnavailableError`.
 
     NaN guard (round-2 H3): if any resolved coordinate is NaN — from an
     empty/invalid geometry or a missing ``xloc``/``yloc`` value — raise
@@ -551,6 +553,17 @@ def get_pu_coordinates(problem: ConservationProblem) -> np.ndarray:
             raise PUCoordinatesUnavailableError(
                 f"planning_units has NaN xloc/yloc at "
                 f"{len(bad_idx)} rows {bad_idx[:10]}{'...' if len(bad_idx) > 10 else ''}."
+            )
+        return coords
+
+    # Tier 3 (S4a): a raster-grid problem carries no geometry/xloc, but its
+    # GridGeometry cell centroids are the per-PU coordinates (in PU order).
+    if problem.grid is not None:
+        coords = np.asarray(problem.grid.cell_centroids(), dtype=np.float64)
+        if np.isnan(coords).any():
+            raise PUCoordinatesUnavailableError(
+                "grid.cell_centroids() produced NaN coordinates "
+                "(non-finite grid origin/cell size)."
             )
         return coords
 
