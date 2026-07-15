@@ -7,6 +7,7 @@ from pymarxan.connectivity.metrics import compute_in_degree
 from pymarxan.models.geometry import generate_grid
 from pymarxan.models.problem import has_geometry
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+from pymarxan_shiny.modules.mapping.map_utils import compute_centroids
 from pymarxan_shiny.modules.mapping.ocean_palette import (
     EDGE_COLOR,
     MAP_FALLBACK,
@@ -37,16 +38,6 @@ def metric_color(normalized: float) -> str:
     g = int(METRIC_LOW_RGB[1] * (1.0 - normalized) + METRIC_HIGH_RGB[1] * normalized)
     b = int(METRIC_LOW_RGB[2] * (1.0 - normalized) + METRIC_HIGH_RGB[2] * normalized)
     return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def compute_centroids(
-    grid: list[tuple[tuple[float, float], tuple[float, float]]],
-) -> list[tuple[float, float]]:
-    """Compute the center point of each bounding box."""
-    centroids: list[tuple[float, float]] = []
-    for (s, w), (n, e) in grid:
-        centroids.append(((s + n) / 2, (w + e) / 2))
-    return centroids
 
 
 @module.ui

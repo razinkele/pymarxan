@@ -374,6 +374,11 @@ def has_geometry(problem: ConservationProblem) -> bool:
     )
 
 
+def has_grid(problem: ConservationProblem) -> bool:
+    """Check if the problem carries a raster GridGeometry (grid-cell PUs)."""
+    return problem.grid is not None
+
+
 _OVERRIDABLE_FIELDS = {
     "target", "spf", "prop",
     # Round-3 H11 / round-2 M2: Phase 18/19/20 constraint columns should
