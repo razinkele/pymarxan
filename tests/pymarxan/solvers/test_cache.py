@@ -531,3 +531,96 @@ def test_delta_matches_full_objective_for_addition(tiny_problem):
     new_held = cache.compute_held(selected_after)
     full_after = cache.compute_full_objective(selected_after, new_held, blm)
     assert delta == pytest.approx(full_after - full_before, abs=1e-6)
+
+
+# --- S3a: CSR-backed cache -----------------------------------------------------
+
+def _random_problem(seed=0, n_pu=12, n_feat=4):
+    import pandas as pd
+
+    from pymarxan.models.problem import ConservationProblem
+
+    rng = np.random.default_rng(seed)
+    pu = pd.DataFrame({"id": np.arange(1, n_pu + 1), "cost": rng.random(n_pu) + 0.5,
+                       "status": np.zeros(n_pu, int)})
+    feats = pd.DataFrame({"id": np.arange(1, n_feat + 1),
+                          "name": [f"f{j}" for j in range(n_feat)],
+                          "target": rng.random(n_feat) * 3, "spf": np.ones(n_feat)})
+    rows = []
+    for pid in range(1, n_pu + 1):
+        for sp in range(1, n_feat + 1):
+            if rng.random() < 0.5:
+                rows.append({"species": sp, "pu": pid, "amount": float(rng.integers(1, 5))})
+    pvf = pd.DataFrame(rows)
+    return ConservationProblem(pu, feats, pvf)
+
+
+def test_cache_csr_field_and_property():
+    p = _random_problem()
+    cache = ProblemCache.from_problem(p)
+    assert np.array_equal(cache.pu_feat_matrix, p.build_pu_feature_matrix())
+    assert cache.pu_feat_matrix is cache.pu_feat_matrix  # cached
+
+
+def test_cache_is_construction_safe():
+    ProblemCache.from_problem(_random_problem())  # no exception
+
+
+def test_compute_held_allclose_to_dense():
+    p = _random_problem()
+    cache = ProblemCache.from_problem(p)
+    dense = p.build_pu_feature_matrix()
+    rng = np.random.default_rng(1)
+    for _ in range(5):
+        sel = rng.random(cache.n_pu) < 0.5
+        assert np.allclose(cache.compute_held(sel), dense[sel].sum(axis=0))
+
+
+def test_apply_flip_to_held_bit_identical():
+    p = _random_problem()
+    cache = ProblemCache.from_problem(p)
+    dense = p.build_pu_feature_matrix()
+    held = cache.compute_held(np.zeros(cache.n_pu, bool))
+    for idx, sign in [(0, 1.0), (3, 1.0), (3, -1.0), (7, 1.0)]:
+        expected = held + sign * dense[idx]
+        got = held.copy()
+        cache.apply_flip_to_held(got, idx, sign)
+        assert np.array_equal(got, expected)  # bit-identical (only omits + 0.0)
+
+
+@pytest.mark.parametrize("n_pu, n_feat", [(12, 4), (40, 160)])
+def test_delta_matches_dense_penalty(n_pu, n_feat):
+    # CSR delta == dense-formula delta. NOT bitwise `==` at large n_feat (np.dot regroups
+    # the retained terms), so use a relative tolerance; (40,160) exercises the raster regime.
+    p = _random_problem(n_pu=n_pu, n_feat=n_feat)
+    cache = ProblemCache.from_problem(p)
+    dense = p.build_pu_feature_matrix()
+    rng = np.random.default_rng(2)
+    sel = rng.random(cache.n_pu) < 0.5
+    held = cache.compute_held(sel)
+    total_cost = float(cache.costs[sel].sum())
+    eff = cache.feat_targets * cache.misslevel
+    for idx in range(cache.n_pu):
+        sign = -1.0 if sel[idx] else 1.0
+        old_sf = np.maximum(0.0, eff - held)
+        new_sf = np.maximum(0.0, eff - (held + sign * dense[idx]))
+        dense_pen = float(np.dot(cache._det_spf, new_sf - old_sf))
+        got = cache.compute_delta_objective(idx, sel, held, total_cost, blm=0.0)
+        expected = sign * cache.costs[idx] + dense_pen
+        assert abs(got - expected) <= 1e-9 * (1.0 + abs(expected))
+
+
+def test_expected_var_gated_on_probmode():
+    cache = ProblemCache.from_problem(_random_problem())  # probmode 0
+    assert cache.expected_matrix.size == 0 and cache.var_matrix.size == 0
+
+
+def test_plain_solve_does_not_densify():
+    p = _random_problem()
+    cache = ProblemCache.from_problem(p)
+    sel = np.zeros(cache.n_pu, bool)
+    held = cache.compute_held(sel)
+    cache.compute_full_objective(sel, held, blm=1.0)
+    cache.compute_delta_objective(0, sel, held, 0.0, blm=1.0)
+    cache.apply_flip_to_held(held, 0, 1.0)
+    assert "pu_feat_matrix" not in cache.__dict__  # never densified

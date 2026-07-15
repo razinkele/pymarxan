@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
+from scipy.sparse import csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.utils import compute_cost_threshold_penalty
@@ -49,8 +51,11 @@ class ProblemCache:
         (n_pu,) int32 — status of each planning unit.
     pu_id_to_idx : dict[int, int]
         Mapping from planning unit ID to array index.
-    pu_feat_matrix : np.ndarray
-        (n_pu, n_feat) float64 — amount of each feature in each PU.
+    pu_feat_csr : scipy.sparse.csr_matrix
+        (n_pu, n_feat) float64 — amount of each feature in each PU (the source of truth).
+        ``pu_feat_matrix`` is a lazily-densified ``cached_property`` view over it, built
+        only when clumping / separation / probmode-3 / analysis touch it; a plain problem
+        never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
     feat_targets : np.ndarray
         (n_feat,) float64 — target for each feature.
     feat_spf : np.ndarray
@@ -80,7 +85,12 @@ class ProblemCache:
     costs: np.ndarray
     statuses: np.ndarray
     pu_id_to_idx: dict[int, int]
-    pu_feat_matrix: np.ndarray
+    # Sparse feature amounts (source of truth). ``compare=False``: a scipy CSR's ``==``
+    # returns a sparse matrix and it is unhashable, so it must be kept out of the frozen
+    # dataclass's generated ``__eq__``/``__hash__`` (the cache is already non-hashable via
+    # its ndarray fields). Do NOT add ``slots=True`` — it would break ``pu_feat_matrix``'s
+    # ``cached_property``.
+    pu_feat_csr: csr_matrix = field(compare=False, repr=False)
     feat_targets: np.ndarray
     feat_spf: np.ndarray
     feat_id_to_col: dict[int, int]
@@ -132,6 +142,19 @@ class ProblemCache:
     # mask. Falls back to feat_spf when neither constraint is active.
     _det_spf: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
+    @cached_property
+    def pu_feat_matrix(self) -> np.ndarray:
+        """Dense (n_pu, n_feat) view — densified on first access (clumping / separation /
+        probmode-3 / analysis). A plain problem never triggers this."""
+        if self.n_pu * self.n_feat > 20_000_000:  # ~160 MB float64 — the sparse win is lost
+            warnings.warn(
+                "Densifying a large ProblemCache feature matrix "
+                f"({self.n_pu}x{self.n_feat}); clumping/separation/probmode-3 at raster "
+                "scale is not yet sparse.",
+                stacklevel=2,
+            )
+        return np.asarray(self.pu_feat_csr.toarray())
+
     @classmethod
     def from_problem(cls, problem: ConservationProblem) -> ProblemCache:
         """Build a ProblemCache from a ConservationProblem.
@@ -172,8 +195,8 @@ class ProblemCache:
         feat_targets = np.asarray(feat_df["target"].values, dtype=np.float64)
         feat_spf = np.asarray(feat_df["spf"].values, dtype=np.float64)
 
-        # PU-feature matrix (dense) — use shared builder
-        pu_feat_matrix = problem.build_pu_feature_matrix()
+        # PU-feature matrix (sparse CSR) — source of truth (dense is a lazy property).
+        pu_feat_csr = problem.build_pu_feature_csr()
 
         # Boundary: adjacency list + self-boundary
         neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
@@ -240,25 +263,31 @@ class ProblemCache:
         # NB: this is the *opposite* polarity to PROBMODE 2 (per-PU `prob`,
         # Marxan 1D), where `prob` is the probability of loss and the held
         # amount is `amount * (1 - prob)`.
-        prob_matrix = np.ones_like(pu_feat_matrix)
-        if (
-            problem.pu_vs_features is not None
-            and "prob" in problem.pu_vs_features.columns
-        ):
-            pv_pu = problem.pu_vs_features["pu"].values
-            pv_sp = problem.pu_vs_features["species"].values
-            pv_pr = problem.pu_vs_features["prob"].values
-            for k in range(len(pv_pu)):
-                pi = pu_id_to_idx.get(int(pv_pu[k]))
-                fj = feat_id_to_col.get(int(pv_sp[k]))
-                if pi is not None and fj is not None:
-                    prob_matrix[pi, fj] = float(pv_pr[k])
-
-        # Marxan PROB2D math (probability.cpp ComputeP_AllPUsSelected_2D):
-        #   E[T_j contribution from i]   = amount_ij * p_ij          (presence)
-        #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
-        expected_matrix = pu_feat_matrix * prob_matrix
-        var_matrix = (pu_feat_matrix ** 2) * prob_matrix * (1.0 - prob_matrix)
+        # expected/var are read ONLY under probmode == 3 — build them (densely) only then;
+        # a plain problem pays zero memory for these two (n_pu, n_feat) matrices.
+        if probmode == 3:
+            dense = np.asarray(pu_feat_csr.toarray())
+            prob_matrix = np.ones_like(dense)
+            if (
+                problem.pu_vs_features is not None
+                and "prob" in problem.pu_vs_features.columns
+            ):
+                pv_pu = problem.pu_vs_features["pu"].values
+                pv_sp = problem.pu_vs_features["species"].values
+                pv_pr = problem.pu_vs_features["prob"].values
+                for k in range(len(pv_pu)):
+                    pi = pu_id_to_idx.get(int(pv_pu[k]))
+                    fj = feat_id_to_col.get(int(pv_sp[k]))
+                    if pi is not None and fj is not None:
+                        prob_matrix[pi, fj] = float(pv_pr[k])
+            # Marxan PROB2D math (probability.cpp ComputeP_AllPUsSelected_2D):
+            #   E[T_j contribution from i]   = amount_ij * p_ij          (presence)
+            #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
+            expected_matrix = dense * prob_matrix
+            var_matrix = (dense ** 2) * prob_matrix * (1.0 - prob_matrix)
+        else:
+            expected_matrix = np.zeros((0, 0))
+            var_matrix = np.zeros((0, 0))
 
         # Per-feature probability target; default -1 (disabled sentinel) for
         # legacy specs without a ptarget column (read_spec already fills this).
@@ -307,10 +336,16 @@ class ProblemCache:
         # Sparse participation index per feature: PUs where amount > 0.
         # Built unconditionally because it's cheap and ClumpState relies
         # on it for both add and remove paths.
+        # Built from the CSR's CSC form (no densify): reproduces np.where(matrix[:, j] > 0)
+        # exactly — canonical CSC columns are row-sorted, and the `> 0` filter drops
+        # structural zeros / negative summed amounts, matching the dense semantics.
+        csc = pu_feat_csr.tocsc()
         feat_uses_pu: list[np.ndarray] = []
         for j in range(n_feat):
-            participating = np.where(pu_feat_matrix[:, j] > 0)[0].astype(np.int32)
-            feat_uses_pu.append(participating)
+            seg = slice(csc.indptr[j], csc.indptr[j + 1])
+            col_rows = csc.indices[seg]
+            col_data = csc.data[seg]
+            feat_uses_pu.append(col_rows[col_data > 0].astype(np.int32))
 
         # Phase 20 separation precompute. Defaults match read_spec's legacy
         # fill (sepdistance=0, sepnum=1). A feature is sep-active iff BOTH
@@ -374,9 +409,10 @@ class ProblemCache:
         # path cheap.
         pu_to_sep_feats: list[np.ndarray] = []
         if separation_active:
+            sep_dense = np.asarray(pu_feat_csr.toarray())  # niche path — densify locally
             sep_col_ids = np.where(sep_active_mask)[0].astype(np.int32)
             for i in range(n_pu):
-                mask_at_pu = pu_feat_matrix[i, sep_col_ids] > 0
+                mask_at_pu = sep_dense[i, sep_col_ids] > 0
                 pu_to_sep_feats.append(sep_col_ids[mask_at_pu])
         else:
             pu_to_sep_feats = [np.zeros(0, dtype=np.int32)] * n_pu
@@ -397,7 +433,7 @@ class ProblemCache:
             costs=costs,
             statuses=statuses,
             pu_id_to_idx=pu_id_to_idx,
-            pu_feat_matrix=pu_feat_matrix,
+            pu_feat_csr=pu_feat_csr,
             feat_targets=feat_targets,
             feat_spf=feat_spf,
             feat_id_to_col=feat_id_to_col,
@@ -444,8 +480,22 @@ class ProblemCache:
         np.ndarray
             (n_feat,) float64 — total amount held for each feature.
         """
-        result: np.ndarray = self.pu_feat_matrix[selected].sum(axis=0)
+        rows = np.flatnonzero(selected)
+        result: np.ndarray = np.asarray(self.pu_feat_csr[rows].sum(axis=0)).ravel()
         return result
+
+    def apply_flip_to_held(self, held: np.ndarray, idx: int, sign: float) -> None:
+        """In-place held update for flipping PU ``idx``: ``held[cols] += sign*amounts``.
+
+        Bit-identical to ``held += sign * pu_feat_matrix[idx]`` (only omits ``+ 0.0`` on
+        features absent from the PU), and O(nnz in the row). Relies on the CSR having
+        unique column indices per row (guaranteed by ``build_pu_feature_csr``'s
+        ``sum_duplicates()`` — numpy fancy in-place add is last-wins, not accumulate).
+        """
+        csr = self.pu_feat_csr
+        s, e = csr.indptr[idx], csr.indptr[idx + 1]
+        cols = csr.indices[s:e]
+        held[cols] += sign * csr.data[s:e]
 
     def _compute_zscore_penalty(
         self, held_expected: np.ndarray, held_variance: np.ndarray,
@@ -612,13 +662,19 @@ class ProblemCache:
         # Features handled by ClumpState (target2 > 0) and SepState (sepnum > 1)
         # are excluded via the precomputed self._det_spf compound mask
         # (round-3 H14 — same mask as compute_full_objective).
-        pu_amounts = self.pu_feat_matrix[idx]
-        effective_targets = self.feat_targets * self.misslevel
-        old_shortfalls = np.maximum(0.0, effective_targets - held)
-        new_held = held + sign * pu_amounts
-        new_shortfalls = np.maximum(0.0, effective_targets - new_held)
+        # Only the PU's nonzero features change shortfall (absent features contribute 0),
+        # so restrict to the CSR row's columns → O(nnz_row). Integer-exact vs the dense
+        # full-width dot; ≤ a few ULP for arbitrary floats (the retained terms regroup in a
+        # non-associative np.dot — same float-sum regime as compute_held).
+        s = self.pu_feat_csr.indptr[idx]
+        e = self.pu_feat_csr.indptr[idx + 1]
+        cols = self.pu_feat_csr.indices[s:e]
+        amts = self.pu_feat_csr.data[s:e]
+        eff = self.feat_targets[cols] * self.misslevel
+        old_shortfalls = np.maximum(0.0, eff - held[cols])
+        new_shortfalls = np.maximum(0.0, eff - (held[cols] + sign * amts))
         penalty_delta = float(
-            np.dot(self._det_spf, new_shortfalls - old_shortfalls)
+            np.dot(self._det_spf[cols], new_shortfalls - old_shortfalls)
         )
 
         delta = cost_delta + blm * boundary_delta + penalty_delta
