@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from pymarxan.adequacy.model import SpaceSpec
 from pymarxan.models.problem import (
     STATUS_INITIAL_INCLUDE,
     STATUS_LOCKED_IN,
@@ -33,16 +34,21 @@ class SimulatedAnnealingSolver(Solver):
         num_iterations: int = 1_000_000,
         num_temp_steps: int = 10_000,
         initial_prop: float = 0.5,
+        space_spec: SpaceSpec | None = None,
     ):
         self._num_iterations = num_iterations
         self._num_temp_steps = num_temp_steps
         self._initial_prop = initial_prop
+        self._space_spec = space_spec
 
     def name(self) -> str:
         return "Simulated Annealing (Python)"
 
     def supports_zones(self) -> bool:
         return False
+
+    def supports_space(self) -> bool:
+        return True
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
@@ -71,6 +77,12 @@ class SimulatedAnnealingSolver(Solver):
         cache = ProblemCache.from_problem(problem)
         n_pu = cache.n_pu
 
+        # raptr space/adequacy is active only when a space_target column has any >0
+        space_active = (
+            "space_target" in problem.features.columns
+            and bool((problem.features["space_target"] > 0).any())
+        )
+
         # Identify locked and swappable PUs from cached statuses
         locked_in: list[int] = []
         locked_out: list[int] = []
@@ -98,6 +110,7 @@ class SimulatedAnnealingSolver(Solver):
             sol = build_solution(
                 problem, selected, blm,
                 metadata={"solver": self.name()},
+                space_spec=self._space_spec,
             )
             return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
 
@@ -171,6 +184,16 @@ class SimulatedAnnealingSolver(Solver):
                 sep_state = SepState.from_selection(cache, selected)
                 current_obj += sep_state.penalty_total()
 
+            # raptr space/adequacy: spin up SpaceState when any feature has a
+            # space_target. Additive soft penalty (does NOT touch _det_spf).
+            space_state = None
+            if space_active:
+                from pymarxan.solvers.space_state import SpaceState
+                space_state = SpaceState.from_problem(
+                    problem, self._space_spec or SpaceSpec(), selected,
+                )
+                current_obj += space_state.penalty_total()
+
             # Determine initial temperature
             if start_temp_param is not None:
                 initial_temp = max(float(start_temp_param), 0.001)
@@ -190,6 +213,10 @@ class SimulatedAnnealingSolver(Solver):
                     if sep_state is not None:
                         delta += sep_state.delta_penalty(
                             cache, idx, adding=not selected[idx],
+                        )
+                    if space_state is not None:
+                        delta += space_state.delta_penalty(
+                            idx, adding=not selected[idx],
                         )
                     if delta > 0:
                         deltas.append(delta)
@@ -250,6 +277,8 @@ class SimulatedAnnealingSolver(Solver):
                     delta += clump_state.delta_penalty(cache, idx, adding)
                 if sep_state is not None:
                     delta += sep_state.delta_penalty(cache, idx, adding)
+                if space_state is not None:
+                    delta += space_state.delta_penalty(idx, adding)
 
                 # Acceptance criterion
                 if delta <= 0 or (
@@ -265,6 +294,8 @@ class SimulatedAnnealingSolver(Solver):
                         clump_state.apply_flip(cache, idx, adding)
                     if sep_state is not None:
                         sep_state.apply_flip(cache, idx, adding)
+                    if space_state is not None:
+                        space_state.apply_flip(idx, adding)
 
                     # Track best
                     if current_obj < best_obj:
@@ -306,6 +337,7 @@ class SimulatedAnnealingSolver(Solver):
                     "best_objective": round(best_obj, 4),
                     "history": history,
                 },
+                space_spec=self._space_spec,
             )
             solutions.append(sol)
 

@@ -55,3 +55,32 @@ def compute_space_held(
         wss = float(np.sum(w * d2.min(axis=1)))
         held[int(fid)] = float(np.clip(1.0 - wss / tss, 0.0, 1.0))
     return held
+
+
+def evaluate_solution_space(
+    problem: ConservationProblem,
+    selected: np.ndarray,
+    spec: SpaceSpec | None = None,
+) -> tuple[dict[int, float], float]:
+    """Post-hoc space reporting for a solution: ``(space_held, total_space_penalty)``.
+
+    Over features with ``space_target > 0``: ``space_held`` per feature (via
+    :func:`compute_space_held`) and the soft penalty ``Σ_f space_spf_f · max(0, space_target_f −
+    space_held_f)`` (``space_spf`` defaults to the amount ``spf``). DataFrame-level — called once
+    per solution, so it need not be as fast as :class:`~pymarxan.solvers.space_state.SpaceState`.
+    """
+    spec = spec or SpaceSpec()
+    feats = problem.features
+    spf_col = "space_spf" if "space_spf" in feats.columns else "spf"
+    held_all = compute_space_held(problem, selected, spec)
+    held: dict[int, float] = {}
+    penalty = 0.0
+    for _, row in feats.iterrows():
+        tgt = float(row.get("space_target", 0.0) or 0.0)
+        if tgt <= 0.0:
+            continue
+        fid = int(row["id"])
+        h = float(held_all.get(fid, 0.0))
+        held[fid] = h
+        penalty += float(row.get(spf_col, 1.0)) * max(0.0, tgt - h)
+    return held, penalty

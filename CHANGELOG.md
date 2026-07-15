@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Space/adequacy enforcement in the SA & greedy solvers (raptr-style, Phase B).** Features can
+  now carry a `space_target` (proportion) — and optional `space_spf` (defaults to `spf`) — feature
+  column, and the SA and greedy solvers optimize toward it via a soft space penalty
+  `Σ space_spf · max(0, space_target − space_held)` on top of the amount penalty (additive; the
+  amount path is untouched). A new `SpaceState` companion carries the penalty incrementally through
+  the SA loop, recomputing `space_held` only for the features whose occupied set contains a flipped
+  PU (a precomputed numpy kernel — not the DataFrame measure per flip). Greedy gains a **two-phase**
+  treatment: Phase 1 meets amount targets (HEURTYPE, unchanged), Phase 2 adds the PU that most
+  reduces the space penalty until the space targets are met. Both solvers take an optional
+  `space_spec` constructor argument (attribute-space config). `Solution` now reports
+  `space_held` / `space_penalty` for **all** solver paths (MIP/zones report the gap without
+  optimizing it — `supports_space()` defaults False; SA/greedy return True). Deviation from raptr
+  (documented): a soft penalty rather than raptr's hard IP constraint. No `space_target` column →
+  every branch is inert; the parity anchor (35.0) is untouched.
+
 ## [0.26.0] — 2026-07-15
 
 ### Added

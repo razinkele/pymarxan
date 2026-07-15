@@ -39,6 +39,12 @@ class Solution:
     # sep_penalty: Σ baseline · SPF · compute_sep_penalty(count, sepnum)
     sep_shortfalls: dict[int, int] | None = None
     sep_penalty: float | None = None
+    # Space/adequacy outputs (raptr-style) — populated when any feature has
+    # space_target > 0. Always None otherwise.
+    # space_held: feature_id -> 1 − WSS/TSS proportion of attribute-space variation captured.
+    # space_penalty: Σ space_spf · max(0, space_target − space_held)
+    space_held: dict[int, float] | None = None
+    space_penalty: float | None = None
 
     @property
     def all_targets_met(self) -> bool:
@@ -117,3 +123,15 @@ class Solver(ABC):
         v0.3).
         """
         return True
+
+    def supports_space(self) -> bool:
+        """Whether this solver optimizes raptr-style space/adequacy targets
+        (``space_target`` feature column).
+
+        Defaults to **False** — space targets are opt-in and only the SA and
+        greedy solvers honour them (via the ``SpaceState`` companion / the
+        two-phase greedy). Non-supporting solvers (MIP, zones) still *report*
+        the space gap post-hoc through ``Solution.space_held`` /
+        ``space_penalty`` — they simply do not optimize toward it.
+        """
+        return False

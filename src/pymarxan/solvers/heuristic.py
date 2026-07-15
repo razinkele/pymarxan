@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from pymarxan.adequacy.model import SpaceSpec
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
@@ -37,12 +38,18 @@ class HeuristicSolver(Solver):
     7 - Summation Irreplaceability: sum of irreplaceability scores.
     """
 
-    def __init__(self, heurtype: int = 2) -> None:
+    def __init__(
+        self, heurtype: int = 2, space_spec: SpaceSpec | None = None
+    ) -> None:
         heurtype = int(heurtype)  # coerce, may raise for non-numeric
         if heurtype not in _VALID_HEURTYPES:
             msg = f"heurtype must be 0-7, got {heurtype}"
             raise ValueError(msg)
         self.heurtype = heurtype
+        self._space_spec = space_spec
+
+    def supports_space(self) -> bool:
+        return True
 
     def solve(
         self,
@@ -277,6 +284,34 @@ class HeuristicSolver(Solver):
                     remaining[fid] -= amount
             available = available[available != best_idx]
 
+        # Phase 2 (raptr space/adequacy): once amount targets are met, keep
+        # adding the PU that most reduces the space penalty until every space
+        # target is met or no candidate improves. Separate phase — NOT a term
+        # in _score_pu (which returns None once amount targets are met, and
+        # whose HEURTYPE scales are incommensurable with a space term).
+        space_active = (
+            "space_target" in problem.features.columns
+            and (problem.features["space_target"] > 0).any()
+        )
+        if space_active:
+            from pymarxan.solvers.space_state import SpaceState
+            ss = SpaceState.from_problem(
+                problem, self._space_spec or SpaceSpec(), selected,
+            )
+            while not ss.all_targets_met() and len(available) > 0:
+                best_idx = -1
+                best_gain = 0.0
+                for idx in available:
+                    gain = -ss.delta_penalty(int(idx), True)  # penalty reduction
+                    if gain > best_gain:
+                        best_gain = gain
+                        best_idx = int(idx)
+                if best_idx < 0:
+                    break
+                selected[best_idx] = True
+                ss.apply_flip(best_idx, True)
+                available = available[available != best_idx]
+
         # Build solution using shared utility (handles boundary, penalty,
         # targets, shortfall, cost-threshold consistently with all solvers)
         blm = float(problem.parameters.get("BLM", 0.0))
@@ -286,6 +321,7 @@ class HeuristicSolver(Solver):
             selected,
             blm,
             metadata={"solver": "greedy", "heurtype": effective_heurtype},
+            space_spec=self._space_spec,
         )
 
     def name(self) -> str:

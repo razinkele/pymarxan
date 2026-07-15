@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from pymarxan.adequacy.model import SpaceSpec, pu_attribute_space
-from pymarxan.adequacy.space import compute_space_held
+from pymarxan.adequacy.space import compute_space_held, evaluate_solution_space
 
-__all__ = ["SpaceSpec", "compute_space_held", "pu_attribute_space"]
+__all__ = [
+    "SpaceSpec",
+    "compute_space_held",
+    "evaluate_solution_space",
+    "pu_attribute_space",
+]
