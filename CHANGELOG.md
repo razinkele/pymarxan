@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MESH-maximizing restoration optimizer (restoptr-style, `pymarxan.restoration`).**
+  `greedy_mesh_restore(problem, budget)` greedily restores cells (best marginal MESH gain per unit
+  cost, `criterion="gain_per_cost"` | `"gain"`) under a cost budget, returning a
+  `MeshRestorationResult` — the restoration plan plus a cost-indexed budget–MESH frontier
+  (`mesh_curve` / `cost_curve` / `order`, so any prefix reconstructs a sub-budget plan). A fast
+  heuristic (MESH is supermodular, so no approximation guarantee — restoptr uses an exact
+  constraint-programming solver). Completes the restoptr MESH arc: measure → data model → optimizer.
+  SA refinement, `min_restore`, and connectivity indices (IIC/PC) are follow-ons.
+
 ## [0.29.0] — 2026-07-15
 
 ### Added
