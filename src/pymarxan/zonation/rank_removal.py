@@ -117,7 +117,10 @@ def rank_removal(
     ULPs), which can flip exact float near-ties; float costs affect curve
     values only. ``ValueError`` on invalid input: negative or non-finite
     amounts/weights (negative weights — a Zonation v3+ opportunity-cost
-    workflow — are not yet supported), non-finite costs, zero planning units.
+    workflow — are not yet supported), non-finite costs (when ``use_cost=True``),
+    zero planning units. Raises ``RuntimeError`` if scores become non-finite
+    mid-run (e.g. subnormal amounts overflowing ``w/Q``) and removal can make
+    no progress.
     Smoothing stays vector-scale (n_pu <= 50_000).
     ``_force_full_rescore`` is test-only: it disables the dirty-set shortcut.
     """

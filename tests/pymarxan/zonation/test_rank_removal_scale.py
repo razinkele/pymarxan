@@ -530,3 +530,14 @@ def test_subnormal_amount_raises_instead_of_hanging() -> None:
     for rule in ("caz", "abf"):
         with pytest.raises(RuntimeError, match="no progress"):
             rank_removal(p, rule=rule, warp=1)
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_cost_curve_never_negative_float_costs(rule: str) -> None:
+    # The max(cost_remaining, 0.0) clamp is load-bearing for float costs:
+    # sequential subtraction can end at a tiny negative residual (design §7
+    # site 2). Pin non-negativity across several float-cost seeds.
+    for seed in range(6):
+        p = _random_problem(seed, integer=False)
+        res = rank_removal(p, rule=rule, warp=3)
+        assert (res.performance_curves["prop_cost_remaining"] >= 0).all()
