@@ -13,6 +13,8 @@ deterministically -> change the seed, never loosen to allclose on order.
 """
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -360,7 +362,6 @@ def test_equivalence_smoothing_path(rule: str) -> None:
 # the FUNCTION (zonation/__init__.py re-exports it, shadowing the submodule of
 # the same name — even `import pymarxan.zonation.rank_removal as m` binds the
 # function). importlib is the only way to get the module object.
-import importlib
 
 rr_module = importlib.import_module("pymarxan.zonation.rank_removal")
 
