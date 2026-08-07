@@ -4,6 +4,11 @@ Distinct from ``pymarxan.analysis.rank_importance`` (Jung et al. 2021), which
 ranks only the *selected* PUs of an existing solution by Marxan-objective
 increase; this ranks *every* PU from the whole landscape by proportional
 biological loss.
+
+Note: real Zonation additionally restricts removal candidates to *edge* cells
+(8-neighbour adjacency to already-removed area) — both an ecological choice and
+a major speedup; this engine considers all remaining cells, a deliberate
+v0.13-era difference, unchanged here.
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from pymarxan.zonation.smoothing import SmoothingSpec
 
 _SMOOTHING_MAX_PU = 50_000
 _WARP_ADVISORY_MIN_PU = 50_000
+_RESCORE_CHUNK = 32_768
 
 
 def _warn_if_small_warp(n_pu: int, warp: int) -> None:
@@ -81,6 +87,7 @@ def rank_removal(
     warp: int = 1,
     use_cost: bool = True,
     smoothing: SmoothingSpec | None = None,
+    _force_full_rescore: bool = False,
 ) -> ZonationResult:
     """Rank every planning unit by iterative backward removal.
 
@@ -96,14 +103,26 @@ def rank_removal(
     Locked-out cells are removed first, locked-in last; the removal order is the
     priority ranking (last removed = rank 1.0).
 
-    The O(n^2 * n_feat) recompute is inherent — removing a cell shifts every
-    ``Q_j``, so the Marxan per-flip delta model does not apply (only ``Q_j -=
-    q_ij`` is incremental). ``warp`` is the scaling knob; this suits vector PUs
-    (hundreds to low-thousands), not million-cell rasters.
+    Scaling: the engine is sparse and incremental. Per batch it rescores only
+    cells whose features' remaining totals changed (dirty set) — via chunked
+    dense row buffers that reuse the reference engine's exact expressions, so
+    per-row scores are bitwise-identical to the pre-rewrite engine given
+    identical remaining totals — selects the ``warp`` smallest (ties by PU
+    index) via partition, and updates totals, cost and curves incrementally.
+    Init is O(nnz); million-cell rasters rank in minutes at raster-appropriate
+    ``warp`` (an advisory warns; silence via ``warnings.filterwarnings``).
+    Equivalence to the reference engine: exact removal order for BOTH rules on
+    integer amounts (while sums stay below 2**53); float amounts (including
+    smoothed matrices) can differ only via initial-total summation order (a few
+    ULPs), which can flip exact float near-ties; float costs affect curve
+    values only. ``ValueError`` on invalid input: negative or non-finite
+    amounts/weights (negative weights — a Zonation v3+ opportunity-cost
+    workflow — are not yet supported), non-finite costs, zero planning units.
+    Smoothing stays vector-scale (n_pu <= 50_000).
+    ``_force_full_rescore`` is test-only: it disables the dirty-set shortcut.
     """
     if rule not in ("caz", "abf"):
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
-
     _validate_inputs(problem, weights)
 
     n_pu_total = problem.n_planning_units
@@ -114,10 +133,15 @@ def rank_removal(
             "distribution smoothing (grid convolution) is a planned follow-up."
         )
 
-    q = problem.build_pu_feature_matrix()  # (n_pu, n_feat), rows = PU order
+    from scipy.sparse import csr_matrix
+
     if smoothing is not None:
-        q = smoothing.apply(q)
+        q = csr_matrix(smoothing.apply(problem.build_pu_feature_matrix()))
+    else:
+        q = problem.build_pu_feature_csr()
+    q.eliminate_zeros()  # freshly built and ours: stored zeros must not mark dirty
     n_pu, n_feat = q.shape
+    csc = q.tocsc()
     pu_ids = problem.planning_units["id"].to_numpy()
     feat_ids = problem.features["id"].to_numpy()
     status = problem.planning_units["status"].to_numpy()
@@ -141,10 +165,14 @@ def rank_removal(
     _warn_if_small_warp(n_pu, warp)
 
     remaining = np.ones(n_pu, dtype=bool)
-    Q = q.sum(axis=0)          # remaining totals per feature
-    T = Q.copy()               # original totals (for curves)
+    n_remaining = n_pu
+    Q = np.asarray(q.sum(axis=0)).ravel()
+    T = Q.copy()
     T_safe = np.where(T > 0, T, 1.0)
     cost_total = float(c.sum()) if c.sum() > 0 else 1.0
+    cost_remaining = float(c.sum())
+    delta = np.zeros(n_pu, dtype=float)
+    dirty = np.ones(n_pu, dtype=bool)
 
     removal_order: list[int] = []
     curve_rows: list[dict] = []
@@ -152,8 +180,10 @@ def rank_removal(
     def record_curve() -> None:
         retained = np.where(T > 0, Q / T_safe, 1.0)
         row: dict = {
-            "prop_landscape_remaining": remaining.sum() / n_pu,
-            "prop_cost_remaining": float(c[remaining].sum()) / cost_total,
+            "prop_landscape_remaining": n_remaining / n_pu,
+            # max(): float-cost sequential drift can leave a tiny negative
+            # residual at run end (design §7 site 2); exact for integer costs.
+            "prop_cost_remaining": max(cost_remaining, 0.0) / cost_total,
         }
         for j, fid in enumerate(feat_ids):
             row[f"feat_{int(fid)}"] = float(retained[j])
@@ -170,27 +200,68 @@ def rank_removal(
             return np.flatnonzero(normal)
         return np.flatnonzero(remaining & (status == STATUS_LOCKED_IN))
 
-    while remaining.any():
-        cand = candidate_indices()  # ascending PU-index order
-        # w_j * q_ij / Q_j on the candidate slice; extinct features (Q_j == 0)
-        # contribute 0 (Q_safe avoids the divide; the mask covers any residue).
-        Q_safe = np.where(Q > 0, Q, 1.0)
-        r = q[cand] * (w / Q_safe)
-        r[:, Q <= 0] = 0.0
+    def rescore(rows: np.ndarray) -> None:
+        """Recompute delta for the given rows from current Q.
+
+        Chunked-dense kernel (design-review #9): reuse the reference engine's
+        exact expressions on (chunk, n_feat) row buffers, so per-row scores are
+        bitwise-identical to the dense engine given identical Q — numpy's
+        per-row reduction depends only on the row, never on chunk shape.
+        """
+        if rows.size == 0:
+            return
         if n_feat == 0:
-            delta = np.zeros(cand.size)
-        elif rule == "caz":
-            delta = r.max(axis=1)
-        else:  # abf
-            delta = r.sum(axis=1)
-        delta = delta / c[cand]
-        # stable sort → ties broken by PU index (cand is ascending)
-        order = np.argsort(delta, kind="stable")
+            delta[rows] = 0.0
+            dirty[rows] = False
+            return
+        Q_safe = np.where(Q > 0, Q, 1.0)
+        fac = w / Q_safe
+        dead = Q <= 0
+        for s in range(0, rows.size, _RESCORE_CHUNK):
+            chunk = rows[s : s + _RESCORE_CHUNK]
+            r = q[chunk].toarray() * fac
+            r[:, dead] = 0.0
+            out = r.max(axis=1) if rule == "caz" else r.sum(axis=1)
+            delta[chunk] = out / c[chunk]
+        dirty[rows] = False
+
+    indptr, indices, data = q.indptr, q.indices, q.data
+
+    while n_remaining > 0:
+        cand = candidate_indices()  # ascending PU-index order
+        stale = cand if _force_full_rescore else cand[dirty[cand]]
+        rescore(stale)
+        d = delta[cand]
         k = min(warp, cand.size)
-        for idx in cand[order[:k]]:
+        if k == cand.size:
+            sel = np.argsort(d, kind="stable")
+        else:
+            part = np.argpartition(d, k - 1)
+            v = d[part[k - 1]]
+            below = np.flatnonzero(d < v)
+            ties = np.flatnonzero(d == v)
+            sel = np.concatenate([below, ties[: k - below.size]])
+            sel = sel[np.argsort(d[sel], kind="stable")]  # emission: (delta, index)
+        removed = cand[sel]
+        changed_parts: list[np.ndarray] = []
+        for idx in removed:
             removal_order.append(int(pu_ids[idx]))
             remaining[idx] = False
-            Q -= q[idx]
+            s, e = indptr[idx], indptr[idx + 1]
+            Q[indices[s:e]] -= data[s:e]  # sequential, matching the dense engine
+            changed_parts.append(indices[s:e])
+            cost_remaining -= float(c[idx])
+        n_remaining -= removed.size
+        if changed_parts:
+            changed = np.unique(np.concatenate(changed_parts))
+            holders = (
+                np.concatenate(
+                    [csc.indices[csc.indptr[j] : csc.indptr[j + 1]] for j in changed]
+                )
+                if changed.size
+                else np.zeros(0, dtype=np.intp)
+            )
+            dirty[holders] = True
         record_curve()
 
     priority_rank = {

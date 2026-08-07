@@ -468,3 +468,15 @@ def test_warp_advisory_called_from_rank_removal(
     p = _random_problem(0, n_pu=12)
     rank_removal(p, warp=3)
     assert calls == [(12, 3)]
+
+
+# --- Task 3: the sparse engine must never densify -------------------------
+def test_no_dense_matrix_without_smoothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    p = _random_problem(3)
+
+    def _boom(self: ConservationProblem) -> None:
+        raise AssertionError("dense build_pu_feature_matrix called in sparse path")
+
+    monkeypatch.setattr(ConservationProblem, "build_pu_feature_matrix", _boom)
+    res = rank_removal(p, rule="caz", warp=2)
+    assert len(res.removal_order) == p.n_planning_units
