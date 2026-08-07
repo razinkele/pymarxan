@@ -470,6 +470,23 @@ def test_warp_advisory_called_from_rank_removal(
     assert calls == [(12, 3)]
 
 
+# --- Task 4: dirty-set shortcut === full rescore --------------------------
+@pytest.mark.parametrize("integer", [True, False])
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_dirty_set_equals_full_rescore(rule: str, integer: bool) -> None:
+    # Bit-identical by construction (design §4.4): a clean cell's inputs are
+    # unchanged, so skipping its rescore cannot change any value. The FLOAT
+    # case is where this test has power the dense oracle doesn't (review
+    # finding #6): dense-vs-sparse is only ULP-close there, but dirty-vs-full
+    # within the sparse engine must stay exactly equal.
+    p = _random_problem(21, n_pu=120, n_feat=8, statuses=True, integer=integer)
+    for warp in (1, 5):
+        _assert_equal_results(
+            rank_removal(p, rule=rule, warp=warp),
+            rank_removal(p, rule=rule, warp=warp, _force_full_rescore=True),
+        )
+
+
 # --- Task 3: the sparse engine must never densify -------------------------
 def test_no_dense_matrix_without_smoothing(monkeypatch: pytest.MonkeyPatch) -> None:
     p = _random_problem(3)
