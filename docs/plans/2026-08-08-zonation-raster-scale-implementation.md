@@ -37,12 +37,15 @@ The oracle is the CURRENT engine, copied verbatim. All tests in this task must P
 """Characterization + equivalence suite for the sparse rank_removal rewrite.
 
 The oracle ``_dense_rank_removal`` is a verbatim copy of the pre-rewrite dense
-engine (v0.13.0 lineage). Every test here passed against that engine before the
-rewrite; the sparse engine must keep them green per the FP contract in
-docs/plans/2026-08-08-zonation-raster-scale-design.md §7:
-CAZ + integer amounts -> exact; ABF -> exact on the fixed seeds below (near-tie
-flips would fail deterministically -> change the seed, never loosen to allclose
-on order).
+engine (v0.13.0 lineage), INCLUDING its smoothing branch. Every test here passed
+against that engine before the rewrite; the sparse engine must keep them green
+per the FP contract in docs/plans/2026-08-08-zonation-raster-scale-design.md §7:
+integer amounts -> exact removal order for BOTH rules (the chunked-dense rescore
+kernel reuses the dense engine's per-row expressions, so the only FP boundaries
+are the initial-Q summation order — float amounts only — and the incremental
+cost curve — float costs only). Float/smoothed fixtures pin fixed seeds and
+assert exact order; a near-tie flip after a numpy/scipy upgrade fails
+deterministically -> change the seed, never loosen to allclose on order.
 """
 from __future__ import annotations
 
@@ -57,11 +60,13 @@ from pymarxan.models.problem import (
 )
 from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.result import ZonationResult
+from pymarxan.zonation.smoothing import SmoothingSpec
 
 
 # --------------------------------------------------------------------------
-# Oracle: verbatim copy of the dense engine (drop only the smoothing branch —
-# equivalence fixtures never smooth; smoothing keeps its own existing tests).
+# Oracle: verbatim copy of the dense engine, smoothing branch included
+# (review finding #5: the smoothing path changes materially in the rewrite,
+# so it needs oracle coverage too).
 # --------------------------------------------------------------------------
 def _dense_rank_removal(
     problem: ConservationProblem,
@@ -70,8 +75,11 @@ def _dense_rank_removal(
     weights: dict[int, float] | None = None,
     warp: int = 1,
     use_cost: bool = True,
+    smoothing: SmoothingSpec | None = None,
 ) -> ZonationResult:
     q = problem.build_pu_feature_matrix()
+    if smoothing is not None:
+        q = smoothing.apply(q)
     n_pu, n_feat = q.shape
     pu_ids = problem.planning_units["id"].to_numpy()
     feat_ids = problem.features["id"].to_numpy()
@@ -174,6 +182,8 @@ def _random_problem(
         status[rng.random(n_pu) < 0.1] = STATUS_LOCKED_IN
         status[rng.random(n_pu) < 0.1] = STATUS_LOCKED_OUT
     cost = rng.integers(1, 6, size=n_pu).astype(float) if costs else np.ones(n_pu)
+    if not integer and costs:
+        cost = cost * rng.uniform(0.5, 1.5, size=n_pu)  # float-cost regime (§7 site 2)
     planning_units = pd.DataFrame({"id": pu_ids, "cost": cost, "status": status})
     feat_ids = list(range(1, n_feat + 1))
     features = pd.DataFrame(
@@ -311,21 +321,73 @@ def test_tie_break_pinned() -> None:
 
 
 @pytest.mark.parametrize("rule", ["caz", "abf"])
-def test_float_amounts_scores_close(rule: str) -> None:
-    # Float amounts: order may legitimately differ at exact float near-ties
-    # (design §7), so compare ranks as sets-by-tolerance instead of exactly:
-    # every PU's rank must be within one removal position of the oracle's, and
-    # the recorded curves must agree to tight tolerance at matching steps.
+def test_float_amounts_fixed_seed_exact(rule: str) -> None:
+    # Float amounts AND float costs. The only order-affecting FP boundary is
+    # the initial-Q summation order (design §7); on this fixed seed no near-tie
+    # flips, so order equality is exact and deterministic. If a numpy/scipy
+    # upgrade ever flips it: change the seed, never loosen (a rank-tolerance
+    # band would be unprincipled — a mid-run flip cascades arbitrarily,
+    # review finding #13). atol covers exact-zero terminal curve rows against
+    # the float-cost accumulator drift (finding #7).
     p = _random_problem(11, integer=False)
     a = rank_removal(p, rule=rule, warp=2)
     b = _dense_rank_removal(p, rule=rule, warp=2)
-    n = len(a.priority_rank)
-    for pu_id, rank in a.priority_rank.items():
-        assert abs(rank - b.priority_rank[pu_id]) <= 1.5 / n
+    assert a.removal_order == b.removal_order
+    assert a.priority_rank == b.priority_rank
     np.testing.assert_allclose(
         a.performance_curves.to_numpy(),
         b.performance_curves.to_numpy(),
         rtol=1e-9,
+        atol=1e-12,
+    )
+
+
+def test_equivalence_stored_zero_row() -> None:
+    # Explicit amount=0.0 pvf rows become stored zeros in the CSR;
+    # eliminate_zeros() strips them so they can't mark features dirty
+    # (review finding #14 — this was dead-path before this fixture).
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 1.0], "status": [0, 0, 0]})
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 2.0},
+            {"species": 1, "pu": 2, "amount": 0.0},  # explicit stored zero
+            {"species": 2, "pu": 2, "amount": 3.0},
+            {"species": 2, "pu": 3, "amount": 1.0},
+        ]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    for rule in ("caz", "abf"):
+        _assert_equal_results(
+            rank_removal(p, rule=rule), _dense_rank_removal(p, rule=rule)
+        )
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_equivalence_wide_feature_matrix(rule: str) -> None:
+    # Production-width regime (10-100 features; review finding #8). Integer
+    # amounts stay EXACT for both rules under the chunked-dense kernel.
+    p = _random_problem(5, n_pu=60, n_feat=25)
+    for warp in (1, 6):
+        _assert_equal_results(
+            rank_removal(p, rule=rule, warp=warp),
+            _dense_rank_removal(p, rule=rule, warp=warp),
+        )
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_equivalence_smoothing_path(rule: str) -> None:
+    # The smoothing path (dense -> smoothing.apply -> csr -> sparse engine)
+    # needs oracle coverage too (review finding #5). Smoothed matrices are
+    # float -> fixed-seed exact per the §7 caveat (flip => change seed).
+    rng = np.random.default_rng(17)
+    p = _random_problem(17, n_pu=18, n_feat=4)
+    spec = SmoothingSpec(alpha=0.5, coords=rng.uniform(0, 10, size=(18, 2)))
+    _assert_equal_results(
+        rank_removal(p, rule=rule, smoothing=spec),
+        _dense_rank_removal(p, rule=rule, smoothing=spec),
     )
 ```
 
@@ -352,34 +414,89 @@ TDD, failing-first. All three land in the still-dense engine so the Task 3 rewri
 - Test: `tests/pymarxan/zonation/test_rank_removal_scale.py` (append)
 
 **Interfaces:**
-- Produces: module constants `_SMOOTHING_MAX_PU = 50_000`, `_WARP_ADVISORY_MIN_PU = 50_000`; helper `_warn_if_small_warp(n_pu: int, warp: int) -> None`. Task 3 keeps all three and the call sites.
+- Produces: module constants `_SMOOTHING_MAX_PU = 50_000`, `_WARP_ADVISORY_MIN_PU = 50_000`; helpers `_warn_if_small_warp(n_pu: int, warp: int) -> None` and `_validate_inputs(problem: ConservationProblem, weights: dict[int, float] | None) -> None`. Task 3 keeps all of them and the call sites verbatim.
 
 - [ ] **Step 1: Append failing tests**
 
 ```python
 # --- Task 2: guards -------------------------------------------------------
-from pymarxan.zonation import rank_removal as rr_module
-from pymarxan.zonation.smoothing import SmoothingSpec
+# HIGH review finding #1: `from pymarxan.zonation import rank_removal` binds
+# the FUNCTION (zonation/__init__.py re-exports it, shadowing the submodule of
+# the same name — even `import pymarxan.zonation.rank_removal as m` binds the
+# function). importlib is the only way to get the module object.
+import importlib
+
+rr_module = importlib.import_module("pymarxan.zonation.rank_removal")
+
+
+def _pvf_problem(pvf_rows: list[dict]) -> ConservationProblem:
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    return ConservationProblem(pu, feats, pd.DataFrame(pvf_rows))
 
 
 def test_negative_amount_raises() -> None:
-    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
-    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
-    pvf = pd.DataFrame(
+    p = _pvf_problem(
         [
             {"species": 1, "pu": 1, "amount": 2.0},
             {"species": 1, "pu": 2, "amount": -1.0},
         ]
     )
-    p = ConservationProblem(pu, feats, pvf)
     with pytest.raises(ValueError, match="amounts must be >= 0"):
         rank_removal(p)
 
 
-def test_negative_weight_raises() -> None:
+def test_negative_amount_cancelling_duplicate_raises() -> None:
+    # Raw-input validation (review finding #4): a -5 that a +5 duplicate sums
+    # to zero in the matrix must STILL raise — the contract is on raw amounts.
+    p = _pvf_problem(
+        [
+            {"species": 1, "pu": 1, "amount": 5.0},
+            {"species": 1, "pu": 1, "amount": -5.0},
+            {"species": 1, "pu": 2, "amount": 1.0},
+        ]
+    )
+    with pytest.raises(ValueError, match="amounts must be >= 0"):
+        rank_removal(p)
+
+
+def test_nan_amount_raises() -> None:
+    # NaN passes every `< 0` guard and would stall the sparse selection loop
+    # (review finding #2, correctness-critical) — reject up front.
+    p = _pvf_problem(
+        [
+            {"species": 1, "pu": 1, "amount": 2.0},
+            {"species": 1, "pu": 2, "amount": float("nan")},
+        ]
+    )
+    with pytest.raises(ValueError, match="amounts must be finite"):
+        rank_removal(p)
+
+
+def test_nan_cost_raises() -> None:
+    p = _random_problem(0)
+    p.planning_units.loc[0, "cost"] = float("nan")
+    with pytest.raises(ValueError, match="costs must be finite"):
+        rank_removal(p)
+
+
+def test_negative_or_nan_weight_raises() -> None:
     p = _random_problem(0)
     with pytest.raises(ValueError, match="weights must be >= 0"):
         rank_removal(p, weights={1: -2.0})
+    with pytest.raises(ValueError, match="weights must be finite"):
+        rank_removal(p, weights={1: float("nan")})
+
+
+def test_zero_pu_raises() -> None:
+    # Review finding #12: dense returned a NaN curve row; sparse would
+    # ZeroDivisionError — a clear ValueError beats both.
+    pu = pd.DataFrame({"id": [], "cost": [], "status": []})
+    feats = pd.DataFrame({"id": [], "name": [], "target": [], "spf": []})
+    pvf = pd.DataFrame(columns=["species", "pu", "amount"])
+    p = ConservationProblem(pu, feats, pvf)
+    with pytest.raises(ValueError, match="at least one planning unit"):
+        rank_removal(p)
 
 
 def test_smoothing_capped_at_vector_scale(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -416,12 +533,13 @@ def test_warp_advisory_called_from_rank_removal(
     assert calls == [(12, 3)]
 ```
 
-Note on `test_smoothing_capped_at_vector_scale`: if `n_planning_units` is not a property on `ConservationProblem` (check `src/pymarxan/models/problem.py`; it may be a plain method or derived attribute), adapt the monkeypatch to whatever it is — the point is a fake 50_001 count without building 50k rows. If it resists monkeypatching cleanly, build a real 50_001-row `planning_units` frame with empty features instead (fast: one `pd.DataFrame` of three columns; the guard raises before any O(n²) work).
+Note on `test_smoothing_capped_at_vector_scale`: `n_planning_units` IS a `@property` (`problem.py:66`) and the grounding review verified this exact monkeypatch works verbatim, including undo. The smoothing-cap check reads it BEFORE any matrix build, but `_validate_inputs` runs first and also reads it — the property fake (50_001) satisfies both since the fixture has real pvf rows.
 
 - [ ] **Step 2: Run to verify the five tests fail**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_rank_removal_scale.py -v -k "negative or smoothing_capped or advisory"`
-Expected: 5 FAIL (`AttributeError: _warn_if_small_warp` / no raise / no warn).
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_rank_removal_scale.py -v -k "negative or nan or zero_pu or smoothing_capped or advisory"`
+Expected: 9 FAIL (`AttributeError: _warn_if_small_warp` / no raise / no warn). If any
+of them errors during COLLECTION instead, fix the test file first.
 
 - [ ] **Step 3: Implement the guards in `rank_removal.py`**
 
@@ -438,12 +556,17 @@ def _warn_if_small_warp(n_pu: int, warp: int) -> None:
     """Advise (warn-and-proceed, S3b precedent) when warp is too small to scale.
 
     warp=1 selection alone is O(n^2) at raster scale regardless of sparse
-    rescoring; Zonation's own raster practice is warp in the hundreds-plus.
+    rescoring. Large warp (10-100) is documented Zonation practice as a
+    computation-time vs solution-refinement trade-off; ``warp ~ n_pu/1000`` is
+    pymarxan performance advice for million-cell grids, not a Zonation norm.
+    Silence with ``warnings.filterwarnings`` when a small warp is deliberate.
     """
     if n_pu > _WARP_ADVISORY_MIN_PU and warp < n_pu // 10_000:
         warnings.warn(
             f"rank_removal with n_pu={n_pu} and warp={warp} will be slow: "
-            f"warp is Zonation's raster-scale knob; consider warp≈{n_pu // 1000}.",
+            f"larger warp trades solution refinement for speed (documented "
+            f"Zonation practice: 10-100); consider warp≈{n_pu // 1000}. "
+            "Silence via warnings.filterwarnings if deliberate.",
             stacklevel=3,
         )
 ```
@@ -466,16 +589,54 @@ After the existing `warp = max(1, min(int(warp), max(n_pu, 1)))` line:
     _warn_if_small_warp(n_pu, warp)
 ```
 
-After `q` is built (both branches), and after `w` is filled:
+Add a module-level validation helper (raw inputs — review findings #2/#4: NaN
+passes every `< 0` guard, and raw-input checking keeps the contract identical
+across the plain and smoothing paths and across the dense/sparse engine eras):
 
 ```python
-    if q.size and float(q.min()) < 0.0:
+def _validate_inputs(
+    problem: ConservationProblem, weights: dict[int, float] | None
+) -> None:
+    """Raise ValueError for inputs the engine cannot rank meaningfully.
+
+    Raw (pre-duplicate-sum, pre-smoothing) amounts are checked so the plain and
+    smoothing paths enforce one contract. NaNs must be rejected up front: they
+    pass every ``< 0`` comparison and would stall the removal loop. Negative
+    weights are a real Zonation v3+ workflow (opportunity-cost features;
+    Moilanen et al. 2011, doi:10.1890/10-1865.1) but are not yet supported.
+    """
+    if problem.n_planning_units == 0:
+        raise ValueError("rank_removal requires at least one planning unit")
+    amt = problem.pu_vs_features["amount"].to_numpy(dtype=float)
+    if amt.size and not np.isfinite(amt).all():
+        raise ValueError("feature amounts must be finite for rank_removal")
+    if amt.size and (amt < 0).any():
         raise ValueError("feature amounts must be >= 0 for rank_removal")
-    if np.any(w < 0):
-        raise ValueError("feature weights must be >= 0 for rank_removal")
+    if weights:
+        wv = np.asarray(list(weights.values()), dtype=float)
+        if not np.isfinite(wv).all():
+            raise ValueError("feature weights must be finite for rank_removal")
+        if (wv < 0).any():
+            raise ValueError(
+                "feature weights must be >= 0 for rank_removal (negative "
+                "weights, used by Zonation v3+ for opportunity-cost features, "
+                "are not yet supported)"
+            )
 ```
 
-(In this task `q` is still the dense matrix, so `q.min()`; Task 3 switches the check to `q.data.min()` on the sparse matrix.)
+Call it in `rank_removal` immediately after the `rule` check (BEFORE the
+smoothing guard — the 0-PU/NaN checks must win over everything). Finally, in
+the `use_cost` branch, extend the existing cost check:
+
+```python
+        c = problem.planning_units["cost"].to_numpy().astype(float)
+        if not np.isfinite(c).all():
+            raise ValueError("planning-unit costs must be finite for rank_removal")
+        if np.any(c <= 0):
+            raise ValueError("use_cost=True requires every planning-unit cost > 0")
+```
+
+(Identical code survives Task 3 unchanged — the validation never moves.)
 
 - [ ] **Step 4: Run the whole scale test file + existing zonation tests — all green**
 
@@ -519,7 +680,7 @@ def test_no_dense_matrix_without_smoothing(monkeypatch: pytest.MonkeyPatch) -> N
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_rank_removal_scale.py::test_no_dense_matrix_without_smoothing -v`
 Expected: FAIL with the AssertionError (current engine densifies).
 
-- [ ] **Step 3: Rewrite the engine.** Replace the body of `rank_removal` below the guards; keep the module docstring's science paragraphs, replace its scaling paragraph. Full new `rank_removal.py` (imports + helper from Task 2 retained):
+- [ ] **Step 3: Rewrite the engine.** Replace the body of `rank_removal` below the guards; keep the module docstring's science paragraphs, replace its scaling paragraph. Full new `rank_removal.py` — the Task-2 helpers `_warn_if_small_warp` (shown) and `_validate_inputs` (defined in Task 2, retained verbatim between the two shown functions) both carry over unchanged:
 
 ```python
 """Zonation CAZ/ABF rank-removal engine (Moilanen et al. 2005; Moilanen 2007).
@@ -528,6 +689,11 @@ Distinct from ``pymarxan.analysis.rank_importance`` (Jung et al. 2021), which
 ranks only the *selected* PUs of an existing solution by Marxan-objective
 increase; this ranks *every* PU from the whole landscape by proportional
 biological loss.
+
+Note: real Zonation additionally restricts removal candidates to *edge* cells
+(8-neighbour adjacency to already-removed area) — both an ecological choice and
+a major speedup; this engine considers all remaining cells, a deliberate
+v0.13-era difference, unchanged here.
 """
 from __future__ import annotations
 
@@ -546,18 +712,24 @@ from pymarxan.zonation.smoothing import SmoothingSpec
 
 _SMOOTHING_MAX_PU = 50_000
 _WARP_ADVISORY_MIN_PU = 50_000
+_RESCORE_CHUNK = 32_768
 
 
 def _warn_if_small_warp(n_pu: int, warp: int) -> None:
     """Advise (warn-and-proceed, S3b precedent) when warp is too small to scale.
 
     warp=1 selection alone is O(n^2) at raster scale regardless of sparse
-    rescoring; Zonation's own raster practice is warp in the hundreds-plus.
+    rescoring. Large warp (10-100) is documented Zonation practice as a
+    computation-time vs solution-refinement trade-off; ``warp ~ n_pu/1000`` is
+    pymarxan performance advice for million-cell grids, not a Zonation norm.
+    Silence with ``warnings.filterwarnings`` when a small warp is deliberate.
     """
     if n_pu > _WARP_ADVISORY_MIN_PU and warp < n_pu // 10_000:
         warnings.warn(
             f"rank_removal with n_pu={n_pu} and warp={warp} will be slow: "
-            f"warp is Zonation's raster-scale knob; consider warp≈{n_pu // 1000}.",
+            f"larger warp trades solution refinement for speed (documented "
+            f"Zonation practice: 10-100); consider warp≈{n_pu // 1000}. "
+            "Silence via warnings.filterwarnings if deliberate.",
             stacklevel=3,
         )
 
@@ -587,18 +759,26 @@ def rank_removal(
     priority ranking (last removed = rank 1.0).
 
     Scaling: the engine is sparse and incremental. Per batch it rescores only
-    cells whose features' remaining totals changed (dirty set), selects the
-    ``warp`` smallest (ties by PU index) via partition, and updates ``Q``, cost
-    and curves incrementally — init O(nnz), so million-cell rasters rank in
-    minutes at raster-appropriate ``warp`` (≈ n_pu/1000; an advisory warns).
-    Results match the reference dense engine exactly on integer amounts for CAZ;
-    ABF row sums (and any float amounts) may differ by a few ULPs, which can
-    flip exact float near-ties in the order. Negative amounts or weights raise
-    ``ValueError``. Smoothing stays vector-scale (n_pu <= 50_000).
+    cells whose features' remaining totals changed (dirty set) — via chunked
+    dense row buffers that reuse the reference engine's exact expressions, so
+    per-row scores are bitwise-identical to the pre-rewrite engine given
+    identical remaining totals — selects the ``warp`` smallest (ties by PU
+    index) via partition, and updates totals, cost and curves incrementally.
+    Init is O(nnz); million-cell rasters rank in minutes at raster-appropriate
+    ``warp`` (an advisory warns; silence via ``warnings.filterwarnings``).
+    Equivalence to the reference engine: exact removal order for BOTH rules on
+    integer amounts (while sums stay below 2**53); float amounts (including
+    smoothed matrices) can differ only via initial-total summation order (a few
+    ULPs), which can flip exact float near-ties; float costs affect curve
+    values only. ``ValueError`` on invalid input: negative or non-finite
+    amounts/weights (negative weights — a Zonation v3+ opportunity-cost
+    workflow — are not yet supported), non-finite costs, zero planning units.
+    Smoothing stays vector-scale (n_pu <= 50_000).
     ``_force_full_rescore`` is test-only: it disables the dirty-set shortcut.
     """
     if rule not in ("caz", "abf"):
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
+    _validate_inputs(problem, weights)
 
     n_pu_total = problem.n_planning_units
     if smoothing is not None and n_pu_total > _SMOOTHING_MAX_PU:
@@ -627,13 +807,10 @@ def rank_removal(
             if int(fid) in weights:
                 w[j] = float(weights[int(fid)])
 
-    if q.nnz and float(q.data.min()) < 0.0:
-        raise ValueError("feature amounts must be >= 0 for rank_removal")
-    if np.any(w < 0):
-        raise ValueError("feature weights must be >= 0 for rank_removal")
-
     if use_cost:
         c = problem.planning_units["cost"].to_numpy().astype(float)
+        if not np.isfinite(c).all():
+            raise ValueError("planning-unit costs must be finite for rank_removal")
         if np.any(c <= 0):
             raise ValueError("use_cost=True requires every planning-unit cost > 0")
     else:
@@ -659,7 +836,9 @@ def rank_removal(
         retained = np.where(T > 0, Q / T_safe, 1.0)
         row: dict = {
             "prop_landscape_remaining": n_remaining / n_pu,
-            "prop_cost_remaining": cost_remaining / cost_total,
+            # max(): float-cost sequential drift can leave a tiny negative
+            # residual at run end (design §7 site 2); exact for integer costs.
+            "prop_cost_remaining": max(cost_remaining, 0.0) / cost_total,
         }
         for j, fid in enumerate(feat_ids):
             row[f"feat_{int(fid)}"] = float(retained[j])
@@ -677,22 +856,28 @@ def rank_removal(
         return np.flatnonzero(remaining & (status == STATUS_LOCKED_IN))
 
     def rescore(rows: np.ndarray) -> None:
-        """Recompute delta for the given row indices from current Q."""
+        """Recompute delta for the given rows from current Q.
+
+        Chunked-dense kernel (design-review #9): reuse the reference engine's
+        exact expressions on (chunk, n_feat) row buffers, so per-row scores are
+        bitwise-identical to the dense engine given identical Q — numpy's
+        per-row reduction depends only on the row, never on chunk shape.
+        """
         if rows.size == 0:
             return
-        factor = np.where(Q > 0, w / np.where(Q > 0, Q, 1.0), 0.0)
-        sub = q[rows]
-        vals = sub.data * factor[sub.indices]
-        counts = np.diff(sub.indptr)
-        out = np.zeros(rows.size, dtype=float)
-        nonempty = counts > 0
-        if nonempty.any():
-            starts = sub.indptr[:-1][nonempty]
-            if rule == "caz":
-                out[nonempty] = np.maximum(np.maximum.reduceat(vals, starts), 0.0)
-            else:
-                out[nonempty] = np.add.reduceat(vals, starts)
-        delta[rows] = out / c[rows]
+        if n_feat == 0:
+            delta[rows] = 0.0
+            dirty[rows] = False
+            return
+        Q_safe = np.where(Q > 0, Q, 1.0)
+        fac = w / Q_safe
+        dead = Q <= 0
+        for s in range(0, rows.size, _RESCORE_CHUNK):
+            chunk = rows[s : s + _RESCORE_CHUNK]
+            r = q[chunk].toarray() * fac
+            r[:, dead] = 0.0
+            out = r.max(axis=1) if rule == "caz" else r.sum(axis=1)
+            delta[chunk] = out / c[chunk]
         dirty[rows] = False
 
     indptr, indices, data = q.indptr, q.indices, q.data
@@ -742,10 +927,15 @@ def rank_removal(
 ```
 
 Implementation notes (why each subtle line is the way it is — keep these true):
-- `np.maximum(..., 0.0)` floor: the dense engine's row-max sees implicit zeros for
-  absent features; with validated nonnegative inputs the floor is exact.
-- `reduceat` is called only with starts of NONEMPTY segments; empty rows keep 0 —
-  never let reduceat see an empty segment (it returns a neighbouring element).
+- The rescore kernel MUST mirror the dense engine's expressions exactly
+  (`toarray()` row buffer × precomputed `w/Q_safe`, then `r[:, Q<=0]=0`, then
+  `max`/`sum(axis=1)`, then `/c`) — that is what makes per-row scores
+  bitwise-identical given identical `Q` and lets equivalence tests assert exact
+  order on integer amounts for BOTH rules. Do not "optimize" it back to
+  reduceat over CSR data: the review empirically reproduced integer-ABF order
+  flips from reduceat's different summation association.
+- Featureless rows densify to all-zero rows → `max`/`sum` give 0.0, matching the
+  dense engine; `n_feat == 0` short-circuits (a `(m, 0)` reduction would raise).
 - `Q[indices[s:e]] -= data[s:e]` per removed cell IN EMISSION ORDER reproduces the
   dense engine's sequential `Q -= q[idx]` trajectory (subtracting absent features'
   zeros is a bitwise no-op).
@@ -783,11 +973,15 @@ git commit -m "feat(zonation): sparse + dirty-set incremental rank_removal engin
 
 ```python
 # --- Task 4: dirty-set shortcut === full rescore --------------------------
+@pytest.mark.parametrize("integer", [True, False])
 @pytest.mark.parametrize("rule", ["caz", "abf"])
-def test_dirty_set_equals_full_rescore(rule: str) -> None:
+def test_dirty_set_equals_full_rescore(rule: str, integer: bool) -> None:
     # Bit-identical by construction (design §4.4): a clean cell's inputs are
-    # unchanged, so skipping its rescore cannot change any value.
-    p = _random_problem(21, n_pu=120, n_feat=8, statuses=True)
+    # unchanged, so skipping its rescore cannot change any value. The FLOAT
+    # case is where this test has power the dense oracle doesn't (review
+    # finding #6): dense-vs-sparse is only ULP-close there, but dirty-vs-full
+    # within the sparse engine must stay exactly equal.
+    p = _random_problem(21, n_pu=120, n_feat=8, statuses=True, integer=integer)
     for warp in (1, 5):
         _assert_equal_results(
             rank_removal(p, rule=rule, warp=warp),
@@ -887,13 +1081,16 @@ git commit -m "test(zonation): dirty-set invariance check + raster-scale perf be
 
 ```markdown
 ### Changed
-- `zonation.rank_removal` rewritten sparse + incremental (dirty-set rescoring,
-  partition selection, incremental curves): million-cell rasters now rank in
-  minutes at raster-appropriate `warp` (advisory warns when warp is too small);
-  results identical to the previous engine (exact for CAZ on integer amounts;
-  ABF/float within FP tie tolerance — see design doc §7). Negative feature
-  amounts/weights now raise `ValueError`; `smoothing` is capped at 50k PUs
-  pending grid-convolution smoothing.
+- `zonation.rank_removal` rewritten sparse + incremental (dirty-set rescoring via
+  chunked dense row buffers, partition selection, incremental curves): million-cell
+  rasters now rank in minutes at raster-appropriate `warp` (an advisory warns when
+  warp is small; silence via `warnings.filterwarnings`). Results match the previous
+  engine exactly on integer amounts for both rules; float amounts can differ only
+  at exact float near-ties (initial-total summation order), float costs affect
+  curve values only. Invalid inputs now raise `ValueError`: negative or non-finite
+  feature amounts, negative or non-finite weights (negative weights — a Zonation
+  v3+ opportunity-cost workflow — not yet supported), non-finite costs, 0-PU
+  problems. `smoothing` is capped at 50k PUs pending grid-convolution smoothing.
 ```
 
 - [ ] **Step 2: Check copilot-instructions**
@@ -920,4 +1117,4 @@ git commit -m "docs(zonation): changelog + doc updates for raster-scale rank_rem
 - Spec coverage: §3→T3, §4→T3, §5→T2, §6→T2, §7→T1 (contract encoded in assertions), §9.1–9.3→T1, §9.4→T4, §9.5→T2, §9.6→T3 no-dense, §9.7→T4 bench, §9.8→T5 make check, §11→T5. `eliminate_zeros` question (§12) resolved in T3 (own fresh matrix).
 - No placeholders; all code complete.
 - Type consistency: `_warn_if_small_warp(n_pu, warp)` used identically in T2/T3; `_force_full_rescore` defined T3, consumed T4; builders defined T1, consumed T3/T4.
-- Deviation from spec §9.2 noted: ABF gap-verification implemented as fixed-seed determinism + rank-distance tolerance rather than an explicit pairwise-gap assertion (deterministic either way; documented in the test module docstring).
+- (Resolved by design review 2026-08-08, synthesis in `2026-08-08-zonation-raster-scale-review.md`: rescore kernel switched to chunked-dense — integer-ABF now exact, dissolving the earlier §9.2 deviation; raw-input + finiteness validation; oracle smoothing branch restored; `importlib` module-binding fix in Task 2; float test asserts exact order on a fixed seed. This plan reflects the post-review state.)

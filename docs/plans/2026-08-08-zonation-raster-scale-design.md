@@ -31,9 +31,10 @@ grids, and Zonation's native domain *is* such grids. This phase closes that gap.
   minutes (at raster-appropriate `warp`), bounded by sparse-matrix memory (~0.5 GB
   at 20M nnz), never by a dense n_pu×n_feat allocation.
 - Output is **identical in semantics** to the current engine for every valid input and
-  every `warp` (FP contract in §7; the one deliberate exception: negative
-  amounts/weights, previously undefined behavior, now raise — §4.1). No API change:
-  same signature, same `ZonationResult`, `ZonationSolver` and the Shiny tab untouched.
+  every `warp` (FP contract in §7; the deliberate exceptions, all previously undefined
+  behavior, now raise `ValueError` — §4.1: negative or non-finite amounts/weights,
+  non-finite costs, and 0-PU problems). No API change: same signature, same
+  `ZonationResult`, `ZonationSolver` and the Shiny tab untouched.
 - The dense engine survives only as a test-local reference implementation for
   equivalence tests.
 
@@ -79,17 +80,28 @@ Each batch:
 1. **Rescore dirty candidates only.** Rows `R = dirty & candidate-mask` — *not* all
    remaining cells: a dirty locked-in cell simply stays flagged until phase 3 makes it
    a candidate, and is rescored then (lazier and strictly cheaper; the boolean flag
-   absorbs repeated invalidations). On the CSR slice of `R`:
-   `factor = np.where(Q > 0, w / Q_safe, 0.0)`; `vals = sub.data * factor[sub.indices]`;
-   reduce per row — CAZ `np.maximum.reduceat`, ABF `np.add.reduceat` — with the two
-   reduceat pitfalls handled: empty rows forced to 0.0 (reduceat's empty-segment
-   quirk returns a neighbouring element), and CAZ floored at 0.0 to mirror the dense
-   engine's implicit zeros for absent features. The 0-floor is exact only under
-   nonnegative amounts and weights, so `rank_removal` now validates both up front
-   (`csr.data.min() >= 0`, `w.min() >= 0` → `ValueError` otherwise). Negative values
-   are scientifically meaningless in CAZ/ABF and today produce undefined behavior;
-   review should confirm this validation (a behavior change for pathological inputs
-   only). Divide by `c[R]`. Clear `dirty[R]`.
+   absorbs repeated invalidations). **Kernel (design-review change, adopted from the
+   independent re-design lens):** rescore via chunked dense row buffers rather than
+   `reduceat` over CSR data — for each ≤32k-row chunk of `R`,
+   `r = q[chunk].toarray() * (w / Q_safe)`; `r[:, Q <= 0] = 0.0`; `max`/`sum(axis=1)`;
+   `/ c[chunk]` — i.e. the dense engine's *exact expressions* on a row subset. numpy's
+   per-row reduction depends only on the row, so scores are **bitwise-identical to the
+   dense oracle given identical `Q`**, which eliminates the reduceat ULP-regrouping
+   class entirely (grounding reproduced two integer-ABF order flips under reduceat)
+   along with the empty-segment and implicit-zero-floor subtleties. Peak buffer
+   ~26 MB at `n_feat=100`; `n_feat == 0` short-circuits to `delta[R] = 0`.
+   Clear `dirty[R]`.
+
+   **Input validation (before any matrix build, one site for both engine eras):**
+   raw `pu_vs_features["amount"]` must be finite and ≥ 0; weights finite and ≥ 0;
+   costs finite (plus the existing `> 0` check when `use_cost`); `n_pu == 0` raises.
+   Rationale: NaNs slip every `< 0` guard and would make the sparse selection loop
+   forever (`v = NaN` → empty batch — review finding #2); raw-input checking keeps
+   the contract identical across the plain and smoothing paths (finding #4).
+   Negative *weights* are a real Zonation v3+ workflow (opportunity costs — Moilanen
+   et al. 2011, doi:10.1890/10-1865.1) but the dense engine silently corrupts them
+   via the implicit-zero max, so the error says "not yet supported" and the roadmap
+   logs negative-weight support as a deferred feature (finding #10).
    Extinct features (`Q_j ≤ 0`) contribute 0 through `factor`, matching the dense
    `r[:, Q <= 0] = 0.0`.
 2. **Select the k smallest with today's exact tie-break.** Current engine:
@@ -120,9 +132,14 @@ Loop until `remaining` is empty; result assembly unchanged.
 `warp=1` at raster scale is O(n²) in *selection* alone (an argpartition over ~n
 candidates per single removal), regardless of rescoring cleverness. Mirroring the S3b
 MIP-scale precedent (warn-and-proceed, never auto-route, module-level helper):
-warn once at entry when `n_pu > 50_000 and warp < n_pu // 10_000`, saying warp is
-Zonation's raster knob and suggesting `warp ≈ n_pu // 1000`. No new parameter;
-standard `warnings.warn` (filterable).
+warn once at entry when `n_pu > 50_000 and warp < n_pu // 10_000`. Wording per
+review finding #11: large warp (10–100) is *documented Zonation practice* as a
+computation-time vs solution-refinement trade-off (de Mello 2015 used warp=1
+deliberately; Zonation 4 default 10; Srivathsa 2020 chose 100); `warp ≈ n_pu // 1000`
+is framed as pymarxan performance advice, not Zonation practice. Zonation's other
+raster device — edge removal — is a pre-existing v0.13 non-goal, noted in the module
+docstring. No new parameter; the docstring and CHANGELOG name
+`warnings.filterwarnings` as the sanctioned mute (finding #16).
 
 ## 6. Guardrail: smoothing stays vector-scale
 
@@ -136,27 +153,26 @@ already ≥ 20 GB (would MemoryError obscurely today), while plausible current u
 
 Three reduction sites regroup between dense and sparse:
 
+With the chunked-dense rescore kernel (§4.1), row scores are computed by the dense
+engine's own expressions and are bitwise-identical given identical `Q`. The FP
+boundary between engines reduces to two sites:
+
 | Site | Dense | Sparse | Consequence |
 |---|---|---|---|
-| initial `Q` | `q.sum(axis=0)` (pairwise) | per-column sums | exact on integer amounts (integer float64 addition is order-free); ≤ few ULP on floats |
-| ABF row score | `r.sum(axis=1)` (pairwise) | `add.reduceat` (sequential) | ≤ few ULP **even on integer amounts** — the addends are `q_ij·(w_j/Q_j)`, already non-integer after division, and the two paths group the sum differently |
-| CAZ row score | `r.max(axis=1)` | `maximum.reduceat` | exact given identical inputs (max is order-free; the elementwise products are computed identically) |
+| initial `Q` | `q.sum(axis=0)` (pairwise) | scipy per-column sums | exact on integer amounts (integer float64 addition is order-free below 2^53); ≤ few ULP on float amounts (incl. all smoothed matrices) |
+| curve `prop_cost_remaining` | per-batch `c[remaining].sum()` (pairwise subset) | run-long sequential `cost_remaining -=` accumulator | exact on integer costs; on float costs the error *accumulates* O(n·ulp) and the running value → 0 at run end, so relative error blows up in late rows — clamped `max(·, 0.0)` before recording (curves only; ranks unaffected) |
 
-Resulting claim, per rule:
-
-- **CAZ, integer amounts:** `Q` is bitwise-identical along the whole trajectory
-  (integer sums/subtractions are exact), every elementwise product is identical, max
-  is order-free → **removal order and ranks exactly equal** to the dense reference.
-- **ABF, any amounts:** row-sum regrouping means scores agree only to a few ULPs,
-  which can flip *exact float near-ties*. Equivalence tests therefore use fixtures
-  whose pairwise score gaps are ≫ ULP (asserted in the fixture itself), where exact
-  order equality again holds deterministically; a separate tolerance test covers
-  scores directly.
-- **Float amounts (either rule):** `Q` itself drifts by ULPs → same near-tie caveat.
+Resulting claim: **integer amounts (any weights/costs signs aside — see validation) →
+removal order and ranks exactly equal to the dense reference for BOTH rules** (all
+sums exact in float64 while below 2^53 — stated in the docstring; breachable with
+e.g. m² areas at 1M cells). **Float amounts → initial-`Q` ULP drift can flip exact
+float near-ties in the order**, after which trajectories legitimately diverge; tests
+pin fixed seeds and assert exact order there (on env upgrade: change the seed, never
+loosen). **Float costs → curve-value drift only.**
 
 Dirty-set vs full-rescore is bit-identical *within* the sparse engine by construction
 (§4.4) — the only FP boundary is dense-vs-sparse. Docstring and CHANGELOG state this
-contract; no "bit-identical" claims anywhere.
+contract; no unconditional "bit-identical" claims anywhere.
 
 ## 8. Result container — unchanged (measured decision)
 
@@ -172,37 +188,49 @@ All under the `shiny` micromamba env (marxan-testing skill). New test file name 
 be repo-unique (pytest basename gotcha): `test_rank_removal_scale.py`.
 
 1. **Reference-equivalence (the core):** the current dense engine is copied verbatim
-   into the test module as `_dense_rank_removal` (the src version is rewritten);
-   property-style comparison of `removal_order`, `priority_rank`, and curves against
-   the sparse engine on integer-amount problems covering: no locks / locked-in +
-   locked-out mix / feature going extinct mid-run / `warp ∈ {1, 3, 7, n_pu}` /
-   `use_cost` both / weights / `rule ∈ {caz, abf}` / `n_feat == 0` / a PU with no
-   features / duplicate `(pu, species)` rows. Exact equality asserted per the §7
-   contract (CAZ everywhere; ABF on gap-verified fixtures).
-2. **Float tolerance:** float-amount problem; scores compared to reference with
-   `np.testing.assert_allclose(rtol=1e-12)`; ranks compared allowing near-tie swaps
-   (or seeded to avoid ties).
-3. **Tie-break pinning:** constructed exact-tie batch; assert selection and emission
+   into the test module as `_dense_rank_removal` — *including its smoothing branch*
+   (review finding #5) — while the src version is rewritten; property-style comparison
+   of `removal_order`, `priority_rank`, and curves against the sparse engine on
+   integer-amount problems covering: no locks / locked-in + locked-out mix / feature
+   going extinct mid-run / `warp ∈ {1, 3, 7, n_pu}` / `use_cost` both / weights /
+   `rule ∈ {caz, abf}` / `n_feat == 0` / a PU with no features / duplicate
+   `(pu, species)` rows / an explicit `amount=0.0` row (stored-zero, finding #14) /
+   a wide `n_feat=25` fixture (production-width regime, finding #8) / one ≤20-PU
+   smoothing fixture. Exact equality asserted per the §7 contract (both rules on
+   integer amounts; fixed-seed exact order on float/smoothed fixtures).
+2. **Float regime:** float amounts AND float costs (finding #7); exact removal-order
+   equality on the fixed seed (a tolerance-band on ranks is unprincipled — a mid-run
+   tie flip cascades, finding #13) plus curves `assert_allclose(rtol=1e-9, atol=1e-12)`.
+   Comment names the seed-dependence: on env upgrade, change the seed, never loosen.
+3. **Degenerate/invalid inputs (findings #2, #4, #12):** NaN amount, NaN cost, NaN/
+   negative weight, negative raw amount (incl. one that duplicate-sums positive —
+   raw validation catches it), and a 0-PU problem — each raises `ValueError`.
+4. **Tie-break pinning:** constructed exact-tie batch; assert selection and emission
    order match the reference (guards the argpartition boundary logic).
-4. **Dirty-set correctness in isolation:** moderate grid (~50×50, localized
-   features) — assert equality with reference; plus an internal assertion-style test
-   that a full-rescore run equals the dirty-set run on the same seed.
-5. **Guardrails:** warp advisory fires (and not below thresholds); smoothing raise
+5. **Dirty-set correctness in isolation:** internal test that a full-rescore run
+   (`_force_full_rescore=True`) equals the dirty-set run on the same seed — run with
+   `integer` both True **and False** (finding #6: the float case is where this test
+   has power the dense oracle doesn't).
+6. **Guardrails:** warp advisory fires (and not below thresholds); smoothing raise
    at n_pu > 50_000; existing smoothing behavior below threshold unchanged.
-6. **No-dense guarantee (fast, CI-enforced):** small problem, no smoothing —
+7. **No-dense guarantee (fast, CI-enforced):** small problem, no smoothing —
    monkeypatch `build_pu_feature_matrix` to fail if called; the sparse path must
-   never densify. Kept out of the bench marker so CI actually enforces it.
-7. **Scale smoke (bench-marked, excluded from CI):** ~300×300 synthetic grid,
-   `warp = n//1000` — asserts a wall-clock budget only.
-8. **Existing suite:** all current zonation/solver/Shiny tests must pass unchanged —
+   never build the FULL dense matrix (chunked row buffers in §4.1 use
+   `csr[rows].toarray()`, not the problem-level builder). Kept out of the bench
+   marker so CI actually enforces it.
+8. **Scale smoke (bench-marked, excluded from CI):** ~300×300 synthetic grid,
+   `warp = n//1000` — asserts a wall-clock budget only (review measured 3.7 s against
+   the 60 s budget with the reduceat kernel; chunked-dense stays well inside).
+9. **Existing suite:** all current zonation/solver/Shiny tests must pass unchanged —
    they are themselves equivalence evidence. Parity anchor 35.0 untouched
    (no Marxan solver touched; `make check` proves it).
 
 ## 10. Performance envelope (claims to check in review)
 
 - Init: O(nnz) scoring + CSR/CSC build; ~0.5 GB at 20M nnz (both structures).
-- Per batch: O(dirty-nnz) rescore + O(cand) partition + O(k·row-nnz) updates + O(n)
-  phase masks (~1–2 ms at 1M).
+- Per batch: O(dirty-rows × n_feat) chunked-dense rescore (a constant factor above
+  the reduceat alternative's O(dirty-nnz); buys bitwise row equality, §4.1) +
+  O(cand) partition + O(k·row-nnz) updates + O(n) phase masks (~1–2 ms at 1M).
 - Localized features (raster norm): dirty sets are neighbourhood-sized; total ≈
   O(nnz · overlap-factor). Worst case (landscape-spanning feature): every batch
   rescans that feature's holders — degenerates toward full-rescore-per-batch
@@ -220,17 +248,18 @@ be repo-unique (pytest basename gotcha): `test_rank_removal_scale.py`.
 - Roadmap memory + docs: mark Zonation-at-raster-scale done; log deferred CELF heap
   and grid-convolution smoothing.
 
-## 12. Risks / open questions for review
+## 12. Review outcome (2026-08-08)
 
-- The argpartition boundary-tie logic is the subtlest code; mitigated by test §9.3
-  and the reference oracle.
-- `reduceat` empty-segment and CAZ implicit-zero handling are classic silent-wrong
-  spots; both explicitly tested (PU-with-no-features case).
-- Is `eliminate_zeros()` safe given `build_pu_feature_csr`'s documented contract
-  (`toarray()` equality holds; only stored-zero *structure* changes)? Grounding
-  review should confirm no other consumer relies on stored zeros of the *returned
-  copy* (we operate on our own copy either way).
-- Negative amounts/weights now raise (§4.1) — reviewers to confirm this is the right
-  call versus silently accepting undefined behavior as the dense engine does today.
-- `.github/copilot-instructions.md` solver-matrix wording may describe zonation as
-  vector-scale; check and update alongside §11.
+Reviewed by the four-perspective workflow (`wf_d831dfab-404`); synthesis in
+`2026-08-08-zonation-raster-scale-review.md`. All lenses approve-with-fixes; every
+§12 open question resolved and folded back into §§2–9 above:
+
+- Argpartition boundary logic + dirty-set completeness: **verified correct** by two
+  lenses (320 tie-stress runs + independent re-implementation, 0 failures).
+- reduceat pitfalls: **eliminated** — kernel switched to chunked-dense (§4.1, #9).
+- `eliminate_zeros()`: **confirmed safe** — `build_pu_feature_csr` returns a fresh
+  matrix each call (`problem.py:132-160`); only other consumer builds its own copy.
+- Negative amounts/weights raise: **confirmed right call**, but reworded — negative
+  weights are a real Zonation v3+ workflow (deferred feature), not "meaningless".
+- `.github/copilot-instructions.md`: **contains no zonation wording** — plan Task 5
+  step is a correctly-conditioned no-op.
