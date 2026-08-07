@@ -7,6 +7,8 @@ biological loss.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -17,6 +19,58 @@ from pymarxan.models.problem import (
 )
 from pymarxan.zonation.result import ZonationResult
 from pymarxan.zonation.smoothing import SmoothingSpec
+
+_SMOOTHING_MAX_PU = 50_000
+_WARP_ADVISORY_MIN_PU = 50_000
+
+
+def _warn_if_small_warp(n_pu: int, warp: int) -> None:
+    """Advise (warn-and-proceed, S3b precedent) when warp is too small to scale.
+
+    warp=1 selection alone is O(n^2) at raster scale regardless of sparse
+    rescoring. Large warp (10-100) is documented Zonation practice as a
+    computation-time vs solution-refinement trade-off; ``warp ~ n_pu/1000`` is
+    pymarxan performance advice for million-cell grids, not a Zonation norm.
+    Silence with ``warnings.filterwarnings`` when a small warp is deliberate.
+    """
+    if n_pu > _WARP_ADVISORY_MIN_PU and warp < n_pu // 10_000:
+        warnings.warn(
+            f"rank_removal with n_pu={n_pu} and warp={warp} will be slow: "
+            f"larger warp trades solution refinement for speed (documented "
+            f"Zonation practice: 10-100); consider warp≈{n_pu // 1000}. "
+            "Silence via warnings.filterwarnings if deliberate.",
+            stacklevel=3,
+        )
+
+
+def _validate_inputs(
+    problem: ConservationProblem, weights: dict[int, float] | None
+) -> None:
+    """Raise ValueError for inputs the engine cannot rank meaningfully.
+
+    Raw (pre-duplicate-sum, pre-smoothing) amounts are checked so the plain and
+    smoothing paths enforce one contract. NaNs must be rejected up front: they
+    pass every ``< 0`` comparison and would stall the removal loop. Negative
+    weights are a real Zonation v3+ workflow (opportunity-cost features;
+    Moilanen et al. 2011, doi:10.1890/10-1865.1) but are not yet supported.
+    """
+    if problem.n_planning_units == 0:
+        raise ValueError("rank_removal requires at least one planning unit")
+    amt = problem.pu_vs_features["amount"].to_numpy(dtype=float)
+    if amt.size and not np.isfinite(amt).all():
+        raise ValueError("feature amounts must be finite for rank_removal")
+    if amt.size and (amt < 0).any():
+        raise ValueError("feature amounts must be >= 0 for rank_removal")
+    if weights:
+        wv = np.asarray(list(weights.values()), dtype=float)
+        if not np.isfinite(wv).all():
+            raise ValueError("feature weights must be finite for rank_removal")
+        if (wv < 0).any():
+            raise ValueError(
+                "feature weights must be >= 0 for rank_removal (negative "
+                "weights, used by Zonation v3+ for opportunity-cost features, "
+                "are not yet supported)"
+            )
 
 
 def rank_removal(
@@ -50,6 +104,16 @@ def rank_removal(
     if rule not in ("caz", "abf"):
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
 
+    _validate_inputs(problem, weights)
+
+    n_pu_total = problem.n_planning_units
+    if smoothing is not None and n_pu_total > _SMOOTHING_MAX_PU:
+        raise ValueError(
+            f"smoothing builds a dense {n_pu_total}x{n_pu_total} kernel and is "
+            f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); raster-scale "
+            "distribution smoothing (grid convolution) is a planned follow-up."
+        )
+
     q = problem.build_pu_feature_matrix()  # (n_pu, n_feat), rows = PU order
     if smoothing is not None:
         q = smoothing.apply(q)
@@ -66,12 +130,15 @@ def rank_removal(
 
     if use_cost:
         c = problem.planning_units["cost"].to_numpy().astype(float)
+        if not np.isfinite(c).all():
+            raise ValueError("planning-unit costs must be finite for rank_removal")
         if np.any(c <= 0):
             raise ValueError("use_cost=True requires every planning-unit cost > 0")
     else:
         c = np.ones(n_pu, dtype=float)
 
     warp = max(1, min(int(warp), max(n_pu, 1)))
+    _warn_if_small_warp(n_pu, warp)
 
     remaining = np.ones(n_pu, dtype=bool)
     Q = q.sum(axis=0)          # remaining totals per feature

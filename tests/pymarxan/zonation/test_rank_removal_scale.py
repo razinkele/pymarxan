@@ -353,3 +353,117 @@ def test_equivalence_smoothing_path(rule: str) -> None:
         rank_removal(p, rule=rule, smoothing=spec),
         _dense_rank_removal(p, rule=rule, smoothing=spec),
     )
+
+
+# --- Task 2: guards -------------------------------------------------------
+# HIGH review finding #1: `from pymarxan.zonation import rank_removal` binds
+# the FUNCTION (zonation/__init__.py re-exports it, shadowing the submodule of
+# the same name — even `import pymarxan.zonation.rank_removal as m` binds the
+# function). importlib is the only way to get the module object.
+import importlib
+
+rr_module = importlib.import_module("pymarxan.zonation.rank_removal")
+
+
+def _pvf_problem(pvf_rows: list[dict]) -> ConservationProblem:
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    return ConservationProblem(pu, feats, pd.DataFrame(pvf_rows))
+
+
+def test_negative_amount_raises() -> None:
+    p = _pvf_problem(
+        [
+            {"species": 1, "pu": 1, "amount": 2.0},
+            {"species": 1, "pu": 2, "amount": -1.0},
+        ]
+    )
+    with pytest.raises(ValueError, match="amounts must be >= 0"):
+        rank_removal(p)
+
+
+def test_negative_amount_cancelling_duplicate_raises() -> None:
+    # Raw-input validation (review finding #4): a -5 that a +5 duplicate sums
+    # to zero in the matrix must STILL raise — the contract is on raw amounts.
+    p = _pvf_problem(
+        [
+            {"species": 1, "pu": 1, "amount": 5.0},
+            {"species": 1, "pu": 1, "amount": -5.0},
+            {"species": 1, "pu": 2, "amount": 1.0},
+        ]
+    )
+    with pytest.raises(ValueError, match="amounts must be >= 0"):
+        rank_removal(p)
+
+
+def test_nan_amount_raises() -> None:
+    # NaN passes every `< 0` guard and would stall the sparse selection loop
+    # (review finding #2, correctness-critical) — reject up front.
+    p = _pvf_problem(
+        [
+            {"species": 1, "pu": 1, "amount": 2.0},
+            {"species": 1, "pu": 2, "amount": float("nan")},
+        ]
+    )
+    with pytest.raises(ValueError, match="amounts must be finite"):
+        rank_removal(p)
+
+
+def test_nan_cost_raises() -> None:
+    p = _random_problem(0)
+    p.planning_units.loc[0, "cost"] = float("nan")
+    with pytest.raises(ValueError, match="costs must be finite"):
+        rank_removal(p)
+
+
+def test_negative_or_nan_weight_raises() -> None:
+    p = _random_problem(0)
+    with pytest.raises(ValueError, match="weights must be >= 0"):
+        rank_removal(p, weights={1: -2.0})
+    with pytest.raises(ValueError, match="weights must be finite"):
+        rank_removal(p, weights={1: float("nan")})
+
+
+def test_zero_pu_raises() -> None:
+    # Review finding #12: dense returned a NaN curve row; sparse would
+    # ZeroDivisionError — a clear ValueError beats both.
+    pu = pd.DataFrame({"id": [], "cost": [], "status": []})
+    feats = pd.DataFrame({"id": [], "name": [], "target": [], "spf": []})
+    pvf = pd.DataFrame(columns=["species", "pu", "amount"])
+    p = ConservationProblem(pu, feats, pvf)
+    with pytest.raises(ValueError, match="at least one planning unit"):
+        rank_removal(p)
+
+
+def test_smoothing_capped_at_vector_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Guard reads n_planning_units and must fire BEFORE any kernel/matrix work.
+    p = _random_problem(0)
+    monkeypatch.setattr(
+        type(p), "n_planning_units", property(lambda self: 50_001)
+    )
+    spec = SmoothingSpec(alpha=1.0, coords=np.zeros((80, 2)))
+    with pytest.raises(ValueError, match="vector-scale"):
+        rank_removal(p, smoothing=spec)
+
+
+def test_warp_advisory_helper() -> None:
+    with pytest.warns(UserWarning, match="warp"):
+        rr_module._warn_if_small_warp(1_000_000, 50)
+    import warnings as _warnings
+
+    for n_pu, warp in ((1_000_000, 1000), (10_000, 1), (50_000, 1)):
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+            rr_module._warn_if_small_warp(n_pu, warp)  # must not warn
+
+
+def test_warp_advisory_called_from_rank_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        rr_module, "_warn_if_small_warp", lambda n_pu, warp: calls.append((n_pu, warp))
+    )
+    p = _random_problem(0, n_pu=12)
+    rank_removal(p, warp=3)
+    assert calls == [(12, 3)]
