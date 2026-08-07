@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `zonation.rank_removal` rewritten sparse + incremental (dirty-set rescoring via
+  chunked dense row buffers, partition selection, incremental curves): million-cell
+  rasters now rank in minutes at raster-appropriate `warp` (an advisory warns when
+  warp is small; silence via `warnings.filterwarnings`). Results match the previous
+  engine exactly on integer amounts for both rules; float amounts can differ only
+  at exact float near-ties (initial-total summation order), float costs affect
+  curve values only. Invalid inputs now raise `ValueError`: negative or non-finite
+  feature amounts, negative or non-finite weights (negative weights — a Zonation
+  v3+ opportunity-cost workflow — not yet supported), non-finite costs, 0-PU
+  problems. `smoothing` is capped at 50k PUs pending grid-convolution smoothing.
+
 ## [0.30.0] — 2026-07-15
 
 ### Added
