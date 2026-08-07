@@ -243,6 +243,18 @@ def rank_removal(
             sel = np.concatenate([below, ties[: k - below.size]])
             sel = sel[np.argsort(d[sel], kind="stable")]  # emission: (delta, index)
         removed = cand[sel]
+        if removed.size == 0:
+            # NaN-poisoned scores (e.g. subnormal amounts overflowing w/Q_safe
+            # to inf, then 0.0*inf -> NaN) make both the `below` and `ties`
+            # masks empty in the argpartition branch, which would otherwise
+            # spin here forever with n_remaining unchanged. Fail loudly
+            # instead of hanging; the dense engine "terminates" on such input
+            # only by producing NaN-poisoned garbage ordering, so a RuntimeError
+            # here is strictly better than either engine's alternative.
+            raise RuntimeError(
+                "rank_removal made no progress: non-finite scores (extreme "
+                "amounts/weights can overflow w/Q); cannot rank this input"
+            )
         changed_parts: list[np.ndarray] = []
         for idx in removed:
             removal_order.append(int(pu_ids[idx]))

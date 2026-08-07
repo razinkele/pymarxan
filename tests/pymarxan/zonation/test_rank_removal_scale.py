@@ -480,3 +480,36 @@ def test_no_dense_matrix_without_smoothing(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(ConservationProblem, "build_pu_feature_matrix", _boom)
     res = rank_removal(p, rule="caz", warp=2)
     assert len(res.removal_order) == p.n_planning_units
+
+
+def test_subnormal_amount_raises_instead_of_hanging() -> None:
+    # A subnormal amount (5e-324, the smallest positive double) is finite and
+    # >= 0 so _validate_inputs admits it, but it makes Q_j subnormal too, so
+    # fac = w / Q_safe overflows to +inf. Rows that do NOT hold feature 1
+    # (PUs 2-4) then compute 0.0 * inf = NaN there; once PU 1 (the only
+    # feature-1 holder) is removed in batch 1, PUs 2-4 are never marked dirty
+    # again (they hold nothing feature 1's removal touches), so their NaN
+    # delta is permanently stale. In batch 2 every candidate delta is NaN, so
+    # both `below` and `ties` (NaN < / == NaN is always False) are empty and
+    # `removed.size == 0` forever -- a silent non-terminating loop without the
+    # guard. The dense oracle does NOT hang on this input, but only because
+    # a full argsort tie-breaks NaN-vs-NaN by raw PU index, silently returning
+    # a garbage order ([1, 2, 3, 4], unrelated to the undefined deltas) rather
+    # than reporting anything is wrong -- a loud RuntimeError here is strictly
+    # better than either engine's alternative.
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 5e-324},
+            {"species": 2, "pu": 2, "amount": 1.0},
+            {"species": 2, "pu": 3, "amount": 1.0},
+            {"species": 2, "pu": 4, "amount": 1.0},
+        ]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    for rule in ("caz", "abf"):
+        with pytest.raises(RuntimeError, match="no progress"):
+            rank_removal(p, rule=rule, warp=1)
