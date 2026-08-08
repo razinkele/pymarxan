@@ -8,7 +8,9 @@ import numpy as np
 from pymarxan.connectivity.smoothing import (
     distance_matrix_from_points,
     smooth_distribution,
+    smooth_distribution_grid,
 )
+from pymarxan.models.grid import GridGeometry
 
 
 @dataclass(eq=False)
@@ -58,3 +60,30 @@ class SmoothingSpec:
         """Return ``q`` with every feature column smoothed (one kernel build)."""
         distances = self.resolve_distances(q.shape[0])
         return smooth_distribution(np.asarray(q, dtype=float), distances, self.alpha)
+
+
+@dataclass
+class GridSmoothingSpec:  # no eq=False: two float fields, auto __eq__ works
+    """Raster-scale distribution smoothing for grid problems.
+
+    The grid-convolution counterpart of :class:`SmoothingSpec`: same
+    negative-exponential mass-conserving kernel, evaluated as a truncated 2-D
+    convolution on ``problem.grid`` — no n×n kernel, no PU cap. Accepted by
+    the same ``smoothing=`` parameter of ``rank_removal`` / ``ZonationSolver``;
+    requires the problem to carry a :class:`GridGeometry`.
+    """
+
+    alpha: float
+    truncate: float = 1e-9
+
+    def __post_init__(self) -> None:
+        if self.alpha <= 0:
+            raise ValueError(f"alpha must be > 0, got {self.alpha}")
+        if not 0.0 < self.truncate < 1.0:
+            raise ValueError(f"truncate must be in (0, 1), got {self.truncate}")
+
+    def apply(self, amounts: np.ndarray, grid: GridGeometry) -> np.ndarray:
+        """Smooth one or many per-PU feature columns on the grid."""
+        return smooth_distribution_grid(
+            amounts, grid, self.alpha, truncate=self.truncate
+        )
