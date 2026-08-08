@@ -11,7 +11,7 @@ from pymarxan.models.problem import (
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
 from pymarxan.zonation.rank_removal import rank_removal
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
 
 class ZonationSolver(Solver):
@@ -44,7 +44,7 @@ class ZonationSolver(Solver):
         warp: int = 1,
         weights: dict[int, float] | None = None,
         use_cost: bool = True,
-        smoothing: SmoothingSpec | None = None,
+        smoothing: SmoothingSpec | GridSmoothingSpec | None = None,
     ) -> None:
         if rule not in ("caz", "abf"):
             raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")

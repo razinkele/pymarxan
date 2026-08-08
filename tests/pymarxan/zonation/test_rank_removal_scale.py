@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymarxan.models.grid import GridGeometry
 from pymarxan.models.problem import (
     STATUS_LOCKED_IN,
     STATUS_LOCKED_OUT,
@@ -26,7 +27,7 @@ from pymarxan.models.problem import (
 )
 from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.result import ZonationResult
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
 
 # --------------------------------------------------------------------------
@@ -445,6 +446,8 @@ def test_smoothing_capped_at_vector_scale(monkeypatch: pytest.MonkeyPatch) -> No
     spec = SmoothingSpec(alpha=1.0, coords=np.zeros((80, 2)))
     with pytest.raises(ValueError, match="vector-scale"):
         rank_removal(p, smoothing=spec)
+    with pytest.raises(ValueError, match="GridSmoothingSpec"):
+        rank_removal(p, smoothing=spec)
 
 
 def test_warp_advisory_helper() -> None:
@@ -859,3 +862,101 @@ def test_curve_every_misaligned_warp_records_sparse_rows() -> None:
     fc = full.performance_curves.to_numpy()
     tc = res.performance_curves.to_numpy()
     np.testing.assert_array_equal(tc, fc[[0, 10]])  # initial + final only
+
+
+# --- Grid-convolution smoothing dispatch (v0.33 phase) --------------------
+def _grid_smoothing_problem(nrows: int = 6, ncols: int = 5) -> ConservationProblem:
+    rng = np.random.default_rng(23)
+    mask = np.ones((nrows, ncols), dtype=bool)
+    mask[1, 1] = False
+    grid = GridGeometry(
+        x_min=0.0, y_max=float(nrows), cell_width=1.0, cell_height=1.0, mask=mask
+    )
+    n = int(mask.sum())
+    pu = pd.DataFrame(
+        {"id": list(range(1, n + 1)), "cost": rng.integers(1, 4, n).astype(float),
+         "status": [0] * n}
+    )
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    amounts = rng.integers(0, 4, size=(n, 2)).astype(float)
+    rows = [
+        {"species": fid, "pu": i + 1, "amount": amounts[i, j]}
+        for i in range(n)
+        for j, fid in enumerate([1, 2])
+        if amounts[i, j]
+    ]
+    return ConservationProblem(pu, feats, pd.DataFrame(rows), grid=grid)
+
+
+def test_grid_smoothing_requires_grid_problem() -> None:
+    p = _random_problem(0)  # no grid
+    with pytest.raises(ValueError, match="grid"):
+        rank_removal(p, smoothing=GridSmoothingSpec(alpha=1.0))
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_grid_smoothing_heap_equals_batch(rule: str) -> None:
+    p = _grid_smoothing_problem()
+    spec = GridSmoothingSpec(alpha=0.7)
+    _assert_equal_results(
+        rank_removal(p, rule=rule, warp=1, smoothing=spec),
+        rank_removal(p, rule=rule, warp=1, smoothing=spec, _force_batch=True),
+    )
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_grid_smoothing_self_consistency(rule: str) -> None:
+    # rank_removal(problem, GridSmoothingSpec) must equal rank_removal on a
+    # problem REBUILT from the manually smoothed matrix (same values through
+    # the same engine -> orders equal exactly). This is the oracle for the
+    # dispatch path — the dense test oracle never learns GridSmoothingSpec.
+    from pymarxan.connectivity.smoothing import smooth_distribution_grid
+
+    p = _grid_smoothing_problem()
+    spec = GridSmoothingSpec(alpha=0.7)
+    q = p.build_pu_feature_matrix()
+    smoothed = smooth_distribution_grid(q, p.grid, spec.alpha, truncate=spec.truncate)
+    rows = [
+        {"species": fid, "pu": i + 1, "amount": smoothed[i, j]}
+        for i in range(smoothed.shape[0])
+        for j, fid in enumerate([1, 2])
+        if smoothed[i, j]
+    ]
+    p2 = ConservationProblem(
+        p.planning_units.copy(), p.features.copy(), pd.DataFrame(rows), grid=p.grid
+    )
+    a = rank_removal(p, rule=rule, smoothing=spec)
+    b = rank_removal(p2, rule=rule)
+    assert a.removal_order == b.removal_order
+    assert a.priority_rank == b.priority_rank
+
+
+def test_grid_smoothing_no_pu_cap() -> None:
+    # >50k cells must be ACCEPTED with GridSmoothingSpec (the cap is the dense
+    # SmoothingSpec's). Trivially sparse feature keeps this fast.
+    mask = np.ones((300, 200), dtype=bool)  # 60_000 cells
+    grid = GridGeometry(
+        x_min=0.0, y_max=300.0, cell_width=1.0, cell_height=1.0, mask=mask
+    )
+    n = 60_000
+    pu = pd.DataFrame({"id": range(1, n + 1), "cost": [1.0] * n, "status": [0] * n})
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    pvf = pd.DataFrame(
+        [{"species": 1, "pu": 30_100, "amount": 5.0}]  # one source cell
+    )
+    p = ConservationProblem(pu, feats, pvf, grid=grid)
+    res = rank_removal(p, smoothing=GridSmoothingSpec(alpha=1.0), warp=600)
+    assert len(res.removal_order) == n
+
+
+@pytest.mark.parametrize("rule", ["caz"])
+def test_zonation_solver_grid_smoothing(rule: str) -> None:
+    from pymarxan.solvers.zonation_solver import ZonationSolver
+
+    p = _grid_smoothing_problem()
+    solver = ZonationSolver(rule=rule, smoothing=GridSmoothingSpec(alpha=0.7))
+    sols = solver.solve(p, {})
+    assert len(sols) == 1
+    assert sols[0].metadata.get("smoothed") is True
