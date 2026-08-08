@@ -736,8 +736,9 @@ git commit -m "test(zonation): FP-extinction fixture, dual-path NaN guard, warp=
     path where batch selection may return a NaN-ordered tail) — exact with
     respect to the greedy removal sequence; the ranking itself remains a
     heuristic prioritization, not a provably optimal reserve. Single-cell
-    removal is thereby feasible at raster scale (bench: 90k cells well under a
-    minute; pass ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
+    removal is thereby feasible at raster scale and faster than batch selection
+    at warp=1 (measured: 90k cells, heap 102.5s vs batch 136.2s; pass
+    ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
     batch selection; an advisory warns for small ``warp>1`` at raster scale
     (silence via ``warnings.filterwarnings``). ``curve_every=k`` records the
     initial state, every k-th removal (at batch boundaries when ``warp>1``),
@@ -745,8 +746,16 @@ git commit -m "test(zonation): FP-extinction fixture, dual-path NaN guard, warp=
     toward O(n^2) holder-marking.
 ```
 
-(If Task 4's measured bench time materially beats/misses "well under a minute",
-adjust that clause to the measurement — never ship an unmeasured number.)
+Also amend the existing RuntimeError sentence (Task-3 review item 4: the heap
+raises on ANY NaN among phase candidates, not only when removal stalls) — the
+sentence "Raises ``RuntimeError`` if scores become non-finite mid-run ... and
+removal can make no progress" becomes:
+
+```
+    Raises ``RuntimeError`` if any score evaluates to NaN (e.g. subnormal
+    amounts overflowing ``w/Q``): immediately on the warp=1 heap path, or when
+    removal can make no progress on the batch path.
+```
 
 Also extend the private-kwarg sentence: ``_force_full_rescore`` and
 ``_force_batch`` are test-only: the first disables the dirty-set shortcut (and

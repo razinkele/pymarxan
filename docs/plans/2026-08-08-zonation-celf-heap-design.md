@@ -255,11 +255,10 @@ All in `tests/pymarxan/zonation/test_rank_removal_scale.py` (append) +
    boundary non-warn cases unchanged; `_warn_if_small_warp`'s own docstring is
    rewritten (its "warp=1 is O(n²)" opener becomes false — design-review #10).
 7. **Bench (append, bench-marked):** 300×300 grid, `warp=1`, `curve_every=1000` —
-   **measure first, then assert**: review #1 measured the batch path itself at
-   120.7 s on this geometry/machine and the naive heap at DNF, so the buffered
-   implementation must be timed before any budget or docstring perf claim ships;
-   target budget < 60 s, escalate if the measurement misses it. Assert full
-   removal-order length.
+   **comparative** (amended after Task-4 measurement, see §9): assert
+   heap < batch×1.05 on the same geometry plus a 300 s absolute DNF ceiling and
+   full removal-order length. Measured: heap 102.5 s vs batch 136.2 s; the
+   original absolute 60 s target was machine-relative and mis-designed.
 8. **`make check`** green; parity anchor untouched (no Marxan solver touched).
 
 ## 9. Performance envelope (claims for review)
@@ -270,10 +269,14 @@ All in `tests/pymarxan/zonation/test_rank_removal_scale.py` (append) +
   single-row calls (~4.5 ms) per accept with one vectorized call (~90–120 µs), an
   ~18× inner-loop reduction. The naive per-pop variant measured 47.8 s vs the
   batch path's 2.7 s at side=100 and DNF at side=300 — never regress to it.
-- Reference points on this machine: batch warp=1 at side=300 (90k cells) is
-  120.7 s. The buffered heap's projection is well under that; the Task-4 bench
-  MEASURES before asserting the < 60 s budget (§8.7). 1M-cell claims wait for the
-  bench — no "minutes at 1M" wording ships unmeasured.
+- **Measured at implementation (2026-08-08, Task 4):** side=300 (90k cells,
+  `curve_every=1000`): buffered heap **102.5 s** vs batch **136.2 s** on the same
+  geometry/machine — the heap beats the path it replaces by ~25% while being
+  exact, and the naive per-pop variant DNF'd. The original < 60 s absolute budget
+  proved machine-relative (design-review batch reference was 120.7 s on a faster
+  run of the same box), so §8.7's bench is COMPARATIVE: heap < batch×1.05 plus a
+  300 s DNF-catching ceiling. 1M-cell wording stays qualitative ("feasible,
+  faster than batch selection") — no unmeasured absolute numbers ship.
 - Worst case (landscape-spanning feature): holder-marking O(n) per removal → O(n²)
   — same as the batch path at warp=1 today; documented in the docstring.
 - Heap memory ≈ n × ~90 B ≈ 90 MB at 1M plus re-push growth. Curve array at
