@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from pymarxan.connectivity.smoothing import distance_matrix_from_points
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.models.grid import GridGeometry
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
 
 def test_point_mass_spreads_monotonically():
@@ -64,3 +65,35 @@ def test_resolve_distances_validates_shape():
 def test_single_pu_smooths_to_itself():
     spec = SmoothingSpec(alpha=1.0, coords=np.array([[0.0]]))
     assert spec.apply(np.array([[7.0]]))[0, 0] == pytest.approx(7.0)  # kernel [[1]]
+
+
+# --- GridSmoothingSpec (grid-convolution smoothing) -----------------------
+
+
+def test_grid_spec_validation() -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        GridSmoothingSpec(alpha=0.0)
+    with pytest.raises(ValueError, match="truncate"):
+        GridSmoothingSpec(alpha=1.0, truncate=1.0)
+    with pytest.raises(ValueError, match="truncate"):
+        GridSmoothingSpec(alpha=1.0, truncate=0.0)
+
+
+def test_grid_spec_apply_delegates() -> None:
+    grid = GridGeometry(
+        x_min=0.0, y_max=4.0, cell_width=1.0, cell_height=1.0,
+        mask=np.ones((4, 4), dtype=bool),
+    )
+    q = np.arange(1.0, 17.0)
+    spec = GridSmoothingSpec(alpha=0.8)
+    from pymarxan.connectivity.smoothing import smooth_distribution_grid
+
+    np.testing.assert_array_equal(
+        spec.apply(q, grid), smooth_distribution_grid(q, grid, 0.8, truncate=1e-9)
+    )
+
+
+def test_grid_spec_exported_from_zonation() -> None:
+    from pymarxan.zonation import GridSmoothingSpec as exported
+
+    assert exported is GridSmoothingSpec

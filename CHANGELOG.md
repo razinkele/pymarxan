@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `zonation.GridSmoothingSpec` + `connectivity.smooth_distribution_grid`:
+  raster-scale distribution smoothing for grid problems via truncated-window
+  2-D negative-exponential convolution — mass-conserving at any truncation
+  (the normalizer uses the same truncated kernel), sparse column-wise (no
+  dense n×n kernel, no dense PU×feature matrix), no 50k-PU cap. Accepted by
+  the existing `smoothing=` parameter of `rank_removal`/`ZonationSolver`;
+  the dense-kernel `SmoothingSpec` and its vector-scale cap are unchanged.
+
 ## [0.32.0] — 2026-08-08
 
 ### Added

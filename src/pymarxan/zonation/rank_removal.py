@@ -25,7 +25,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
 )
 from pymarxan.zonation.result import ZonationResult
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
 _SMOOTHING_MAX_PU = 50_000
 _WARP_ADVISORY_MIN_PU = 50_000
@@ -93,7 +93,7 @@ def rank_removal(
     weights: dict[int, float] | None = None,
     warp: int = 1,
     use_cost: bool = True,
-    smoothing: SmoothingSpec | None = None,
+    smoothing: SmoothingSpec | GridSmoothingSpec | None = None,
     curve_every: int = 1,
     _force_full_rescore: bool = False,
     _force_batch: bool = False,
@@ -148,7 +148,9 @@ def rank_removal(
     zero planning units. Raises ``RuntimeError`` if any score evaluates to NaN
     (e.g. subnormal amounts overflowing ``w/Q``): immediately on the warp=1
     heap path, or when removal can make no progress on the batch path.
-    Smoothing stays vector-scale (n_pu <= 50_000).
+    Dense-kernel ``SmoothingSpec`` smoothing stays vector-scale (n_pu <= 50_000);
+    ``GridSmoothingSpec`` (grid problems) has no cap — truncated 2-D
+    convolution, mass-conserving.
     ``_force_full_rescore`` and ``_force_batch`` are test-only: the first
     disables the dirty-set shortcut (and forces batch selection), the second
     forces batch selection at ``warp=1``.
@@ -168,17 +170,55 @@ def rank_removal(
     _validate_inputs(problem, weights)
 
     n_pu_total = problem.n_planning_units
-    if smoothing is not None and n_pu_total > _SMOOTHING_MAX_PU:
+    if isinstance(smoothing, GridSmoothingSpec) and problem.grid is None:
+        raise ValueError(
+            "GridSmoothingSpec requires a grid problem (problem.grid is None); "
+            "use SmoothingSpec for vector problems"
+        )
+    if isinstance(smoothing, SmoothingSpec) and n_pu_total > _SMOOTHING_MAX_PU:
+        # Positive isinstance (review #5): a future third spec type must not
+        # silently inherit the dense cap or the dense apply path.
         raise ValueError(
             f"smoothing builds a dense {n_pu_total}x{n_pu_total} kernel and is "
-            f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); raster-scale "
-            "distribution smoothing (grid convolution) is a planned follow-up."
+            f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); use "
+            "GridSmoothingSpec for grid problems at raster scale "
+            "(problems constructed with grid=GridGeometry(...))."
         )
 
     from scipy.sparse import csr_matrix
 
-    if smoothing is not None:
+    if isinstance(smoothing, GridSmoothingSpec):
+        assert problem.grid is not None  # guarded above
+        base = problem.build_pu_feature_csr().tocsc()
+        n_rows = base.shape[0]
+        data_parts: list[np.ndarray] = []
+        idx_parts: list[np.ndarray] = []
+        indptr = [0]
+        for j in range(base.shape[1]):
+            col = np.zeros(n_rows)
+            sl = slice(base.indptr[j], base.indptr[j + 1])
+            col[base.indices[sl]] = base.data[sl]
+            sc = smoothing.apply(col, problem.grid)
+            nz = np.flatnonzero(sc)
+            data_parts.append(sc[nz])
+            idx_parts.append(nz)
+            indptr.append(indptr[-1] + nz.size)
+        from scipy.sparse import csc_matrix
+
+        q = csc_matrix(
+            (
+                np.concatenate(data_parts) if data_parts else np.zeros(0),
+                np.concatenate(idx_parts) if idx_parts else np.zeros(0, dtype=np.intp),
+                np.asarray(indptr, dtype=np.intp),
+            ),
+            shape=base.shape,
+        ).tocsr()
+    elif isinstance(smoothing, SmoothingSpec):
         q = csr_matrix(smoothing.apply(problem.build_pu_feature_matrix()))
+    elif smoothing is not None:
+        raise TypeError(
+            f"unsupported smoothing spec: {type(smoothing).__name__}"
+        )
     else:
         q = problem.build_pu_feature_csr()
     q.eliminate_zeros()  # freshly built and ours: stored zeros must not mark dirty

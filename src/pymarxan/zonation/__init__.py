@@ -9,6 +9,6 @@ from __future__ import annotations
 
 from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.result import ZonationResult
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
-__all__ = ["SmoothingSpec", "ZonationResult", "rank_removal"]
+__all__ = ["GridSmoothingSpec", "SmoothingSpec", "ZonationResult", "rank_removal"]
