@@ -712,3 +712,138 @@ def test_heap_equals_batch_small_families() -> None:
                 rank_removal(p, rule=rule, warp=1),
                 rank_removal(p, rule=rule, warp=1, _force_batch=True),
             )
+
+
+# --- CELF phase, Task 4: extinction construction + pinning ----------------
+def _extinction_problem(statuses: list[int]) -> ConservationProblem:
+    """Detector-verified FP-residue extinction fixture (review #2, verified).
+
+    Levers (both are load-bearing — the review's original 'huge costs on big
+    holders' reasoning was backwards, a near-zero-amount holder at cost 1 is
+    the global argmin and leaves FIRST):
+    - the residue carrier PU3 gets cost 1e-15 so its score (1.67e-2) stays
+      ABOVE the big holders' (5e-4, 1e-3) until the crossing;
+    - detector PU6 (sole holder of f3, score 1/200 = 5e-3) sits strictly
+      inside the carrier's stale-key/post-crossing-true-score gap (0, 1.67e-2),
+      so a missing, broken, or phase-inverted repair provably FLIPS the order
+      to [1,2,6,3,5,4] — this test VERIFIES the repair, not merely exercises it
+      (execution-verified against a deliberately repair-less heap).
+    """
+    pu = pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4, 5, 6],
+            "cost": [1000.0, 1000.0, 1e-15, 1.0, 1.0, 200.0],
+            "status": statuses,
+        }
+    )
+    feats = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "name": ["a", "b", "c"],
+            "target": [1.0] * 3,
+            "spf": [1.0] * 3,
+        }
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 0.3},
+            {"species": 1, "pu": 2, "amount": 0.3},
+            {"species": 1, "pu": 3, "amount": 1e-17},
+            {"species": 2, "pu": 4, "amount": 5.0},
+            {"species": 2, "pu": 5, "amount": 3.0},
+            {"species": 3, "pu": 6, "amount": 1.0},
+        ]
+    )
+    return ConservationProblem(pu, feats, pvf)
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_fp_residue_extinction_heap_equals_batch(rule: str) -> None:
+    # Crossing INSIDE the normal phase -> the repair-push path itself runs.
+    assert (0.3 + 0.3 + 1e-17) - 0.3 - 0.3 <= 0.0  # the arithmetic premise
+    p = _extinction_problem([0, 0, 0, 0, 0, 0])
+    heap_res = rank_removal(p, rule=rule, warp=1)
+    _assert_equal_results(
+        heap_res, rank_removal(p, rule=rule, warp=1, _force_batch=True)
+    )
+    order = heap_res.removal_order
+    # Big holders precede the carrier (crossing happens while PU3 remains),
+    # and the detector-sensitive order is pinned exactly.
+    assert max(order.index(1), order.index(2)) < order.index(3)
+    assert order == [1, 2, 3, 6, 5, 4]
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_fp_residue_extinction_cross_phase(rule: str) -> None:
+    # Big holders locked OUT (review #3): the crossing happens in the
+    # locked-out phase while the carrier sits in the normal phase — exercising
+    # the repair-push-skipped + dirty-carry + phase-init-rescore path that
+    # design §5 declares safe.
+    p = _extinction_problem([3, 3, 0, 0, 0, 0])
+    _assert_equal_results(
+        rank_removal(p, rule=rule, warp=1),
+        rank_removal(p, rule=rule, warp=1, _force_batch=True),
+    )
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_phase_mask_blocks_out_of_phase_repair_push(rule: str) -> None:
+    # Crossing happens in the locked-out phase with phase_left > 0; the crossed
+    # feature's surviving holder (PU3) is a NORMAL-phase cell. An out-of-phase
+    # repair-push would enter PU3 into the locked-out phase's heap and select
+    # it early ([1,3,2,4] instead of [1,2,3,4]) — this pins `& phase_mask[col]`.
+    pu = pd.DataFrame(
+        {"id": [1, 2, 3, 4], "cost": [1e21, 1.0, 1.0, 1.0], "status": [3, 3, 0, 0]}
+    )
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 1.0},
+            {"species": 1, "pu": 3, "amount": 1e-17},
+            {"species": 2, "pu": 2, "amount": 1.0},
+            {"species": 2, "pu": 3, "amount": 0.5},
+            {"species": 2, "pu": 4, "amount": 1e20},
+        ]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    heap_res = rank_removal(p, rule=rule, warp=1)
+    _assert_equal_results(
+        heap_res, rank_removal(p, rule=rule, warp=1, _force_batch=True)
+    )
+    assert heap_res.removal_order == [1, 2, 3, 4]
+
+
+def test_subnormal_raises_on_both_paths() -> None:
+    # The NaN-poisoned no-progress input must raise on the heap path (at init
+    # or repush) AND still on the forced batch path.
+    pu = pd.DataFrame(
+        {"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4}
+    )
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 5e-324},
+            {"species": 2, "pu": 2, "amount": 1.0},
+            {"species": 2, "pu": 3, "amount": 2.0},
+            {"species": 2, "pu": 4, "amount": 3.0},
+        ]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    for kwargs in ({}, {"_force_batch": True}):
+        with pytest.raises(RuntimeError, match="no progress"):
+            rank_removal(p, warp=1, **kwargs)
+
+
+def test_curve_every_with_warp_batches() -> None:
+    # warp>1: records land on batch boundaries whose cumulative removal count
+    # is a multiple of curve_every; always the final row (design §6).
+    p = _random_problem(9, n_pu=30)
+    full = rank_removal(p, warp=5)               # rows at n_removed 0,5,...,30
+    thin = rank_removal(p, warp=5, curve_every=10)
+    fc = full.performance_curves.to_numpy()
+    tc = thin.performance_curves.to_numpy()
+    np.testing.assert_array_equal(tc, fc[[0, 2, 4, 6]])

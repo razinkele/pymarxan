@@ -56,3 +56,16 @@ def test_rank_removal_scale_budget() -> None:
     assert len(res.removal_order) == 90_000
     # Generous budget for slow machines; the dense engine takes >> this.
     assert elapsed < 60.0, f"raster-scale rank_removal took {elapsed:.1f}s"
+
+
+def test_rank_removal_warp1_heap_budget() -> None:
+    p = _grid_problem(300)  # 90_000 cells
+    t0 = time.perf_counter()
+    res = rank_removal(p, rule="caz", warp=1, curve_every=1000)
+    elapsed = time.perf_counter() - t0
+    assert len(res.removal_order) == 90_000
+    # curve_every=1000 so the bench measures selection, not curve I/O.
+    # Reference points on this machine (design review): batch warp=1 on this
+    # geometry = 120.7s; the naive per-pop heap DNF'd — the buffered-pop loop
+    # is what makes this budget possible.
+    assert elapsed < 60.0, f"warp=1 heap rank_removal took {elapsed:.1f}s"
