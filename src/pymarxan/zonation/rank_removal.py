@@ -218,6 +218,28 @@ def rank_removal(
             return np.flatnonzero(normal)
         return np.flatnonzero(remaining & (status == STATUS_LOCKED_IN))
 
+    indptr, indices, data = q.indptr, q.indices, q.data
+
+    def remove_cell(idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """Shared per-removal bookkeeping for both selection paths.
+
+        Returns ``(cols, crossed)``: the removed row's feature columns, and the
+        subset whose remaining total crossed from >0 to <=0 with this removal
+        (FP-residue extinction — float amounts only; consumed by the heap
+        path's invariant repair, design §5).
+        """
+        nonlocal n_remaining, cost_remaining
+        removal_order.append(int(pu_ids[idx]))
+        remaining[idx] = False
+        s, e = indptr[idx], indptr[idx + 1]
+        cols = indices[s:e]
+        prev_pos = Q[cols] > 0
+        Q[cols] -= data[s:e]  # sequential, matching the dense engine
+        crossed = cols[prev_pos & (Q[cols] <= 0)]
+        n_remaining -= 1
+        cost_remaining -= float(c[idx])
+        return cols, crossed
+
     def rescore(rows: np.ndarray) -> None:
         """Recompute delta for the given rows from current Q.
 
@@ -242,8 +264,6 @@ def rank_removal(
             out = r.max(axis=1) if rule == "caz" else r.sum(axis=1)
             delta[chunk] = out / c[chunk]
         dirty[rows] = False
-
-    indptr, indices, data = q.indptr, q.indices, q.data
 
     while n_remaining > 0:
         cand = candidate_indices()  # ascending PU-index order
@@ -275,13 +295,8 @@ def rank_removal(
             )
         changed_parts: list[np.ndarray] = []
         for idx in removed:
-            removal_order.append(int(pu_ids[idx]))
-            remaining[idx] = False
-            s, e = indptr[idx], indptr[idx + 1]
-            Q[indices[s:e]] -= data[s:e]  # sequential, matching the dense engine
-            changed_parts.append(indices[s:e])
-            cost_remaining -= float(c[idx])
-        n_remaining -= removed.size
+            cols, _crossed = remove_cell(int(idx))
+            changed_parts.append(cols)
         if changed_parts:
             changed = np.unique(np.concatenate(changed_parts))
             holders = (
