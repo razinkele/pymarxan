@@ -12,10 +12,22 @@ deferred at v0.31.0). Brainstorm approved: column-wise truncated convolution, ne
 `SmoothingSpec` builds a dense n×n kernel — impossible beyond ~50k PUs (the shipped
 cap). Grid problems (`problem.grid: GridGeometry`, v0.17+) have regular geometry
 that turns the same negative-exponential kernel into a stationary 2-D convolution,
-making smoothed CAZ/ABF feasible at ~1M cells. This is Zonation's native
-"distribution smoothing" setting (2-D dispersal kernel over a raster; the Zonation
-manual's convention `alpha = 2 / dispersal distance` — science review to verify and
-decide whether we document it).
+making smoothed CAZ/ABF feasible at ~1M cells. Zonation's native "distribution
+smoothing" is exactly this transform in kernel shape (2-D negative-exponential
+over the raster, FFT-implemented; Moilanen et al. 2005, doi:10.1098/rspb.2005.3164)
+— with one deliberate pymarxan deviation the science review settled from primary
+sources: **Zonation accumulates the raw kernel (unnormalized); pymarxan
+additionally conserves mass per source** (the Phase-C vector-path choice, kept for
+internal consistency). The deviation is ranking-inert wherever a source's
+truncated window fits inside the valid mask (CAZ/ABF scores are invariant to
+per-feature constant scaling) and differs only near raster edges/mask holes — an
+*edge-corrected variant*, documented as such. The manual convention
+`alpha = 2 / mean dispersal distance` is verified real (the 2-D kernel's
+mean-dispersal identity; Westwood et al. 2020, doi:10.3390/d12020061 uses exactly
+2/d) and is documented as convention-not-definition with the inverse-CRS-units
+caveat. Zonation 5 itself truncates the kernel tail for tiled FFT (Moilanen et
+al. 2022, doi:10.1111/2041-210X.13819) — our window truncation is their own
+practice.
 
 ## 2. Goals / non-goals
 
@@ -81,13 +93,21 @@ out_dest = Σ_src q_src · K(d)/Z_src. Conservation: Σ_dest∈valid out_dest =
 `Z_src` IS that inner sum. Truncation therefore costs redistribution *reach*, not
 mass.
 
-**FFT dust and compact support:** FFT-based convolution writes ~1e-16·max noise
-everywhere. Restore exact compact support by masking: `reach =
-binary_dilation(support(q_g), structure=ones(window))` (scipy.ndimage); zero
-everything outside `reach ∧ M`. Values inside are untouched → sparsity is exact,
-conservation unharmed (out-of-reach true values are exactly 0 by construction).
-Convolution backend: `scipy.signal.oaconvolve` (picks FFT/direct sensibly),
-`mode="same"`.
+**FFT dust, compact support, and the nonnegativity clamp:** FFT-based convolution
+writes ~1e-16·max noise everywhere. Restore exact compact support by masking:
+`reach = support(q_g) ⊕ window` — implemented as a box convolution thresholded at
+0.5 (equivalent to `binary_dilation` with a full-window structure but O(G log G);
+threshold margin measured at ~11 orders of magnitude); zero everything outside
+`reach ∧ M`. Then **clamp: `np.maximum(smoothed, 0.0, out=smoothed)`** —
+design-review #1 (HIGH, found independently by two lenses): true in-window corner
+values ~`q·truncate^√2` can sink below the FFT noise floor (which scales with
+total landscape mass), producing negative dust INSIDE the reach mask —
+reproduced at the DEFAULT truncate with a 1e12-amplitude blob plus a remote unit
+source. Unclamped negatives would enter the engine unvalidated (raw-amount
+validation runs pre-smoothing) and invert the warp=1 heap's monotonicity
+invariant → silent heap≠batch divergence. Clipped mass is at FFT-noise scale,
+far inside the conservation tolerance (verified). Convolution backend:
+`scipy.signal.oaconvolve`, `mode="same"` (windows always odd).
 
 ## 4. Structure
 
@@ -97,18 +117,17 @@ Convolution backend: `scipy.signal.oaconvolve` (picks FFT/direct sensibly),
   row-major valid-cell order, the S1 invariant), returns the smoothed length-n_pu
   column. Internals: scatter → Z (computed ONCE per call set — see spec below) →
   convolve → mask → gather.
-  To avoid recomputing `Z` and the kernel per column, also expose
-  `GridKernel` (private-ish helper class or precomputed tuple) OR give the
-  function a multi-column form: `smooth_distribution_grid(amounts, grid, alpha,
-  *, truncate)` accepting `(n_pu,)` or `(n_pu, m)` — matching
-  `smooth_distribution`'s existing one-or-many contract. **Chosen: the
-  one-or-many contract** (mirrors the sibling exactly); kernel + `Z` + dilation
-  structure computed once per call, columns looped.
+  One-or-many contract (`(n_pu,)` or `(n_pu, m)`), mirroring the sibling — but
+  note (design-review #4): the many-column form materializes dense in/out, so
+  the raster-scale integration path deliberately calls `apply` **per column**,
+  recomputing kernel + `Z` each call for memory flatness. Overhead is bounded
+  ~1.5× in convolutions (3 per column vs 2 + one shared `Z`); a private
+  kernel/Z cache helper is deferred until profiling shows the `Z` conv matters.
 - **`zonation/smoothing.py`** gains the spec:
 
   ```python
-  @dataclass(eq=False)
-  class GridSmoothingSpec:
+  @dataclass
+  class GridSmoothingSpec:  # no eq=False: two float fields, auto __eq__ works
       alpha: float
       truncate: float = 1e-9
   ```
@@ -116,7 +135,13 @@ Convolution backend: `scipy.signal.oaconvolve` (picks FFT/direct sensibly),
   `__post_init__`: `alpha > 0`, `0 < truncate < 1` else `ValueError`.
   `apply(amounts: np.ndarray, grid: GridGeometry) -> np.ndarray` — thin wrapper
   over `smooth_distribution_grid`, same one-or-many contract.
-- **`zonation/rank_removal.py`** dispatch (isinstance) in the smoothing branch:
+- **`zonation/rank_removal.py`** dispatch — POSITIVE isinstance on both spec
+  types with a final `else: raise TypeError(f"unsupported smoothing spec: ...")`
+  (design-review #5: a negated-isinstance cap guard would silently route any
+  future third spec type through the dense cap + dense apply). A fully
+  spec-polymorphic `build_smoothed_csr(problem)` method was considered and
+  rejected for this phase: SmoothingSpec must stay byte-for-byte unchanged and
+  the existing cap tests monkeypatch against `rank_removal` itself. Branches:
   - `GridSmoothingSpec`: `problem.grid is None` → `ValueError` ("grid smoothing
     requires a grid problem; use SmoothingSpec for vector problems"). No 50k cap.
     Build the smoothed matrix **column-wise from the existing CSR/CSC** (never a
@@ -135,9 +160,10 @@ Convolution backend: `scipy.signal.oaconvolve` (picks FFT/direct sensibly),
 - `GridSmoothingSpec` on a problem without `grid` → `ValueError` (message above).
 - `SmoothingSpec` behavior byte-for-byte unchanged, including the 50k cap.
 - Amount validation: `_validate_inputs` already runs on raw amounts before any
-  smoothing (v0.31 ordering) — unchanged. Smoothed values are nonnegative by
-  construction (nonneg inputs × nonneg kernel), preserving the engine's
-  nonnegativity invariants (incl. the heap's monotonicity requirement).
+  smoothing (v0.31 ordering) — unchanged. Smoothed values are nonnegative **by
+  construction and clamped against FFT roundoff** (§3's clamp — load-bearing for
+  the heap's monotonicity invariant, since post-smoothing values bypass raw
+  validation; design-review #1).
 - Degenerate windows: huge alpha → minimum radius-1 window per axis (ceil of a
   positive is ≥ 1) with smoothly vanishing off-centre weights — near-identity, no
   special-casing; single-row/-column grids clip that axis' radius to 0. A 1×1
@@ -174,30 +200,41 @@ for the math; zonation additions appended to `test_rank_removal_scale.py`
 1. Grid-vs-vector allclose (full-window small grid; with and without masked
    holes; anisotropic `cell_width != cell_height`; multi-column `(n_pu, m)`).
 2. Conservation at truncate ∈ {1e-9, 1e-2}; single-cell-source compact support
-   with exact zeros outside window∩mask.
+   with exact zeros outside window∩mask; **nonnegativity regression** with the
+   review's high-dynamic-range construction (large plane, 1e12-amplitude blob +
+   remote unit source, `(out >= 0).all()`); **truncated-kernel explicit oracle**
+   (two-convolution result vs an independently built window-bounded
+   column-normalized kernel matrix — pins the formulation beyond the full-window
+   case; both verifying lenses measured ≤6.3e-16).
 3. Huge-alpha near-identity (self-weight dominates; window is radius-1);
    single-column grid (one axis radius 0); `truncate` bounds validation; `alpha`
    validation.
 4. Dispatch: GridSmoothingSpec + vector problem raises; SmoothingSpec on grid
    problem still works (via coords) — both specs coexist; >50k-cell grid problem
    accepted with GridSmoothingSpec (300×200 mask, trivially sparse feature;
-   fast because column-wise).
+   fast because column-wise). The EXISTING `test_smoothing_capped_at_vector_scale`
+   gains one assertion pinning the new cap message's GridSmoothingSpec redirect
+   (no duplicate test — design-review #6).
 5. Engine: rank_removal(grid problem, GridSmoothingSpec) heap==batch bitwise
    (warp=1) and equals the manually-smoothed-matrix run (build the smoothed CSR
    in-test via smooth_distribution_grid, feed a problem constructed from it,
    compare orders).
 6. ZonationSolver(smoothing=GridSmoothingSpec) end-to-end on a grid problem;
    metadata markers intact.
-7. Bench (bench-marked): 300×300 grid, a few localized features, GridSmoothingSpec
-   smoothing + rank_removal warp=n//1000 — asserts completion under a generous
-   budget and that the smoothed CSR nnz stays ≪ n_pu*n_feat (sparsity claim).
+7. Bench (bench-marked): 300×300 grid, a few localized features,
+   `GridSmoothingSpec(alpha=2.0)` (radius ~11 — design-review #3: the earlier
+   alpha=0.5/1e-9 parameters give a radius-42 window and 36%-dense output, which
+   cannot witness sparsity) + rank_removal warp=n//1000 — asserts completion
+   under budget AND `smoothed nnz < 0.25 * n_pu * n_feat`.
 8. `make check` green; parity anchor untouched.
 
 ## 8. Performance envelope (claims for review)
 
-- Per column: one `oaconvolve` on the `(nrows, ncols)` plane (`O(G log G)` FFT or
-  better), one dilation, scatter/gather `O(G)`. `Z` and kernel once per apply.
-  1M-cell grid × 20 features: tens of convolutions of a 1M-cell plane — seconds.
+- Per column (integration path): three plane convolutions (smoothing, Z, reach —
+  Z/kernel recomputed per column, the ~1.5× memory-flatness trade of §4) +
+  scatter/gather `O(G)`. Measured by grounding review: 0.35–0.61 s per 1M-cell
+  column; 20 columns 6.3 s; the Task-4 bench emulation 18.5 s vs its 120 s
+  budget.
 - Memory: a few grid planes at a time (`8 MB` each at 1M cells) + the smoothed
   sparse columns. No n×n kernel, no dense `(n_pu, n_feat)`.
 - Smoothed nnz growth: source nnz × window area upper bound; localized features
@@ -211,23 +248,26 @@ for the math; zonation additions appended to `test_rank_removal_scale.py`
 - `src/pymarxan/zonation/rank_removal.py` — dispatch branch + type widening;
   docstring paragraph.
 - `src/pymarxan/solvers/zonation_solver.py` — type widening only.
-- `src/pymarxan/zonation/__init__.py` (+ package `__init__` re-exports as the
-  siblings do) — export `GridSmoothingSpec`.
+- `src/pymarxan/zonation/__init__.py` — export `GridSmoothingSpec` beside
+  `SmoothingSpec`. No top-level or connectivity re-export: the siblings have
+  none (verified — `pymarxan/__init__.py` exports only `__version__`).
 - Tests per §7; `CHANGELOG.md` Added entry → v0.33.0.
 
-## 10. Risks / open questions for review
+## 10. Review outcome (2026-08-08)
 
-- The `Z`-normalization direction (column-normalized == per-SOURCE outgoing mass)
-  must match `smooth_distribution` exactly — grounding should verify against the
-  vector implementation numerically, not by reading.
-- `oaconvolve` availability/behavior across the pinned scipy version; `mode="same"`
-  centering with even/odd windows (windows are always odd by construction —
-  `2r+1`).
-- PU-order invariant: scatter/gather must use the S1 row-major valid-cell order
-  (`np.flatnonzero(mask.reshape(-1))`) — the same order `build_pu_feature_csr`
-  rows follow; a mismatch is silent wrong ranking (the Phase-C review's classic).
-- Science: is `alpha = 2/dispersal distance` the right convention note; is
-  column-normalized (mass-conserving) smoothing what Zonation actually does, or
-  does Zonation use un-normalized kernels (Moilanen 2004/2005; the vector path
-  chose normalize=True in Phase C — consistency matters more than either choice,
-  but the docs should state what Zonation does).
+Reviewed by the four-perspective workflow (`wf_f313e9e2-f7d`); synthesis in
+`2026-08-08-zonation-grid-smoothing-review.md`. All prior open questions closed:
+
+- `Z`-direction: **verified numerically** — the vector oracle is per-SOURCE
+  outgoing normalization (the per-destination reading differs by 0.19 and breaks
+  conservation); the sibling `smooth_distribution` docstring stated it backwards
+  and gets a one-line drive-by fix.
+- `oaconvolve`: present in the pinned scipy 1.17.1; `mode="same"` verified incl.
+  window-larger-than-plane; reach threshold margin ~11 orders.
+- PU-order invariant: verified (`flatnonzero(mask.ravel())` == valid_cells
+  row-major == CSR rows, bitwise).
+- Science: Zonation smooths UNNORMALIZED (ours is a documented edge-corrected
+  variant, ranking-inert away from edges/holes); alpha = 2/d convention verified
+  and documented; Zonation 5's own kernel truncation cited.
+- NEW from review (the one HIGH): FFT negative dust inside the reach mask →
+  the §3 clamp, regression-tested.

@@ -151,6 +151,46 @@ def test_huge_alpha_near_identity_and_single_column_grid() -> None:
     np.testing.assert_allclose(outc.sum(), qc.sum(), rtol=1e-12)
 
 
+def test_nonnegative_under_fft_roundoff() -> None:
+    # Design-review HIGH (found independently by two lenses): a high-amplitude
+    # blob plus a remote unit source makes true in-window corner values sink
+    # below the FFT noise floor — unclamped output goes NEGATIVE inside the
+    # reach mask (3,570 cells at default truncate in the review's probe), which
+    # would silently break the heap's monotonicity invariant downstream.
+    mask = np.ones((256, 256), dtype=bool)
+    grid = _grid(mask)
+    q = np.zeros(grid.n_pu)
+    qg = q.reshape(256, 256)
+    qg[40:80, 40:80] = 1e12  # high-amplitude blob
+    qg[200, 200] = 1.0       # remote lone unit source
+    out = smooth_distribution_grid(qg.reshape(-1), grid, alpha=0.5, truncate=1e-9)
+    assert (out >= 0.0).all()
+    np.testing.assert_allclose(out.sum(), qg.sum(), rtol=1e-10)
+
+
+def test_matches_explicit_truncated_kernel_oracle() -> None:
+    # Pin the two-convolution formulation against an INDEPENDENTLY built
+    # window-bounded column-normalized kernel matrix (stronger than the
+    # full-window case: exercises the truncation itself). Both review lenses
+    # measured <=6.3e-16.
+    rng = np.random.default_rng(5)
+    mask = np.ones((10, 9), dtype=bool)
+    mask[4, 2:5] = False
+    grid = _grid(mask)
+    q = rng.uniform(0, 3, size=grid.n_pu)
+    alpha, truncate = 1.0, 1e-2
+    out = smooth_distribution_grid(q, grid, alpha, truncate=truncate)
+    # Explicit oracle: truncated window, column-normalized over valid cells.
+    cents = grid.cell_centroids()
+    rx = int(np.ceil(-np.log(truncate) / (alpha * 1.0)))
+    d = distance_matrix_from_points(cents)
+    dxy = np.abs(cents[:, None, :] - cents[None, :, :])
+    in_window = (dxy[:, :, 0] <= rx * 1.0 + 1e-12) & (dxy[:, :, 1] <= rx * 1.0 + 1e-12)
+    K = np.where(in_window, np.exp(-alpha * d), 0.0)
+    Kn = K / K.sum(axis=0)
+    np.testing.assert_allclose(out, Kn @ q, rtol=1e-10, atol=1e-13)
+
+
 def test_validation() -> None:
     grid = _grid(np.ones((3, 3), dtype=bool))
     q = np.ones(9)
@@ -246,19 +286,42 @@ def smooth_distribution_grid(
         # true values are zero outside (source support ⊕ window) ∩ mask.
         reach = oaconvolve((plane != 0).astype(float), box, mode="same") > 0.5
         smoothed[~(reach & mask)] = 0.0
+        # Clamp FFT roundoff INSIDE the reach: true corner values ~q·truncate^√2
+        # can sink below the FFT noise floor (which scales with total landscape
+        # mass) and come out negative — and negative amounts would silently
+        # invert the warp=1 heap's monotonicity invariant downstream (they
+        # bypass raw-amount validation). Design-review HIGH; clipped mass is at
+        # noise scale, far inside the conservation tolerance.
+        np.maximum(smoothed, 0.0, out=smoothed)
         out[:, j] = smoothed.reshape(-1)[flat_valid]
     return out[:, 0] if one_d else out
 ```
 
-Add the `GridGeometry` import under `TYPE_CHECKING` (the string annotation keeps
-runtime import-free; connectivity must not hard-import models at module level if
-that would cycle — check: `pymarxan.models` does not import connectivity, so a
-plain import is also fine; use a plain import if no cycle, else TYPE_CHECKING).
+Use a PLAIN `from pymarxan.models.grid import GridGeometry` import with an
+unquoted annotation — no cycle exists (precedent: `connectivity/features.py`
+already imports `pymarxan.models.problem`; review-verified). Two docstring
+additions to the function (review findings #2/#8): (a) "Zonation's own smoothing
+is unnormalized kernel accumulation (Moilanen et al. 2005,
+doi:10.1098/rspb.2005.3164); this function additionally conserves mass per
+source — an edge-corrected variant whose rankings match the unnormalized
+transform wherever a source's truncated window fits inside the valid mask
+(CAZ/ABF scores are invariant to per-feature constant scaling), differing only
+near edges/holes"; (b) "Common Zonation guidance sets alpha = 2 / (species mean
+dispersal distance) — the mean-dispersal identity of the 2-D kernel (Westwood
+et al. 2020, doi:10.3390/d12020061); alpha is in inverse CRS distance units.
+Zonation 5 itself truncates the kernel tail (Moilanen et al. 2022,
+doi:10.1111/2041-210X.13819)." ALSO one drive-by fix in the SAME file (review
+finding #7, numerically verified): `smooth_distribution`'s docstring says
+column normalization means "each destination unit's incoming kernel weights sum
+to 1" — the code is per-SOURCE outgoing; change that sentence to "each source
+unit's outgoing kernel weights sum to 1, so the redistribution conserves total
+amount". No behavior change.
 
 - [ ] **Step 4: Run tests**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/connectivity/test_grid_smoothing.py -v`
-Expected: ALL PASS (9 tests). Then ruff + mypy on both files.
+Expected: ALL PASS (12 collected items — 11 functions, one 2-way parametrize).
+Then ruff + mypy on both files.
 
 - [ ] **Step 5: Commit**
 
@@ -319,8 +382,8 @@ def test_grid_spec_exported_from_zonation() -> None:
 - [ ] **Step 2: Verify failures** (ImportError). **Step 3: Implement** — append to `zonation/smoothing.py`:
 
 ```python
-@dataclass(eq=False)
-class GridSmoothingSpec:
+@dataclass
+class GridSmoothingSpec:  # no eq=False: two float fields, auto __eq__ works
     """Raster-scale distribution smoothing for grid problems.
 
     The grid-convolution counterpart of :class:`SmoothingSpec`: same
@@ -458,12 +521,11 @@ def test_grid_smoothing_no_pu_cap() -> None:
     assert len(res.removal_order) == n
 
 
-def test_vector_smoothing_cap_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The 50k cap still applies to the dense-kernel SmoothingSpec.
-    p = _random_problem(0)
-    monkeypatch.setattr(type(p), "n_planning_units", property(lambda self: 50_001))
-    with pytest.raises(ValueError, match="vector-scale"):
-        rank_removal(p, smoothing=SmoothingSpec(alpha=1.0, coords=np.zeros((80, 2))))
+# NOTE (review #6): do NOT add a new cap test — the existing
+# test_smoothing_capped_at_vector_scale already pins the cap with the identical
+# monkeypatch. Instead EDIT that existing test: add a second context-managed
+# assertion (same fixture) matching "GridSmoothingSpec" in the message, pinning
+# the new redirect the cap message gains in this task.
 
 
 @pytest.mark.parametrize("rule", ["caz"])
@@ -499,15 +561,14 @@ Replace the smoothing-cap guard and matrix build:
             "GridSmoothingSpec requires a grid problem (problem.grid is None); "
             "use SmoothingSpec for vector problems"
         )
-    if (
-        smoothing is not None
-        and not isinstance(smoothing, GridSmoothingSpec)
-        and n_pu_total > _SMOOTHING_MAX_PU
-    ):
+    if isinstance(smoothing, SmoothingSpec) and n_pu_total > _SMOOTHING_MAX_PU:
+        # Positive isinstance (review #5): a future third spec type must not
+        # silently inherit the dense cap or the dense apply path.
         raise ValueError(
             f"smoothing builds a dense {n_pu_total}x{n_pu_total} kernel and is "
             f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); use "
-            "GridSmoothingSpec for grid problems at raster scale."
+            "GridSmoothingSpec for grid problems at raster scale "
+            "(problems constructed with grid=GridGeometry(...))."
         )
 ```
 
@@ -540,15 +601,24 @@ and the build branch:
             ),
             shape=base.shape,
         ).tocsr()
-    elif smoothing is not None:
+    elif isinstance(smoothing, SmoothingSpec):
         q = csr_matrix(smoothing.apply(problem.build_pu_feature_matrix()))
+    elif smoothing is not None:
+        raise TypeError(
+            f"unsupported smoothing spec: {type(smoothing).__name__}"
+        )
     else:
         q = problem.build_pu_feature_csr()
 ```
 
-(Per-column `apply` recomputes the kernel and Z each call — a deliberate 2×
-overhead accepted for memory flatness; do not "optimize" by batching all
-columns dense.) Docstring: the sentence "Smoothing stays vector-scale
+Line anchors (grounding-verified): the current cap guard is at
+`rank_removal.py:171-176`, the build branch at `:180-183`, and
+`q.eliminate_zeros()` at `:184` — it MUST remain after the new dispatch (the
+snippet keeps it).
+
+(Per-column `apply` recomputes the kernel and Z each call — deliberate, for
+memory flatness; overhead is ~1.5× in convolution count (3 per column vs 2 + one
+shared Z). Do not "optimize" by batching all columns dense.) Docstring: the sentence "Smoothing stays vector-scale
 (n_pu <= 50_000)." becomes "Dense-kernel ``SmoothingSpec`` smoothing stays
 vector-scale (n_pu <= 50_000); ``GridSmoothingSpec`` (grid problems) has no
 cap — truncated 2-D convolution, mass-conserving."
@@ -573,12 +643,31 @@ In `zonation_solver.py`: widen the import + the `smoothing:` parameter type to
 def test_grid_smoothing_rank_removal_budget() -> None:
     from pymarxan.zonation.smoothing import GridSmoothingSpec
 
-    p = _grid_problem(300)  # 90_000 cells, compact feature blocks
+    p = _grid_problem(300, with_grid=True)  # 90_000 cells, compact blocks
+    # alpha=2.0 -> window radius ~11: small enough that smoothing genuinely
+    # preserves sparsity (review #3: alpha=0.5/truncate=1e-9 gives radius 42
+    # and 36%-dense output, which cannot witness the sparsity claim).
+    spec = GridSmoothingSpec(alpha=2.0)
     t0 = time.perf_counter()
-    res = rank_removal(p, rule="caz", warp=90, smoothing=GridSmoothingSpec(alpha=0.5))
+    res = rank_removal(p, rule="caz", warp=90, smoothing=spec)
     elapsed = time.perf_counter() - t0
     assert len(res.removal_order) == 90_000
     assert elapsed < 120.0, f"grid-smoothed rank_removal took {elapsed:.1f}s"
+    # Sparsity witness: rebuild the smoothed matrix the way the dispatch does
+    # and assert it stays well under dense.
+    from pymarxan.connectivity.smoothing import smooth_distribution_grid
+
+    base = p.build_pu_feature_csr()
+    csc = base.tocsc()
+    nnz = 0
+    for j in range(base.shape[1]):
+        col = np.zeros(base.shape[0])
+        sl = slice(csc.indptr[j], csc.indptr[j + 1])
+        col[csc.indices[sl]] = csc.data[sl]
+        nnz += int(
+            (smooth_distribution_grid(col, p.grid, 2.0) > 0).sum()
+        )
+    assert nnz < 0.25 * base.shape[0] * base.shape[1], f"smoothed nnz {nnz}"
 ```
 
 NOTE: `_grid_problem` builds a plain problem WITHOUT `grid=` — check its
