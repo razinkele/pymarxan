@@ -9,13 +9,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymarxan.models.grid import GridGeometry
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.zonation.rank_removal import rank_removal
 
 pytestmark = pytest.mark.bench
 
 
-def _grid_problem(side: int, n_feat: int = 8, seed: int = 0) -> ConservationProblem:
+def _grid_problem(
+    side: int, n_feat: int = 8, seed: int = 0, with_grid: bool = False
+) -> ConservationProblem:
     """side x side grid; each feature occupies a random compact block (locality)."""
     rng = np.random.default_rng(seed)
     n_pu = side * side
@@ -45,7 +48,16 @@ def _grid_problem(side: int, n_feat: int = 8, seed: int = 0) -> ConservationProb
         frames.append(
             pd.DataFrame({"species": fid, "pu": cells, "amount": amounts})
         )
-    return ConservationProblem(planning_units, features, pd.concat(frames))
+    grid = None
+    if with_grid:
+        grid = GridGeometry(
+            x_min=0.0,
+            y_max=float(side),
+            cell_width=1.0,
+            cell_height=1.0,
+            mask=np.ones((side, side), dtype=bool),
+        )
+    return ConservationProblem(planning_units, features, pd.concat(frames), grid=grid)
 
 
 def test_rank_removal_scale_budget() -> None:
@@ -77,3 +89,33 @@ def test_rank_removal_warp1_heap_budget() -> None:
     assert heap_elapsed < batch_elapsed * 1.05, (
         f"heap {heap_elapsed:.1f}s vs batch {batch_elapsed:.1f}s"
     )
+
+
+def test_grid_smoothing_rank_removal_budget() -> None:
+    from pymarxan.zonation.smoothing import GridSmoothingSpec
+
+    p = _grid_problem(300, with_grid=True)  # 90_000 cells, compact blocks
+    # alpha=2.0 -> window radius ~11: small enough that smoothing genuinely
+    # preserves sparsity (review #3: alpha=0.5/truncate=1e-9 gives radius 42
+    # and 36%-dense output, which cannot witness the sparsity claim).
+    spec = GridSmoothingSpec(alpha=2.0)
+    t0 = time.perf_counter()
+    res = rank_removal(p, rule="caz", warp=90, smoothing=spec)
+    elapsed = time.perf_counter() - t0
+    assert len(res.removal_order) == 90_000
+    assert elapsed < 120.0, f"grid-smoothed rank_removal took {elapsed:.1f}s"
+    # Sparsity witness: rebuild the smoothed matrix the way the dispatch does
+    # and assert it stays well under dense.
+    from pymarxan.connectivity.smoothing import smooth_distribution_grid
+
+    base = p.build_pu_feature_csr()
+    csc = base.tocsc()
+    nnz = 0
+    for j in range(base.shape[1]):
+        col = np.zeros(base.shape[0])
+        sl = slice(csc.indptr[j], csc.indptr[j + 1])
+        col[csc.indices[sl]] = csc.data[sl]
+        nnz += int(
+            (smooth_distribution_grid(col, p.grid, 2.0) > 0).sum()
+        )
+    assert nnz < 0.25 * base.shape[0] * base.shape[1], f"smoothed nnz {nnz}"

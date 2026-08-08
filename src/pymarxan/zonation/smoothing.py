@@ -71,6 +71,12 @@ class GridSmoothingSpec:  # no eq=False: two float fields, auto __eq__ works
     convolution on ``problem.grid`` — no n×n kernel, no PU cap. Accepted by
     the same ``smoothing=`` parameter of ``rank_removal`` / ``ZonationSolver``;
     requires the problem to carry a :class:`GridGeometry`.
+
+    ``amounts`` rows (and the problem's ``planning_units``) MUST be aligned to
+    the grid's row-major valid-cell order (the same order
+    ``build_pu_feature_csr`` rows follow); only the row count is validated, so
+    a correctly-sized but mis-ordered problem silently smooths onto the wrong
+    cells.
     """
 
     alpha: float

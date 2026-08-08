@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from pymarxan.connectivity.smoothing import distance_matrix_from_points
-from pymarxan.zonation.smoothing import SmoothingSpec
+from pymarxan.models.grid import GridGeometry
+from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
 
 def test_point_mass_spreads_monotonically():
@@ -67,8 +68,6 @@ def test_single_pu_smooths_to_itself():
 
 
 # --- GridSmoothingSpec (grid-convolution smoothing) -----------------------
-from pymarxan.models.grid import GridGeometry
-from pymarxan.zonation.smoothing import GridSmoothingSpec
 
 
 def test_grid_spec_validation() -> None:
