@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `zonation.rank_removal(curve_every=...)`: record performance-curve rows every
+  k-th removal instead of every step — the memory knob for `warp=1` at raster
+  scale; curve storage is now a preallocated array either way.
+
+### Changed
+- `zonation.rank_removal` with `warp=1` now selects via a lazy-greedy min-heap
+  (Minoux 1978; cf. CELF): exact single-cell greedy at raster scale,
+  bitwise-identical to the previous warp=1 path whenever scores stay NaN-free
+  (float amounts and +inf regimes included; NaN-producing runs now fail fast
+  with `RuntimeError`; FP-residue feature extinction is repaired eagerly,
+  phase-scoped). The small-warp advisory no longer fires for `warp=1`.
+
 ## [0.31.0] — 2026-08-08
 
 ### Changed
