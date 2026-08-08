@@ -960,3 +960,23 @@ def test_zonation_solver_grid_smoothing(rule: str) -> None:
     sols = solver.solve(p, {})
     assert len(sols) == 1
     assert sols[0].metadata.get("smoothed") is True
+    assert sols[0].metadata.get("smoothing_alpha") == 0.7
+
+
+def test_smoothing_specs_coexist_on_grid_problem() -> None:
+    # §7.4's promised coexistence check: a dense-kernel SmoothingSpec still
+    # works on a GRID problem (via explicit coords) — the two spec types
+    # dispatch independently.
+    p = _grid_smoothing_problem()
+    spec = SmoothingSpec(alpha=1.0, coords=p.grid.cell_centroids())
+    res = rank_removal(p, smoothing=spec)
+    assert len(res.removal_order) == p.n_planning_units
+
+
+def test_unknown_smoothing_spec_raises_type_error() -> None:
+    class Bogus:
+        alpha = 1.0
+
+    p = _random_problem(0)
+    with pytest.raises(TypeError, match="unsupported smoothing spec"):
+        rank_removal(p, smoothing=Bogus())  # type: ignore[arg-type]

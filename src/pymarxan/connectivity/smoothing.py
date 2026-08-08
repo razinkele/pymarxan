@@ -97,6 +97,12 @@ def smooth_distribution_grid(
     units. Zonation 5 itself truncates the kernel tail (Moilanen et al.
     2022, doi:10.1111/2041-210X.13819).
 
+    Outputs are nonnegative (clamped against FFT roundoff — negative dust would
+    otherwise corrupt downstream ranking invariants) and have exact compact support:
+    cells outside (source support ⊕ window) ∩ mask are exactly 0.0. The ``(n_pu, m)``
+    multi-column form materializes dense input/output planes; raster-scale callers
+    with many features should loop single columns.
+
     Args:
         amounts: ``(n_pu,)`` or ``(n_pu, m)`` per-PU amounts, rows in the
             grid's row-major valid-cell order (== CSR row order).
