@@ -12,6 +12,7 @@ v0.13-era difference, unchanged here.
 """
 from __future__ import annotations
 
+import operator
 import warnings
 
 import numpy as np
@@ -87,6 +88,7 @@ def rank_removal(
     warp: int = 1,
     use_cost: bool = True,
     smoothing: SmoothingSpec | None = None,
+    curve_every: int = 1,
     _force_full_rescore: bool = False,
 ) -> ZonationResult:
     """Rank every planning unit by iterative backward removal.
@@ -126,6 +128,16 @@ def rank_removal(
     """
     if rule not in ("caz", "abf"):
         raise ValueError(f"rule must be 'caz' or 'abf', got {rule!r}")
+    try:
+        curve_every = operator.index(curve_every)
+    except TypeError:
+        raise ValueError(
+            f"curve_every must be an integer >= 1, got {curve_every!r}"
+        ) from None
+    if curve_every < 1:
+        raise ValueError(
+            f"curve_every must be an integer >= 1, got {curve_every!r}"
+        )
     _validate_inputs(problem, weights)
 
     n_pu_total = problem.n_planning_units
@@ -178,19 +190,22 @@ def rank_removal(
     dirty = np.ones(n_pu, dtype=bool)
 
     removal_order: list[int] = []
-    curve_rows: list[dict] = []
+    curve_cols = ["prop_landscape_remaining", "prop_cost_remaining"] + [
+        f"feat_{int(fid)}" for fid in feat_ids
+    ]
+    curves = np.empty((3 + n_pu // curve_every, 2 + n_feat), dtype=float)
+    n_curve_rows = 0
+    last_recorded_at = -1  # n_removed value of the most recent recorded row
 
     def record_curve() -> None:
-        retained = np.where(T > 0, Q / T_safe, 1.0)
-        row: dict = {
-            "prop_landscape_remaining": n_remaining / n_pu,
-            # max(): float-cost sequential drift can leave a tiny negative
-            # residual at run end (design §7 site 2); exact for integer costs.
-            "prop_cost_remaining": max(cost_remaining, 0.0) / cost_total,
-        }
-        for j, fid in enumerate(feat_ids):
-            row[f"feat_{int(fid)}"] = float(retained[j])
-        curve_rows.append(row)
+        nonlocal n_curve_rows, last_recorded_at
+        curves[n_curve_rows, 0] = n_remaining / n_pu
+        # max(): float-cost sequential drift can leave a tiny negative
+        # residual at run end (design §7 site 2); exact for integer costs.
+        curves[n_curve_rows, 1] = max(cost_remaining, 0.0) / cost_total
+        curves[n_curve_rows, 2:] = np.where(T > 0, Q / T_safe, 1.0)
+        n_curve_rows += 1
+        last_recorded_at = n_pu - n_remaining
 
     record_curve()
 
@@ -277,6 +292,11 @@ def rank_removal(
                 else np.zeros(0, dtype=np.intp)
             )
             dirty[holders] = True
+        n_removed = n_pu - n_remaining
+        if n_removed % curve_every == 0:
+            record_curve()
+
+    if last_recorded_at != n_pu:
         record_curve()
 
     priority_rank = {
@@ -285,6 +305,6 @@ def rank_removal(
     return ZonationResult(
         priority_rank=priority_rank,
         removal_order=removal_order,
-        performance_curves=pd.DataFrame(curve_rows),
+        performance_curves=pd.DataFrame(curves[:n_curve_rows], columns=curve_cols),
         rule=rule,
     )

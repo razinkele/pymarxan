@@ -541,3 +541,33 @@ def test_cost_curve_never_negative_float_costs(rule: str) -> None:
         p = _random_problem(seed, integer=False)
         res = rank_removal(p, rule=rule, warp=3)
         assert (res.performance_curves["prop_cost_remaining"] >= 0).all()
+
+
+# --- CELF phase, Task 1: curve_every + array curves -----------------------
+def test_curve_every_validation() -> None:
+    p = _random_problem(0)
+    for bad in (0, -3, 2.5, "5", None):
+        with pytest.raises(ValueError, match="curve_every"):
+            rank_removal(p, curve_every=bad)  # type: ignore[arg-type]
+    # np.integer must be ACCEPTED (design-review #5): the likeliest caller type
+    # for a raster-scale memory knob is numpy-derived (n_pu // 1000 etc.).
+    res = rank_removal(p, curve_every=np.int64(7))  # type: ignore[arg-type]
+    assert len(res.removal_order) == p.n_planning_units
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_curve_every_thins_rows_exactly(rule: str) -> None:
+    # Thinned rows must be a bitwise row-subset of the curve_every=1 run:
+    # initial row, every k-th removal, and always the final state (design §6).
+    p = _random_problem(3, n_pu=40)
+    full = rank_removal(p, rule=rule, warp=1)
+    thin = rank_removal(p, rule=rule, warp=1, curve_every=7)
+    assert full.removal_order == thin.removal_order
+    fc = full.performance_curves.to_numpy()
+    tc = thin.performance_curves.to_numpy()
+    k, n = 7, 40
+    idxs = [0] + list(range(k, n + 1, k))
+    if idxs[-1] != n:
+        idxs.append(n)
+    np.testing.assert_array_equal(tc, fc[idxs])
+    assert list(thin.performance_curves.columns) == list(full.performance_curves.columns)
