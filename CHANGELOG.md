@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-08-08
+
 ### Added
 - `zonation.GridSmoothingSpec` + `connectivity.smooth_distribution_grid`:
   raster-scale distribution smoothing for grid problems via truncated-window
@@ -1128,7 +1130,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.33.0
 [0.32.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.32.0
 [0.31.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.31.0
 [0.30.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.30.0
