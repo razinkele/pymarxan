@@ -133,8 +133,10 @@ def rank_removal(
     ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
     batch selection; an advisory warns for small ``warp>1`` at raster scale
     (silence via ``warnings.filterwarnings``). ``curve_every=k`` records the
-    initial state, every k-th removal (at batch boundaries when ``warp>1``),
-    and always the final state. Landscape-spanning features degrade either path
+    initial state, every k-th removal (when ``warp>1``, a row lands only where
+    a batch boundary coincides with a multiple of k — choose ``curve_every`` a
+    multiple of ``warp`` for evenly spaced rows), and always the final state.
+    Landscape-spanning features degrade either path
     toward O(n^2) holder-marking.
     Equivalence to the reference engine: exact removal order for BOTH rules on
     integer amounts (while sums stay below 2**53); float amounts (including

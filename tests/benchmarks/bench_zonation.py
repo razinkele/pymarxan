@@ -62,7 +62,7 @@ def test_rank_removal_warp1_heap_budget() -> None:
     # The claim to pin: exact warp=1 via the lazy heap is FASTER than the batch
     # path it replaces (the naive per-pop variant did not finish at this size).
     # Absolute budgets proved machine-relative (measured 2026-08-08: heap
-    # 102.5s, batch 136.2s on the reference machine; design-review batch
+    # 102.5s, batch 138.4s on the reference machine; design-review batch
     # reference 120.7s), so assert relative order plus a DNF-catching ceiling.
     p = _grid_problem(300)  # 90_000 cells
     t0 = time.perf_counter()

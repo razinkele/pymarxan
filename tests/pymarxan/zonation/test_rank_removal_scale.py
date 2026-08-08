@@ -847,3 +847,15 @@ def test_curve_every_with_warp_batches() -> None:
     fc = full.performance_curves.to_numpy()
     tc = thin.performance_curves.to_numpy()
     np.testing.assert_array_equal(tc, fc[[0, 2, 4, 6]])
+
+
+def test_curve_every_misaligned_warp_records_sparse_rows() -> None:
+    # warp=3 never lands on a multiple of 10 (batch ends at 3,6,9,...), so
+    # only the initial and final rows are recorded — the docstring's
+    # "choose curve_every a multiple of warp" advice exists for this reason.
+    p = _random_problem(9, n_pu=30)
+    res = rank_removal(p, warp=3, curve_every=10)
+    full = rank_removal(p, warp=3)
+    fc = full.performance_curves.to_numpy()
+    tc = res.performance_curves.to_numpy()
+    np.testing.assert_array_equal(tc, fc[[0, 10]])  # initial + final only
