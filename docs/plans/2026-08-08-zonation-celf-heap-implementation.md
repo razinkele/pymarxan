@@ -40,6 +40,10 @@ def test_curve_every_validation() -> None:
     for bad in (0, -3, 2.5, "5", None):
         with pytest.raises(ValueError, match="curve_every"):
             rank_removal(p, curve_every=bad)  # type: ignore[arg-type]
+    # np.integer must be ACCEPTED (design-review #5): the likeliest caller type
+    # for a raster-scale memory knob is numpy-derived (n_pu // 1000 etc.).
+    res = rank_removal(p, curve_every=np.int64(7))  # type: ignore[arg-type]
+    assert len(res.removal_order) == p.n_planning_units
 
 
 @pytest.mark.parametrize("rule", ["caz", "abf"])
@@ -73,14 +77,24 @@ Add to the signature (after `smoothing`, before `_force_full_rescore`):
     curve_every: int = 1,
 ```
 
-Immediately after the `rule` check (before `_validate_inputs`):
+Immediately after the `rule` check (before `_validate_inputs`), with
+`import operator` added to the stdlib import group:
 
 ```python
-    if not isinstance(curve_every, int) or curve_every < 1:
+    try:
+        curve_every = operator.index(curve_every)
+    except TypeError:
+        raise ValueError(
+            f"curve_every must be an integer >= 1, got {curve_every!r}"
+        ) from None
+    if curve_every < 1:
         raise ValueError(
             f"curve_every must be an integer >= 1, got {curve_every!r}"
         )
 ```
+
+(`operator.index` accepts Python int and `np.integer` exactly; rejects
+float/str/None — design-review #5.)
 
 Replace the `removal_order`/`curve_rows` block and `record_curve` (currently the
 dict-appending closure) with:
@@ -180,10 +194,9 @@ git commit -m "feat(zonation): curve_every parameter + array-backed performance 
         return cols, crossed
 ```
 
-NOTE: `remove_cell` references `indptr`/`indices`/`data`, which are currently
-assigned AFTER `candidate_indices` — keep the existing
-`indptr, indices, data = q.indptr, q.indices, q.data` line but move it above
-this function definition. In the batch loop, replace the per-removal body:
+NOTE: move the existing `indptr, indices, data = q.indptr, q.indices, q.data`
+line above this function definition for clarity (closures late-bind, so this is
+stylistic, not load-bearing — the assignment already precedes both loops). In the batch loop, replace the per-removal body:
 
 ```python
         changed_parts: list[np.ndarray] = []
@@ -200,6 +213,11 @@ holder marking from `changed_parts`, the Task-1 curve recording) stays.
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/ tests/pymarxan/solvers/test_zonation_solver.py -q`
 Expected: ALL PASS, zero changes to any expectation. Also ruff + mypy on the file.
+Then run the existing warp-batch bench once
+(`/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zonation.py::test_rank_removal_scale_budget -m bench -v`)
+and note its time in the commit message — `remove_cell` adds O(nnz_row)
+crossed-detection per removal to the batch path (design §2 accepts this; the
+bench is the regression net).
 
 - [ ] **Step 3: Commit**
 
@@ -273,17 +291,102 @@ def test_heap_equals_batch_edge_shapes() -> None:
 
 @pytest.mark.parametrize("rule", ["caz", "abf"])
 def test_heap_equals_batch_float_sweep(rule: str) -> None:
-    # Statistical net for the §5 extinction repair: 30 float seeds.
+    # GENERAL heap-vs-batch coverage. Review #2 measured 0 extinction crossings
+    # in 120 such runs — the constructed Task-4 fixtures, NOT this sweep, are
+    # the §5 repair's net.
     for seed in range(30):
         p = _random_problem(seed, n_pu=50, n_feat=5, integer=False)
         _assert_equal_results(
             rank_removal(p, rule=rule, warp=1),
             rank_removal(p, rule=rule, warp=1, _force_batch=True),
         )
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_heap_equals_batch_weights(rule: str) -> None:
+    # w != 1 is a distinct rescore input never covered by other families;
+    # weight-0 features meet the dead-mask logic (review #6).
+    p = _random_problem(13, n_pu=40, n_feat=4)
+    w = {1: 3.5, 2: 0.0}
+    _assert_equal_results(
+        rank_removal(p, rule=rule, warp=1, weights=w),
+        rank_removal(p, rule=rule, warp=1, weights=w, _force_batch=True),
+    )
+
+
+def test_heap_equals_batch_all_ties() -> None:
+    # Sustained equal-key regime: every delta bitwise-equal each step — pure
+    # (score, index) tuple-order selection with maximal stale-duplicate
+    # traffic; the tie-break-through-staleness argument's stress case
+    # (review #10). Expected order is directly assertable: ascending PU index.
+    n = 30
+    pu = pd.DataFrame(
+        {"id": list(range(1, n + 1)), "cost": [1.0] * n, "status": [0] * n}
+    )
+    feats = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    pvf = pd.DataFrame(
+        [{"species": 1, "pu": i, "amount": 2.0} for i in range(1, n + 1)]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    for rule in ("caz", "abf"):
+        heap_res = rank_removal(p, rule=rule, warp=1, use_cost=False)
+        _assert_equal_results(
+            heap_res,
+            rank_removal(p, rule=rule, warp=1, use_cost=False, _force_batch=True),
+        )
+        assert heap_res.removal_order == list(range(1, n + 1))
+
+
+def test_heap_equals_batch_small_families() -> None:
+    # Stored-zero, duplicate-(pu,species), and featureless-PU fixtures — cheap
+    # direct coverage beyond the transitive oracle route (reviews #6/#10).
+    pu3 = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0] * 3, "status": [0] * 3})
+    feats2 = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    feats1 = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]})
+    fixtures = [
+        ConservationProblem(  # stored zero
+            pu3,
+            feats2,
+            pd.DataFrame(
+                [
+                    {"species": 1, "pu": 1, "amount": 2.0},
+                    {"species": 1, "pu": 2, "amount": 0.0},
+                    {"species": 2, "pu": 2, "amount": 3.0},
+                    {"species": 2, "pu": 3, "amount": 1.0},
+                ]
+            ),
+        ),
+        ConservationProblem(  # duplicate (pu, species) rows
+            pu3.iloc[:2].reset_index(drop=True),
+            feats1,
+            pd.DataFrame(
+                [
+                    {"species": 1, "pu": 1, "amount": 2.0},
+                    {"species": 1, "pu": 1, "amount": 3.0},
+                    {"species": 1, "pu": 2, "amount": 4.0},
+                ]
+            ),
+        ),
+        ConservationProblem(  # featureless PUs 1 and 3
+            pu3, feats1, pd.DataFrame([{"species": 1, "pu": 2, "amount": 3.0}])
+        ),
+    ]
+    for p in fixtures:
+        for rule in ("caz", "abf"):
+            _assert_equal_results(
+                rank_removal(p, rule=rule, warp=1),
+                rank_removal(p, rule=rule, warp=1, _force_batch=True),
+            )
 ```
 
-Also EDIT the existing `test_warp_advisory_helper`: append `(1_000_000, 1)` to
-its silent-cases tuple list (warp=1 is the fast path now and must not warn).
+Also two EDITS to existing tests: (a) `test_warp_advisory_helper` — append
+`(1_000_000, 1)` to its silent-cases tuple list (warp=1 is the fast path now and
+must not warn); (b) `test_curve_every_thins_rows_exactly` — parametrize over
+`_force_batch` (add `@pytest.mark.parametrize("force_batch", [False, True])`,
+thread `_force_batch=force_batch` into both calls) so the batch path keeps
+direct `curve_every>1` coverage after warp=1 re-routes to the heap (review #10).
 
 - [ ] **Step 2: Verify failures**
 
@@ -322,7 +425,10 @@ Selection dispatch — wrap the existing batch `while` loop:
             phase_mask = np.zeros(n_pu, dtype=bool)
             phase_mask[cand] = True
             rescore(cand[dirty[cand]])
-            if cand.size and not np.isfinite(delta[cand]).all():
+            # NaN-only guard (design §4.3 / review #4): +inf keys are totally
+            # ordered and must NOT raise (the batch path completes on all-inf
+            # regimes); only NaN corrupts heapq ordering.
+            if cand.size and np.isnan(delta[cand]).any():
                 raise RuntimeError(_NO_PROGRESS_MSG)
             heap = [(float(delta[i]), int(i)) for i in cand]
             heapq.heapify(heap)
@@ -334,16 +440,40 @@ Selection dispatch — wrap the existing batch `while` loop:
                 if not remaining[i]:
                     continue  # lazy deletion: cell already removed
                 if dirty[i]:
-                    rescore(np.array([i], dtype=np.intp))
-                    v = float(delta[i])
-                    if not np.isfinite(v):
+                    # Buffered dirty rescore (review #1, the CRITICAL perf fix:
+                    # single-row rescores cost ~72.5us in scipy slice overhead
+                    # vs 1.5us/row vectorized; the per-pop variant measured
+                    # ~18x SLOWER than the batch path). Drain the contiguous
+                    # removed/dirty prefix of the heap, then rescore the
+                    # deduplicated dirty buffer in ONE vectorized call.
+                    buf = [i]
+                    while heap:
+                        s2, i2 = heap[0]
+                        if not remaining[i2]:
+                            heapq.heappop(heap)
+                            continue
+                        if dirty[i2]:
+                            heapq.heappop(heap)
+                            buf.append(i2)
+                            continue
+                        break
+                    rows = np.unique(np.asarray(buf, dtype=np.intp))
+                    rescore(rows)
+                    if np.isnan(delta[rows]).any():
                         raise RuntimeError(_NO_PROGRESS_MSG)
-                    heapq.heappush(heap, (v, i))
+                    for h in rows:
+                        heapq.heappush(heap, (float(delta[h]), int(h)))
                     continue
                 if s_val != delta[i]:
-                    continue  # superseded duplicate; a fresher entry exists
+                    # Superseded duplicate. Safe ONLY because delta[] is written
+                    # solely by rescore(), and every heap-path rescore is
+                    # followed by a push/heapify of the rescored cells — a
+                    # mismatched key always has a fresher sibling in the heap.
+                    # (Rescoring without pushing would silently break argmin.)
+                    continue
                 # Fresh top == true global argmin (design §3), ties by index
                 # via tuple order — accept.
+                assert not dirty[i]
                 cols, crossed = remove_cell(i)
                 if cols.size:
                     holders = np.concatenate(
@@ -353,12 +483,14 @@ Selection dispatch — wrap the existing batch `while` loop:
                 for j in crossed:
                     # FP-residue extinction repair (design §5): holders' true
                     # scores just DROPPED, so cached keys are no longer lower
-                    # bounds — rescore and re-push, current phase only.
+                    # bounds — rescore and re-push, current phase only
+                    # (phase_mask is load-bearing: an out-of-phase push would
+                    # let a locked-in cell be selected early).
                     col = csc.indices[csc.indptr[j] : csc.indptr[j + 1]]
                     repair = col[remaining[col] & phase_mask[col]]
                     if repair.size:
                         rescore(repair)
-                        if not np.isfinite(delta[repair]).all():
+                        if np.isnan(delta[repair]).any():
                             raise RuntimeError(_NO_PROGRESS_MSG)
                         for h in repair:
                             heapq.heappush(heap, (float(delta[h]), int(h)))
@@ -368,6 +500,27 @@ Selection dispatch — wrap the existing batch `while` loop:
                     record_curve()
     else:
         # ... existing batch while-loop, unchanged ...
+```
+
+The Task-1 final-record check (`if last_recorded_at != n_pu: record_curve()`)
+and the `priority_rank` assembly stay at function level BELOW this entire
+if/else, shared by both paths — do not indent them into the `else` branch (the
+heap path depends on the final-record for the always-final row at
+`curve_every>1`).
+
+Also rewrite `_warn_if_small_warp`'s docstring (its "warp=1 selection alone is
+O(n^2)" opener becomes false):
+
+```python
+    """Advise (warn-and-proceed, S3b precedent) when warp is too small to scale.
+
+    warp=1 routes to the exact lazy-heap path and is fast; the advisory covers
+    2 <= warp < n_pu // 10_000 at raster scale, where batch selection pays an
+    O(candidates) partition per small batch. Large warp (10-100) is documented
+    Zonation practice as a computation-time vs solution-refinement trade-off;
+    ``warp ~ n_pu/1000`` is pymarxan performance advice for batch mode.
+    Silence with ``warnings.filterwarnings`` when a small warp is deliberate.
+    """
 ```
 
 Notes (keep true):
@@ -418,27 +571,33 @@ git commit -m "feat(zonation): CELF lazy-heap exact selection for warp=1"
 
 ```python
 # --- CELF phase, Task 4: extinction construction + pinning ----------------
-@pytest.mark.parametrize("rule", ["caz", "abf"])
-def test_fp_residue_extinction_heap_equals_batch(rule: str) -> None:
-    # Constructed FP-residue extinction (design §8.2): feature 1's big holders
-    # (PUs 1, 2) carry huge costs so they are removed first WITHIN the normal
-    # phase; the sequential residue 0.6 - 0.3 - 0.3 == 0.0 <= 0 extinguishes
-    # feature 1 while its tiny holder (PU 3) remains — the exact case where
-    # cached heap keys stop being lower bounds and the repair must fire.
-    assert (0.3 + 0.3 + 1e-17) - 0.3 - 0.3 <= 0.0  # the arithmetic premise
+def _extinction_problem(statuses: list[int]) -> ConservationProblem:
+    """Detector-verified FP-residue extinction fixture (review #2, verified).
+
+    Levers (both are load-bearing — the review's original 'huge costs on big
+    holders' reasoning was backwards, a near-zero-amount holder at cost 1 is
+    the global argmin and leaves FIRST):
+    - the residue carrier PU3 gets cost 1e-15 so its score (1.67e-2) stays
+      ABOVE the big holders' (5e-4, 1e-3) until the crossing;
+    - detector PU6 (sole holder of f3, score 1/200 = 5e-3) sits strictly
+      inside the carrier's stale-key/post-crossing-true-score gap (0, 1.67e-2),
+      so a missing, broken, or phase-inverted repair provably FLIPS the order
+      to [1,2,6,3,5,4] — this test VERIFIES the repair, not merely exercises it
+      (execution-verified against a deliberately repair-less heap).
+    """
     pu = pd.DataFrame(
         {
-            "id": [1, 2, 3, 4, 5],
-            "cost": [1000.0, 1000.0, 1.0, 1.0, 1.0],
-            "status": [0, 0, 0, 0, 0],
+            "id": [1, 2, 3, 4, 5, 6],
+            "cost": [1000.0, 1000.0, 1e-15, 1.0, 1.0, 200.0],
+            "status": statuses,
         }
     )
     feats = pd.DataFrame(
         {
-            "id": [1, 2],
-            "name": ["a", "b"],
-            "target": [1.0, 1.0],
-            "spf": [1.0, 1.0],
+            "id": [1, 2, 3],
+            "name": ["a", "b", "c"],
+            "target": [1.0] * 3,
+            "spf": [1.0] * 3,
         }
     )
     pvf = pd.DataFrame(
@@ -448,16 +607,39 @@ def test_fp_residue_extinction_heap_equals_batch(rule: str) -> None:
             {"species": 1, "pu": 3, "amount": 1e-17},
             {"species": 2, "pu": 4, "amount": 5.0},
             {"species": 2, "pu": 5, "amount": 3.0},
+            {"species": 3, "pu": 6, "amount": 1.0},
         ]
     )
-    p = ConservationProblem(pu, feats, pvf)
+    return ConservationProblem(pu, feats, pvf)
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_fp_residue_extinction_heap_equals_batch(rule: str) -> None:
+    # Crossing INSIDE the normal phase -> the repair-push path itself runs.
+    assert (0.3 + 0.3 + 1e-17) - 0.3 - 0.3 <= 0.0  # the arithmetic premise
+    p = _extinction_problem([0, 0, 0, 0, 0, 0])
     heap_res = rank_removal(p, rule=rule, warp=1)
-    batch_res = rank_removal(p, rule=rule, warp=1, _force_batch=True)
-    _assert_equal_results(heap_res, batch_res)
-    # Prove the construction actually crosses before PU 3 leaves: the big
-    # holders precede the residue carrier in the removal order.
+    _assert_equal_results(
+        heap_res, rank_removal(p, rule=rule, warp=1, _force_batch=True)
+    )
     order = heap_res.removal_order
+    # Big holders precede the carrier (crossing happens while PU3 remains),
+    # and the detector-sensitive order is pinned exactly.
     assert max(order.index(1), order.index(2)) < order.index(3)
+    assert order == [1, 2, 3, 6, 5, 4]
+
+
+@pytest.mark.parametrize("rule", ["caz", "abf"])
+def test_fp_residue_extinction_cross_phase(rule: str) -> None:
+    # Big holders locked OUT (review #3): the crossing happens in the
+    # locked-out phase while the carrier sits in the normal phase — exercising
+    # the repair-push-skipped + dirty-carry + phase-init-rescore path that
+    # design §5 declares safe.
+    p = _extinction_problem([3, 3, 0, 0, 0, 0])
+    _assert_equal_results(
+        rank_removal(p, rule=rule, warp=1),
+        rank_removal(p, rule=rule, warp=1, _force_batch=True),
+    )
 
 
 def test_subnormal_raises_on_both_paths() -> None:
@@ -498,9 +680,9 @@ def test_curve_every_with_warp_batches() -> None:
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zonation/test_rank_removal_scale.py -v -k "fp_residue or subnormal_raises_on_both or curve_every_with_warp"`
 Expected: ALL PASS (Task 3 already implemented the machinery; these pin it).
-If `test_fp_residue_extinction_heap_equals_batch`'s order assertion fails, the
-fixture's costs/amounts need re-tuning so PUs 1–2 genuinely go first — do NOT
-weaken the equality assertion.
+The fixture's expected order `[1, 2, 3, 6, 5, 4]` was execution-verified during
+design review; if it fails, suspect the ENGINE (repair or phase mask), not the
+fixture — debug against `_force_batch=True` before touching any assertion.
 
 - [ ] **Step 3: Append the bench** to `tests/benchmarks/bench_zonation.py`:
 
@@ -512,14 +694,20 @@ def test_rank_removal_warp1_heap_budget() -> None:
     elapsed = time.perf_counter() - t0
     assert len(res.removal_order) == 90_000
     # curve_every=1000 so the bench measures selection, not curve I/O.
+    # Reference points on this machine (design review): batch warp=1 on this
+    # geometry = 120.7s; the naive per-pop heap DNF'd — the buffered-pop loop
+    # is what makes this budget possible.
     assert elapsed < 60.0, f"warp=1 heap rank_removal took {elapsed:.1f}s"
 ```
 
-- [ ] **Step 4: Run the bench deliberately; record the time**
+- [ ] **Step 4: MEASURE first, then run the bench**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zonation.py -m bench -v`
-Expected: both benches PASS; record the warp=1 elapsed time in the commit
-message and report.
+Expected: all three benches PASS. **If the warp=1 bench exceeds 60 s, STOP and
+report BLOCKED with the measured time and the pop/rescore counts** (design §8.7:
+the budget is a claim to verify, not to force) — do not raise the budget or ship
+perf wording without the controller's decision. Record the measured time in the
+commit message and report; Task 5's docstring perf wording depends on it.
 
 - [ ] **Step 5: Commit**
 
@@ -538,17 +726,27 @@ git commit -m "test(zonation): FP-extinction fixture, dual-path NaN guard, warp=
 - [ ] **Step 1: Docstring.** In the `rank_removal` docstring, replace the sentence beginning "Init is O(nnz); million-cell rasters rank in minutes at raster-appropriate ``warp``" through "...silence via ``warnings.filterwarnings``)." with:
 
 ```
-    Init is O(nnz). ``warp=1`` selects via a CELF-style lazy min-heap (cached
-    scores are valid lower bounds because removal only decreases remaining
-    totals) and is EXACT — bitwise-identical to the batch selection at
-    ``warp=1``, float amounts included — so single-cell removal is feasible at
-    raster scale (~1M cells in minutes; pass ``curve_every`` to keep curve
-    memory bounded). ``warp>1`` uses batch selection; an advisory warns for
-    small ``warp>1`` at raster scale (silence via ``warnings.filterwarnings``).
-    ``curve_every=k`` records the initial state, every k-th removal (at batch
-    boundaries when ``warp>1``), and always the final state. Landscape-spanning
-    features degrade either path toward O(n^2) holder-marking.
+    Init is O(nnz). ``warp=1`` selects via lazy-greedy (accelerated greedy,
+    Minoux 1978; popularized as CELF, Leskovec et al. 2007) mirrored to
+    minimization: removal only increases remaining cells' scores, so cached
+    keys are lower bounds on a min-heap and a popped fresh top is the true
+    argmin. The warp=1 trajectory is bitwise-identical to batch selection for
+    every input whose scores never evaluate to NaN (float amounts and +inf
+    regimes included; NaN-producing runs raise ``RuntimeError`` on the heap
+    path where batch selection may return a NaN-ordered tail) — exact with
+    respect to the greedy removal sequence; the ranking itself remains a
+    heuristic prioritization, not a provably optimal reserve. Single-cell
+    removal is thereby feasible at raster scale (bench: 90k cells well under a
+    minute; pass ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
+    batch selection; an advisory warns for small ``warp>1`` at raster scale
+    (silence via ``warnings.filterwarnings``). ``curve_every=k`` records the
+    initial state, every k-th removal (at batch boundaries when ``warp>1``),
+    and always the final state. Landscape-spanning features degrade either path
+    toward O(n^2) holder-marking.
 ```
+
+(If Task 4's measured bench time materially beats/misses "well under a minute",
+adjust that clause to the measurement — never ship an unmeasured number.)
 
 Also extend the private-kwarg sentence: ``_force_full_rescore`` and
 ``_force_batch`` are test-only: the first disables the dirty-set shortcut (and
@@ -563,11 +761,12 @@ forces batch selection), the second forces batch selection at ``warp=1``.
   scale; curve storage is now a preallocated array either way.
 
 ### Changed
-- `zonation.rank_removal` with `warp=1` now selects via a CELF-style lazy
-  min-heap: exact single-cell greedy at raster scale, bitwise-identical to the
-  previous warp=1 path (float amounts included; FP-residue feature extinction
-  is repaired eagerly, phase-scoped). The small-warp advisory no longer fires
-  for `warp=1`.
+- `zonation.rank_removal` with `warp=1` now selects via a lazy-greedy min-heap
+  (Minoux 1978; cf. CELF): exact single-cell greedy at raster scale,
+  bitwise-identical to the previous warp=1 path whenever scores stay NaN-free
+  (float amounts and +inf regimes included; NaN-producing runs now fail fast
+  with `RuntimeError`; FP-residue feature extinction is repaired eagerly,
+  phase-scoped). The small-warp advisory no longer fires for `warp=1`.
 ```
 
 - [ ] **Step 3: Full gate**

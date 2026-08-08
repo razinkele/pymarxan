@@ -15,7 +15,9 @@ that removes one cell at a time, Zonation's finest-resolution mode — remains O
 against at raster scale. Two consequences:
 
 1. Users wanting the most refined ranking at 1M cells have no path (de Mello et al.
-   2015 chose warp=1 deliberately on a country-wide raster).
+   2015 chose warp=1 deliberately on a biome-wide raster — the Brazilian Cerrado;
+   full-text verified: "we chose to remove one pixel at a time, which results in a
+   more refined solution").
 2. Newly reachable `warp=1` would also explode curve storage: one dict row per
    removal ≈ 1 GB of Python dicts at 1M cells.
 
@@ -38,8 +40,10 @@ against at raster scale. Two consequences:
 
 **Non-goals**
 
-- No change to `warp>1` semantics or performance; no `ZonationResult` change; no
-  `ZonationSolver` change (exposing `curve_every` there is deferred until asked for).
+- No change to `warp>1` *behavior* (bitwise); the shared `remove_cell` adds
+  O(nnz_row) crossed-detection bookkeeping per removal to the batch path — accepted,
+  with the existing warp-scale bench as the regression net. No `ZonationResult`
+  change; no `ZonationSolver` change (exposing `curve_every` there is deferred).
 - No edge-removal candidate restriction (still the documented v0.13-era difference).
 - No mitigation of the landscape-spanning-feature worst case (dirty-marking is
   O(holders) per removal in either path; documented, not defended).
@@ -61,6 +65,12 @@ staleness*: a stale competitor's key is ≤ its true score, so an equal-true-sco
 lower-index cell pops earlier, gets refreshed, and re-enters at the same key with
 the smaller index — tuple order then decides exactly as the batch path's stable
 argsort does.
+
+This monotonicity holds in float64, not merely over the reals (design-review #8):
+IEEE-754 correctly-rounded ops are weakly monotone and numpy's per-row reduction
+tree is fixed for fixed `n_feat`, so cached keys are lower bounds *bitwise*;
+overflow to +inf preserves order (inf tuples are totally ordered in a heap), and
+NaN — the only non-ordered value — is guarded out of the heap (§4.3).
 
 **The one exception, and its repair (§5): FP-residue extinction.** If `Q_j` crosses
 from >0 to ≤0 while a holder remains (possible only with float amounts — integer
@@ -108,20 +118,36 @@ All in `src/pymarxan/zonation/rank_removal.py`; no new modules.
      cand]`; `phase_left = cand.size`. Every push, everywhere, uses
      `(float(...), int(...))` so tuple comparisons stay homogeneous.
    - Pop `(s, i)`: if `not remaining[i]` → skip (lazy deletion of duplicates);
-     elif `dirty[i]` → `rescore(np.array([i]))` (the same chunked-dense kernel,
-     chunk of one — bitwise the value a batch rescore would produce), push
-     `(float(delta[i]), i)`, continue; elif `s != delta[i]` → superseded duplicate,
-     skip; else **accept**: `crossed = remove_cell(i)`; mark `dirty` on the CSC
-     holders of `i`'s features; for each feature in `crossed`, rescore its remaining
-     holders and push fresh entries (the §3 repair — note these cells are rescored
-     *now*, clearing `dirty`, so their entries are fresh); `phase_left -= 1`;
-     curve-record per §6. Phase ends at `phase_left == 0`.
-   - **Non-finite guard:** every value pushed to the heap is checked
-     `np.isfinite(...)`; violation raises the same `RuntimeError` as the batch
-     path's progress guard ("made no progress" wording adjusted to cover both
-     sites). NaN must never enter the heap — heapq comparisons silently corrupt the
-     invariant. The heap path may therefore raise *earlier* in a run than the batch
-     path would; same exception type and cause, documented.
+     elif `dirty[i]` → **buffered dirty rescore** (design-review #1, the CRITICAL
+     performance fix — single-row rescores cost ~72.5 µs each in scipy slice
+     overhead vs 1.5 µs/row vectorized, and the naive per-pop variant measured
+     ~18× SLOWER than the batch path): buffer `i`, then keep popping while the
+     heap top is removed (drop) or dirty (buffer), stopping at the first fresh
+     top; rescore the deduplicated buffer in ONE vectorized `rescore()` call;
+     push every buffered cell back at its new key; continue the outer loop.
+     Values are bitwise what per-row rescores would produce (the kernel is
+     chunk-shape-independent), and accepts still happen only on a fresh top, so
+     selection semantics are unchanged. Elif `s != delta[i]` → superseded
+     duplicate, skip (an inline comment records the invariant this relies on:
+     `delta` is written only by `rescore`, and every heap-path rescore is
+     followed by a push/heapify of the rescored cells; plus `assert not dirty[i]`
+     before accept). Else **accept**: `cols, crossed = remove_cell(i)`; mark
+     `dirty` on the CSC holders of `cols`; for each feature in `crossed`, rescore
+     its remaining current-phase holders and push fresh entries (the §3 repair);
+     `phase_left -= 1`; curve-record per §6. Phase ends at `phase_left == 0`.
+   - **NaN guard (design-review #4 — NaN only, not isfinite):** every value about
+     to be pushed (phase init, buffered rescore, repair) is checked with
+     `np.isnan`; a NaN raises the batch path's `RuntimeError`. NaN must never
+     enter the heap — heapq comparisons silently corrupt the invariant — but
+     **+inf keys are totally ordered and stay**: an isfinite guard would raise on
+     all-inf score regimes where the batch path completes (verified
+     counterexample: two PUs sharing a 1e-310 feature → batch returns [1, 2]),
+     needlessly shrinking the equivalence domain. With NaN-only guarding, the
+     heap may still raise where batch limps through a NaN-ordered tail — that
+     carve-out is §7's, and it also converts the late-rescore inf-timing hazard
+     (a dirty cell rescored later than batch would, seeing a non-held feature's
+     factor transition finite→inf → 0·inf = NaN) into a loud error, never a
+     wrong order.
 4. **`_warn_if_small_warp`** gains `warp > 1` in its condition; docstring updated
    (warp=1 is the exact fast path now).
 
@@ -143,9 +169,11 @@ trigger it; the constructed-fixture test (§8) plus a broad float sweep cover it
 
 ## 6. Curves: `curve_every` + array storage
 
-- New kw-only `curve_every: int = 1`; validated `isinstance(curve_every, int) and
-  curve_every >= 1` else `ValueError` (no silent float truncation; `bool` passes
-  the isinstance check as an int subclass — harmless, `True` behaves as 1). Semantics for BOTH paths: record the initial state; after each
+- New kw-only `curve_every: int = 1`; normalized via `operator.index(curve_every)`
+  in try/except → `ValueError`, then `>= 1` checked (design-review #5: accepts
+  Python int AND `np.integer` — the likeliest caller type for a raster memory knob
+  — while rejecting floats/strings/None with no silent truncation; `bool` indexes
+  to 0/1, `True` harmless, `False` fails the ≥1 check). Semantics for BOTH paths: record the initial state; after each
   *batch* (heap path: each removal is a batch of one), record iff
   `n_removed_total % curve_every == 0`; always record the final state once (skip if
   the last record already was final). `curve_every=1` reproduces today's rows
@@ -162,11 +190,15 @@ trigger it; the constructed-fixture test (§8) plus a broad float sweep cover it
 
 ## 7. Equivalence contract
 
-The claim is **heap warp=1 ≡ batch warp=1, bitwise, for all valid inputs including
-float amounts and smoothing** — stronger than the v0.31.0 dense-oracle contract
-(which has ULP sites at the dense/sparse boundary). It is achievable because both
-paths, given the same `Q` trajectory, compute scores with the *same expressions on
-the same machinery* (`rescore`), and §3/§5 establish the heap selects the same
+The claim is **heap warp=1 ≡ batch warp=1, bitwise, for every valid input whose
+scores never evaluate to NaN during the run — float amounts, +inf score regimes,
+and smoothing included** (design-review #4 scoped this: with NaN-only guarding,
+all-inf regimes stay bitwise-identical; on NaN-producing runs the heap raises
+`RuntimeError` where the batch path may either raise its progress guard or limp to
+a NaN-ordered tail — failing fast on a semantically garbage ranking is the better
+behavior and is documented, not hidden). It is achievable because both paths,
+given the same `Q` trajectory, compute scores with the *same expressions on the
+same machinery* (`rescore`), and §3/§5 establish the heap selects the same
 `(score, index)` argmin each step; identical selections ⇒ identical sequential `Q`
 updates ⇒ induction. The batch path's relation to the dense oracle is unchanged
 (v0.31.0 §7), so heap-vs-oracle inherits exactly those caveats and no new ones.
@@ -179,50 +211,74 @@ exact subset (row-for-row bitwise) of the `curve_every=1` run's rows.
 All in `tests/pymarxan/zonation/test_rank_removal_scale.py` (append) +
 `tests/benchmarks/bench_zonation.py` (append); env per `marxan-testing`.
 
-1. **Heap-vs-batch bitwise (the core):** for every fixture family already in the
-   suite — random integer (seeds 0–2), locks+costs, weights+extinction, wide
-   n_feat=25, stored-zero, duplicates, featureless-PU, n_feat=0, float amounts+costs
-   (seed 11), smoothing (seed 17) — assert `rank_removal(warp=1)` equals
-   `rank_removal(warp=1, _force_batch=True)` via `_assert_equal_results`
-   (exact, `check_exact` curves). Plus a 30-seed float sweep (both rules) — this is
-   the statistical net for the §5 repair.
-2. **Constructed FP-residue extinction fixture (best effort):** engineer a float
-   problem where a feature's `Q_j` goes ≤0 while a tiny-amount holder remains,
-   with the crossing happening *inside the normal phase* so the repair-push path
-   itself is exercised (lever: give the feature's big-amount holders huge costs —
-   cost divides the score, so they are removed first — while the residue carrier
-   holds a tiny amount; locks would move the crossing into the locked-out phase,
-   where the repair-push is skipped by the phase mask); assert heap==batch and that
-   the run terminates. The grounding review agent is tasked with verifying the
-   construction actually crosses (instrument `remove_cell`'s return); if genuinely
-   unconstructible, the sweep in (1) plus a unit test of the repair mechanics
-   (monkeypatch a `Q` crossing) replaces it — the plan must say which.
-3. **Existing suite as heap coverage:** all current warp=1 fixtures now exercise
+1. **Heap-vs-batch bitwise (the core):** for every fixture family — random integer
+   (seeds 0–2), locks+costs, **weights incl. a weight-0 feature** (design-review
+   #6: w≠1 is a distinct rescore input; w=0 meets the dead-mask), wide n_feat=25,
+   stored-zero, duplicates, featureless-PU, n_feat=0, float amounts+costs (seed
+   11), smoothing (seed 17), and an **all-ties fixture** (n_pu≈30, one feature,
+   equal amounts, `use_cost=False` — sustained equal-key regime stressing the
+   tie-break-through-staleness argument; expected order = ascending PU index,
+   asserted directly too) — assert `rank_removal(warp=1)` equals
+   `rank_removal(warp=1, _force_batch=True)` via `_assert_equal_results`. Plus a
+   30-seed float sweep (both rules) as **general** coverage — review #2 measured 0
+   extinction crossings in 120 such runs, so the sweep is explicitly NOT the
+   repair's net; the constructed fixtures below are.
+2. **Detector-verified FP-residue extinction fixture (design-review #2, verified
+   construction):** f1 = {PU1: 0.3 @cost 1000, PU2: 0.3 @cost 1000, PU3 (residue
+   carrier): 1e-17 @cost **1e-15**}, f2 = {PU4: 5.0, PU5: 3.0} @cost 1, f3 =
+   {PU6 (detector): 1.0 @cost 200}. The carrier's cost keeps its score
+   (1.67e-2) ABOVE the big holders' (5e-4, 1e-3) until the crossing — the original
+   "huge costs on big holders" lever was backwards: a near-zero-amount holder at
+   cost 1 is the global argmin and leaves first. The detector's score (5e-3) sits
+   strictly inside the carrier's stale-key/post-crossing-true-score gap, so a
+   missing, broken, or phase-inverted repair provably flips the order
+   ([1,2,6,3,5,4] instead of [1,2,3,6,5,4] — execution-verified, both rules):
+   this *verifies* the repair, not merely exercises it. Assert heap==batch, the
+   expected order, and that PUs 1–2 precede PU 3.
+3. **Cross-phase extinction fixture (design-review #3):** the same construction
+   with PUs 1–2 locked out (status 3) — the crossing happens in the locked-out
+   phase while the carrier sits in the normal phase, exercising the
+   repair-push-skipped + dirty-carry + phase-init-rescore path that §5 declares
+   safe. Assert heap==batch.
+4. **Existing suite as heap coverage:** all current warp=1 fixtures now exercise
    the heap path against the dense oracle with no test edits — their staying green
    is required evidence.
-4. **`curve_every`:** (a) thinned == full rows `[::k]` + final, bitwise, both
-   paths; (b) `curve_every=1` default unchanged (covered by the whole existing
-   suite); (c) `curve_every=0`/negative/non-int → `ValueError`; (d) a `warp>1` +
-   `curve_every>1` case pinning the batch-boundary semantics.
-5. **Guards:** NaN-poisoned input (the subnormal fixture) raises `RuntimeError` on
-   the heap path too; advisory: `(1_000_000, 1)` no longer warns, `(1_000_000, 50)`
-   still does, boundary non-warn cases unchanged.
-6. **Bench (append, bench-marked):** 300×300 grid, `warp=1`, `curve_every=1000`,
-   budget < 60 s; assert full removal order length.
-7. **`make check`** green; parity anchor untouched (no Marxan solver touched).
+5. **`curve_every`:** (a) thinned == full rows `[::k]` + final, bitwise,
+   **parametrized over `_force_batch`** (design-review #10: the batch path at
+   `curve_every>1` must keep direct coverage after warp=1 re-routes to the heap);
+   (b) `curve_every=1` default unchanged (whole existing suite); (c)
+   `curve_every=0`/negative/`2.5`/`"5"`/`None` → `ValueError` while `np.int64(7)`
+   is accepted; (d) a `warp>1` + `curve_every>1` case pinning batch-boundary
+   semantics.
+6. **Guards:** the subnormal NaN fixture raises `RuntimeError` on BOTH paths;
+   advisory: `(1_000_000, 1)` no longer warns, `(1_000_000, 50)` still does,
+   boundary non-warn cases unchanged; `_warn_if_small_warp`'s own docstring is
+   rewritten (its "warp=1 is O(n²)" opener becomes false — design-review #10).
+7. **Bench (append, bench-marked):** 300×300 grid, `warp=1`, `curve_every=1000` —
+   **measure first, then assert**: review #1 measured the batch path itself at
+   120.7 s on this geometry/machine and the naive heap at DNF, so the buffered
+   implementation must be timed before any budget or docstring perf claim ships;
+   target budget < 60 s, escalate if the measurement misses it. Assert full
+   removal-order length.
+8. **`make check`** green; parity anchor untouched (no Marxan solver touched).
 
 ## 9. Performance envelope (claims for review)
 
-- Heap: n accepts + duplicates; each pop O(log n); dirty pops add a single-row
-  rescore (~10–20 µs). Per-accept bookkeeping (Q row update, CSC holder marking) is
-  the same numpy work the batch path does per removal.
-- 90k cells warp=1: seconds (bench-verified). 1M cells, localized features:
-  minutes — dominated by per-removal Python-level loop overhead (~1M iterations ×
-  ~20–60 µs). Heap memory ≈ n × ~90 B ≈ 90 MB at 1M plus re-push growth.
-- Worst case (landscape-spanning feature): dirty-marking O(n) per removal → O(n²)
+- **Measured basis (design-review #1, side=100 grid geometry):** ~62 dirty pops
+  per accept; a single-row `rescore` costs ~72.5 µs (scipy slice overhead) vs
+  1.5 µs/row vectorized — hence the buffered-pop loop in §4.3, which replaces ~62
+  single-row calls (~4.5 ms) per accept with one vectorized call (~90–120 µs), an
+  ~18× inner-loop reduction. The naive per-pop variant measured 47.8 s vs the
+  batch path's 2.7 s at side=100 and DNF at side=300 — never regress to it.
+- Reference points on this machine: batch warp=1 at side=300 (90k cells) is
+  120.7 s. The buffered heap's projection is well under that; the Task-4 bench
+  MEASURES before asserting the < 60 s budget (§8.7). 1M-cell claims wait for the
+  bench — no "minutes at 1M" wording ships unmeasured.
+- Worst case (landscape-spanning feature): holder-marking O(n) per removal → O(n²)
   — same as the batch path at warp=1 today; documented in the docstring.
-- Curve array at `curve_every=1000`: ~1k rows — negligible. At `curve_every=1`,
-  1M×22 float64 ≈ 176 MB (documented; the parameter exists precisely for this).
+- Heap memory ≈ n × ~90 B ≈ 90 MB at 1M plus re-push growth. Curve array at
+  `curve_every=1000`: ~1k rows — negligible. At `curve_every=1`, 1M×22 float64 ≈
+  176 MB (the parameter exists precisely for this).
 
 ## 10. Files touched
 
