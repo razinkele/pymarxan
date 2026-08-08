@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-08-08
+
 ### Changed
 - `zonation.rank_removal` rewritten sparse + incremental (dirty-set rescoring via
   chunked dense row buffers, partition selection, incremental curves): million-cell
@@ -1102,7 +1104,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.31.0
 [0.30.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.30.0
 [0.29.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.29.0
 [0.28.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.28.0
