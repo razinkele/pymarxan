@@ -179,8 +179,13 @@ suite is modified only where noted.
    holding nothing — impossible under the shipped `max`-with-zeros formula.
 4. **Zero-weight × negative-weight interaction** (§3): a cell holding one
    `w=0` feature and one `w<0` feature scores the negative term, not `0`.
-5. **Extinct-feature exclusion:** a cell whose only held feature has gone
-   extinct scores exactly `0.0`.
+5. **The `-inf` floor:** a cell holding nothing scores exactly `0.0` and ranks
+   accordingly (asserted inside test 2). *Amended during planning:* the
+   originally-promised "cell whose only held feature is extinct" state is
+   unreachable by construction — a remaining holder with `q_ij > 0` keeps
+   `Q_j > 0` — except via the FP-residue path the CELF phase already covers
+   with positive weights. Empty cells exercise the identical code line
+   (all-excluded row → `-inf` → floor), so no impossible test is written.
 6. **Heap routing:** with a negative weight at `warp=1`, monkeypatch
    `heapq.heapify` (called once per lock-phase by the heap path, never by the
    batch path) to raise `AssertionError`; the run must complete normally —
@@ -223,6 +228,14 @@ net; no new bench — this phase changes semantics, not scale.
   existing fixture families (positive weights, both rules, warps, locks,
   extinction, smoothing) — not by reading; and verify negative-weight results
   against an independently written brute-force scorer.
+- **Cost division of a negative score** (surfaced while hand-computing the
+  fixtures): `delta/c` with `delta < 0` and a larger `c` yields a *less*
+  negative score, so an expensive cell carrying a threat is removed **later**
+  than an identical cheap one. That is the consistent extension of the shipped
+  formula, and the plan pins it as current behavior — but is it the right
+  conservation semantic? Moilanen 2011 divides benefit by cost; whether the
+  same division should apply to opportunity-cost terms needs checking. If the
+  literature says otherwise, this is a spec change, not a patch.
 - Does any *other* consumer assume `delta >= 0`? (`analysis`, the Shiny panel,
   `ZonationSolver.build_solution` metadata — grounding to grep and confirm.)
 - Is one warning per call the right granularity, or should it fire only once per
