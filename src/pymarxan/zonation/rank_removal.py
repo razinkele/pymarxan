@@ -56,6 +56,25 @@ def _warn_if_small_warp(n_pu: int, warp: int) -> None:
         )
 
 
+def _warn_if_negative_weights_at_warp1(warp: int, has_neg_w: bool) -> None:
+    """Advise that negative weights disable the exact warp=1 lazy heap.
+
+    A term ``w_j q_ij / Q_j`` with ``w_j < 0`` grows MORE negative as ``Q_j``
+    shrinks, so scores are no longer nondecreasing under removal, cached heap
+    keys stop being lower bounds, and the lazy-greedy exactness argument
+    fails. Batch selection has no such dependency — its dirty set tracks
+    changed inputs, not monotone scores — so it is used instead.
+    """
+    if warp == 1 and has_neg_w:
+        warnings.warn(
+            "negative feature weights make rank_removal scores non-monotone, "
+            "so the exact warp=1 lazy heap is unavailable; using batch "
+            "selection instead (identical results, slower). Silence via "
+            "warnings.filterwarnings if deliberate.",
+            stacklevel=3,
+        )
+
+
 def _validate_inputs(
     problem: ConservationProblem, weights: dict[int, float] | None
 ) -> None:
@@ -63,9 +82,11 @@ def _validate_inputs(
 
     Raw (pre-duplicate-sum, pre-smoothing) amounts are checked so the plain and
     smoothing paths enforce one contract. NaNs must be rejected up front: they
-    pass every ``< 0`` comparison and would stall the removal loop. Negative
-    weights are a real Zonation v3+ workflow (opportunity-cost features;
-    Moilanen et al. 2011, doi:10.1890/10-1865.1) but are not yet supported.
+    pass every ``< 0`` comparison and would stall the removal loop.
+    Negative weights are supported under ``rule="abf"`` (Zonation v3+
+    opportunity-cost features; Moilanen et al. 2011, doi:10.1890/10-1865.1);
+    amounts must stay nonnegative — Zonation expresses negative features
+    through weights, not occurrence levels.
     """
     if problem.n_planning_units == 0:
         raise ValueError("rank_removal requires at least one planning unit")
@@ -78,12 +99,6 @@ def _validate_inputs(
         wv = np.asarray(list(weights.values()), dtype=float)
         if not np.isfinite(wv).all():
             raise ValueError("feature weights must be finite for rank_removal")
-        if (wv < 0).any():
-            raise ValueError(
-                "feature weights must be >= 0 for rank_removal (negative "
-                "weights, used by Zonation v3+ for opportunity-cost features, "
-                "are not yet supported)"
-            )
 
 
 def rank_removal(
@@ -127,7 +142,11 @@ def rank_removal(
     regimes included; NaN-producing runs raise ``RuntimeError`` on the heap
     path where batch selection may return a NaN-ordered tail) — exact with
     respect to the greedy removal sequence; the ranking itself remains a
-    heuristic prioritization, not a provably optimal reserve. Single-cell
+    heuristic prioritization, not a provably optimal reserve. Negative
+    feature weights break this monotonicity (a term can grow more negative as
+    its feature's remaining total shrinks), so ``warp=1`` transparently routes
+    to batch selection instead (identical results, slower; warns once) when
+    any weight is negative. Single-cell
     removal is thereby feasible at raster scale and faster than batch selection
     at warp=1 (measured: 90k cells, heap 102.5s vs batch 138.4s; pass
     ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
@@ -143,8 +162,9 @@ def rank_removal(
     smoothed matrices) can differ only via initial-total summation order (a few
     ULPs), which can flip exact float near-ties; float costs affect curve
     values only. ``ValueError`` on invalid input: negative or non-finite
-    amounts/weights (negative weights — a Zonation v3+ opportunity-cost
-    workflow — are not yet supported), non-finite costs (when ``use_cost=True``),
+    amounts, non-finite weights, negative weights outside ``rule="abf"`` with
+    ``use_cost=False`` (a Zonation v3+ opportunity-cost workflow; Moilanen
+    et al. 2011, doi:10.1890/10-1865.1), non-finite costs (when ``use_cost=True``),
     zero planning units. Raises ``RuntimeError`` if any score evaluates to NaN
     (e.g. subnormal amounts overflowing ``w/Q``): immediately on the warp=1
     heap path, or when removal can make no progress on the batch path.
@@ -234,6 +254,26 @@ def rank_removal(
             if int(fid) in weights:
                 w[j] = float(weights[int(fid)])
 
+    has_neg_w = bool((w < 0).any())
+    if has_neg_w and rule == "caz":
+        raise ValueError(
+            "negative feature weights are not supported with rule='caz': the "
+            "core-area max cannot trade a negative term against a positive "
+            "one (any positive term masks it entirely), so the weight would "
+            "be silently inert. Use rule='abf', whose additive form is the "
+            "one Zonation's negative-feature machinery is defined for "
+            "(Moilanen et al. 2011, doi:10.1890/10-1865.1)."
+        )
+    if has_neg_w and use_cost:
+        raise ValueError(
+            "negative feature weights cannot be combined with use_cost=True: "
+            "dividing a negative score by cost inverts the cost response, so "
+            "a costlier threat-carrying cell would rank for removal LATER "
+            "than an identical cheap one. Pass use_cost=False, or express "
+            "costs as negatively weighted features (Moilanen et al. 2011, "
+            "doi:10.1890/10-1865.1)."
+        )
+
     if use_cost:
         c = problem.planning_units["cost"].to_numpy().astype(float)
         if not np.isfinite(c).all():
@@ -245,6 +285,7 @@ def rank_removal(
 
     warp = max(1, min(int(warp), max(n_pu, 1)))
     _warn_if_small_warp(n_pu, warp)
+    _warn_if_negative_weights_at_warp1(warp, has_neg_w)
 
     remaining = np.ones(n_pu, dtype=bool)
     n_remaining = n_pu
@@ -332,7 +373,12 @@ def rank_removal(
             delta[chunk] = out / c[chunk]
         dirty[rows] = False
 
-    use_heap = warp == 1 and not _force_batch and not _force_full_rescore
+    use_heap = (
+        warp == 1
+        and not _force_batch
+        and not _force_full_rescore
+        and not has_neg_w
+    )
 
     if use_heap:
         while n_remaining > 0:
