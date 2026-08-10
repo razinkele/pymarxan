@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `zonation.rank_removal` accepts negative feature weights under `rule="abf"` —
+  Zonation v3+ opportunity-cost / alternative-land-use layers (concept:
+  Moilanen et al. 2011, doi:10.1890/10-1865.1) — so cells carrying them rank
+  for removal first. `ZonationSolver` inherits this through its existing
+  `weights` parameter and records the affected ids in
+  `Solution.metadata["negative_weight_features"]`, since performance curves for
+  those features read inversely (lower is better).
+
+### Changed
+- `warp=1` routes to batch selection when any weight is negative: such scores
+  are non-monotone under removal, so the exact lazy heap's lower-bound argument
+  does not hold (identical results, slower; a filterable `UserWarning`
+  explains). `rule="caz"` and `use_cost=True` raise `ValueError` when combined
+  with negative weights — a max cannot trade a negative term against a positive
+  one, and dividing a negative score by cost inverts the cost response.
+  Positive-weight behavior is unchanged: no scoring code was modified.
+
 ## [0.33.0] — 2026-08-08
 
 ### Added

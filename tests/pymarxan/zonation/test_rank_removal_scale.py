@@ -1107,3 +1107,39 @@ def test_negative_weight_near_extinction_magnitudes() -> None:
     res = rank_removal(p, rule="abf", weights={1: -1.0}, use_cost=False, warp=1)
     assert len(res.removal_order) == 3
     assert all(np.isfinite(v) for v in res.priority_rank.values())
+
+
+def test_solver_negative_weights_metadata_marker() -> None:
+    from pymarxan.solvers.zonation_solver import ZonationSolver
+
+    solver = ZonationSolver(
+        rule="abf", weights=NEG_W, use_cost=False, warp=2, top_fraction=0.5
+    )
+    sols = solver.solve(_threat_problem(), {})
+    assert len(sols) == 1
+    # Curves for a negatively weighted feature read INVERSELY (fraction of
+    # the threat still inside the reserve; lower is better), so consumers
+    # need to know which series to flip — spec §6.
+    assert sols[0].metadata.get("negative_weight_features") == [2]
+
+
+def test_negative_weight_for_absent_feature_id_is_ignored() -> None:
+    # has_neg_w reads the FILLED w array, so a negative weight keyed to a
+    # feature id the problem does not contain must not trip the guards.
+    res = rank_removal(_threat_problem(), rule="caz", weights={99: -1.0})
+    assert len(res.removal_order) == 4
+
+
+def test_negative_weight_guard_raises_before_matrix_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The CAZ + negative-weight guard is hoisted ahead of the q build (review
+    # finding (a)): it reads problem.features directly and must fire without
+    # ever calling build_pu_feature_csr (which a grid-smoothed problem would
+    # otherwise pay a full per-column 2-D convolution for before raising).
+    def _boom(self: ConservationProblem) -> None:
+        raise AssertionError("matrix built before the negative-weight guard")
+
+    monkeypatch.setattr(ConservationProblem, "build_pu_feature_csr", _boom)
+    with pytest.raises(ValueError, match="rule='abf'"):
+        rank_removal(_threat_problem(), rule="caz", weights=NEG_W, use_cost=False)

@@ -87,6 +87,9 @@ class ZonationSolver(Solver):
             "performance_curves": result.performance_curves,
             "smoothed": self.smoothing is not None,
             "smoothing_alpha": self.smoothing.alpha if self.smoothing else None,
+            "negative_weight_features": sorted(
+                int(fid) for fid, wt in (self.weights or {}).items() if wt < 0
+            ),
         }
         return [build_solution(problem, selected, blm, metadata=meta)]
 

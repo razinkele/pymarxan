@@ -127,6 +127,31 @@ def rank_removal(
     Locked-out cells are removed first, locked-in last; the removal order is the
     priority ranking (last removed = rank 1.0).
 
+    Feature weights may be negative under ``rule="abf"`` (Zonation v3+
+    opportunity-cost / alternative-land-use features; Moilanen et al. 2011,
+    doi:10.1890/10-1865.1) so that cells carrying them rank for removal first.
+    Two combinations raise ``ValueError``: ``rule="caz"`` (a max cannot trade a
+    negative term against a positive one, so the weight would be silently
+    inert) and ``use_cost=True`` (dividing a negative score by cost inverts
+    the cost response). Negative weights also make scores non-monotone under
+    removal, so ``warp=1`` uses batch selection rather than the exact lazy
+    heap — identical results, without the heap's speed (a filterable
+    ``UserWarning`` says so).
+
+    Semantics note: this engine's proportional / remaining-sum marginal makes a
+    negatively weighted feature INCREASINGLY urgent to exclude as it nears
+    elimination. Moilanen et al. 2011 instead inverts the benefit function for
+    negative features (``z_k = 4``) so they become DECREASINGLY urgent once
+    mostly excluded; removal orders differ materially. The citation is for the
+    concept — negative weights represent opportunity costs — not for identical
+    dynamics; the faithful form needs the per-feature benefit exponent listed
+    as a future extension.
+
+    Performance curves for a negatively weighted feature read inversely: the
+    stored fraction is the share of that feature still INSIDE the remaining
+    set, so lower is better. ``ZonationSolver`` records the affected feature
+    ids in ``Solution.metadata["negative_weight_features"]``.
+
     Scaling: the engine is sparse and incremental. Per batch it rescores only
     cells whose features' remaining totals changed (dirty set) — via chunked
     dense row buffers that reuse the reference engine's exact expressions, so
@@ -142,11 +167,7 @@ def rank_removal(
     regimes included; NaN-producing runs raise ``RuntimeError`` on the heap
     path where batch selection may return a NaN-ordered tail) — exact with
     respect to the greedy removal sequence; the ranking itself remains a
-    heuristic prioritization, not a provably optimal reserve. Negative
-    feature weights break this monotonicity (a term can grow more negative as
-    its feature's remaining total shrinks), so ``warp=1`` transparently routes
-    to batch selection instead (identical results, slower; warns once) when
-    any weight is negative. Single-cell
+    heuristic prioritization, not a provably optimal reserve. Single-cell
     removal is thereby feasible at raster scale and faster than batch selection
     at warp=1 (measured: 90k cells, heap 102.5s vs batch 138.4s; pass
     ``curve_every`` to keep curve memory bounded). ``warp>1`` uses
@@ -162,9 +183,10 @@ def rank_removal(
     smoothed matrices) can differ only via initial-total summation order (a few
     ULPs), which can flip exact float near-ties; float costs affect curve
     values only. ``ValueError`` on invalid input: negative or non-finite
-    amounts, non-finite weights, negative weights outside ``rule="abf"`` with
-    ``use_cost=False`` (a Zonation v3+ opportunity-cost workflow; Moilanen
-    et al. 2011, doi:10.1890/10-1865.1), non-finite costs (when ``use_cost=True``),
+    amounts, non-finite weights, negative weights used with anything other
+    than ``rule="abf"`` and ``use_cost=False`` — the only combination negative
+    weights support (a Zonation v3+ opportunity-cost workflow; Moilanen
+    et al. 2011, doi:10.1890/10-1865.1) — non-finite costs (when ``use_cost=True``),
     zero planning units. Raises ``RuntimeError`` if any score evaluates to NaN
     (e.g. subnormal amounts overflowing ``w/Q``): immediately on the warp=1
     heap path, or when removal can make no progress on the batch path.
@@ -203,6 +225,37 @@ def rank_removal(
             f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); use "
             "GridSmoothingSpec for grid problems at raster scale "
             "(problems constructed with grid=GridGeometry(...))."
+        )
+
+    # Negative-weight guards, hoisted ahead of the q build (fail fast, before
+    # any smoothing convolution runs): n_feat == len(problem.features) in both
+    # build_pu_feature_matrix and build_pu_feature_csr, so w can be sized and
+    # filled from problem.features directly, without the matrix.
+    feat_ids = problem.features["id"].to_numpy()
+    w = np.ones(problem.n_features, dtype=float)
+    if weights:
+        for j, fid in enumerate(feat_ids):
+            if int(fid) in weights:
+                w[j] = float(weights[int(fid)])
+
+    has_neg_w = bool((w < 0).any())
+    if has_neg_w and rule == "caz":
+        raise ValueError(
+            "negative feature weights are not supported with rule='caz': the "
+            "core-area max cannot trade a negative term against a positive "
+            "one (any positive term masks it entirely), so the weight would "
+            "be silently inert. Use rule='abf', whose additive form is the "
+            "one Zonation's negative-feature machinery is defined for "
+            "(Moilanen et al. 2011, doi:10.1890/10-1865.1)."
+        )
+    if has_neg_w and use_cost:
+        raise ValueError(
+            "negative feature weights cannot be combined with use_cost=True: "
+            "dividing a negative score by cost inverts the cost response, so "
+            "a costlier threat-carrying cell would rank for removal LATER "
+            "than an identical cheap one. Pass use_cost=False, or express "
+            "costs as negatively weighted features (Moilanen et al. 2011, "
+            "doi:10.1890/10-1865.1)."
         )
 
     from scipy.sparse import csr_matrix
@@ -245,34 +298,7 @@ def rank_removal(
     n_pu, n_feat = q.shape
     csc = q.tocsc()
     pu_ids = problem.planning_units["id"].to_numpy()
-    feat_ids = problem.features["id"].to_numpy()
     status = problem.planning_units["status"].to_numpy()
-
-    w = np.ones(n_feat, dtype=float)
-    if weights:
-        for j, fid in enumerate(feat_ids):
-            if int(fid) in weights:
-                w[j] = float(weights[int(fid)])
-
-    has_neg_w = bool((w < 0).any())
-    if has_neg_w and rule == "caz":
-        raise ValueError(
-            "negative feature weights are not supported with rule='caz': the "
-            "core-area max cannot trade a negative term against a positive "
-            "one (any positive term masks it entirely), so the weight would "
-            "be silently inert. Use rule='abf', whose additive form is the "
-            "one Zonation's negative-feature machinery is defined for "
-            "(Moilanen et al. 2011, doi:10.1890/10-1865.1)."
-        )
-    if has_neg_w and use_cost:
-        raise ValueError(
-            "negative feature weights cannot be combined with use_cost=True: "
-            "dividing a negative score by cost inverts the cost response, so "
-            "a costlier threat-carrying cell would rank for removal LATER "
-            "than an identical cheap one. Pass use_cost=False, or express "
-            "costs as negatively weighted features (Moilanen et al. 2011, "
-            "doi:10.1890/10-1865.1)."
-        )
 
     if use_cost:
         c = problem.planning_units["cost"].to_numpy().astype(float)
