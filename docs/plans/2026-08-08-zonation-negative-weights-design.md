@@ -1,246 +1,200 @@
 # Negative-weight (opportunity-cost) features — design spec
 
 **Date:** 2026-08-08
-**Status:** draft (pending loop review + multi-agent design review)
+**Status:** revised after multi-agent design review (`wf_255edcca-6b7`, all four lenses
+`revise`); synthesis in `2026-08-08-zonation-negative-weights-review.md`.
 **Provenance:** the deferral named in `_validate_inputs`'s own error message
 ("negative weights, used by Zonation v3+ for opportunity-cost features, are not
-yet supported"), logged at v0.31.0 after the science lens established that
-negative weighting is real published Zonation practice (Moilanen et al. 2011,
-doi:10.1890/10-1865.1: "negatively weighted features can be taken to represent
-multiple (opportunity) costs"). Brainstorm decisions: CAZ max restricted to
-held-and-extant features; warp=1 auto-routes to batch selection; full 4-lens
-review.
+yet supported"), logged at v0.31.0.
+
+> **What the review changed.** The first draft supported negative weights under
+> both rules via a restricted CAZ `max`. The science lens showed that
+> combination is structurally degenerate (§2) and that our ABF marginal is
+> directionally opposite to the paper cited as warrant (§4); the architect lens
+> found the draft's `-inf` sentinel inverted orderings. The revision **ships ABF
+> only, with no kernel change at all** — strictly smaller, and positive-weight
+> behavior becomes untouched rather than provably-equivalent.
 
 ## 1. Problem
 
 `rank_removal` rejects negative feature weights outright. That blocks a
-documented Zonation v3+ workflow class — opportunity costs, threats, and
-alternative land uses expressed as negatively weighted layers, so that cells
-carrying them are *preferentially removed*. Two things stand in the way, and
-they are different in kind:
+documented Zonation v3+ workflow: opportunity costs, threats, and alternative
+land uses expressed as negatively weighted layers so that cells carrying them
+are *preferentially removed* (Moilanen et al. 2011, doi:10.1890/10-1865.1 —
+"negatively weighted features can be taken to represent multiple (opportunity)
+costs", made available "in the Zonation v.3 software").
 
-1. **CAZ cannot express a negative term.** `rescore` builds a dense row
-   (`rank_removal.py:328-331`) where absent features are structural zeros, then
-   takes `max`. A negative term can never beat those zeros, so negative weights
-   would be **silently inert** under `rule="caz"` — the worst failure mode,
-   since nothing raises and the ranking merely ignores the user's intent.
-   ABF's `sum` has no such problem: absent features contribute 0 to a sum
-   regardless of the sign of anything else, so ABF is already correct.
-2. **Negative weights break the warp=1 heap's exactness proof.** v0.32's lazy
-   heap is exact because removal only *decreases* `Q_j`, making every term
-   `w_j·q_ij/Q_j` nondecreasing, so cached keys are lower bounds
-   (`rank_removal.py:124`). With `w_j < 0` and `q_ij > 0` the term becomes *more
-   negative* as `Q_j` shrinks: scores can decrease, cached keys become upper
-   bounds, and a lazily-popped fresh top is no longer the true argmin. This is
-   not repairable lazily (unlike the FP-residue extinction case, which is a
-   bounded, detectable event): a stale overestimate can hide the true minimum
-   arbitrarily deep in the heap.
+## 2. Why ABF only
 
-The batch path has no such dependency — its dirty-set tracks *whether a cell's
-inputs changed*, not whether scores move monotonically — so it stays exact with
-negative weights untouched.
+Under ABF the score is a **sum**, so a negative term genuinely trades off
+against positive ones — and absent features contribute exactly `0` to a sum
+regardless of any sign. The shipped kernel is therefore already correct for
+negative weights: **no code change to `rescore` at all.**
 
-## 2. Goals / non-goals
+Under CAZ the score is a **max**, which is not a trade-off operator. Whenever a
+cell holds any positively weighted feature whose term exceeds the negative term,
+the negative term is discarded entirely: a cell holding `q_benefit = 0.1` and
+`q_threat = 1e6` scores `+0.0100`, bitwise identical to a cell carrying no
+threat (review-verified by execution). The threat's magnitude is irrelevant. A
+restricted "max over held-and-extant features" — the first draft's design — does
+not fix this; it only moves the silent inertness onto *mixed* cells, which is
+exactly where an opportunity-cost layer bites (Moilanen 2011's own case study
+uses near-ubiquitous agriculture and urban-potential layers). Moilanen 2011
+places CAZ inside its multi-criterion Eq. 3 but every worked negative-feature
+mechanism in the paper is ABF, "which aggregates value by direct summation
+across features" — summation is the mechanism that makes the trade-off
+expressible, and CAZ's `max` has no benefit function to invert.
 
-**Goals**
+**Therefore: `rule="caz"` with any negative weight raises `ValueError`.**
+Positive-weight CAZ is untouched — a stronger backward-compatibility guarantee
+than the first draft's bitwise-equivalence argument, since no CAZ code changes.
 
-- Accept negative feature weights (finite, any sign) in `rank_removal` and
-  therefore `ZonationSolver`; amounts remain `>= 0`.
-- CAZ gains a meaningful negative-weight semantic: `delta_i = max_j` over the
-  features cell `i` **holds and that are still extant**, floored to `0.0` when
-  the cell holds nothing extant.
-- **Exact backward compatibility for `w >= 0`**: bit-identical results for every
-  existing input, proven by the untouched existing suite (including the
-  test-local dense oracle).
-- `warp=1` with negative weights auto-routes to batch selection (exact, slower)
-  with one filterable `UserWarning`; no silent wrong answers, no hard failure.
+## 3. Why `use_cost=True` is rejected alongside negative weights
 
-**Non-goals**
+`delta/c` is faithful for positive features (Moilanen et al. 2005,
+doi:10.1098/rspb.2005.3164 Eq. 2.1), but benefit-cost ratio ranking is
+order-consistent only while the numerator keeps one sign. With `delta = -2` at
+costs 1 / 2 / 10 the scores are `-2.0 / -1.0 / -0.2`: the **costlier**
+threat-carrying cell is removed **later**. The conservation reading is
+unambiguous — a cell that both carries a threat and is expensive to protect is
+the one to concede first — so the formula does the opposite of what a user
+would expect, and the composition has no published basis: Moilanen 2011's stated
+purpose for negative features is to *replace* the single-cost divisor ("different
+costs can be accounted for in our framework", the gain being that negative
+features carry *multiple* costs where `c_i` carries one).
 
-- No change to ABF's formula (already correct), to curves, smoothing, locks,
-  `ZonationResult`, or the solver's signature.
-- No negative *amounts* (Zonation expresses negative features through weights;
-  amounts are occurrence levels — science-verified at v0.31).
-- No attempt to preserve the heap under negative weights (§1.2 — not lazily
-  recoverable; the batch route is the answer).
-- No UI exposure of weights (unchanged; weights are already a `rank_removal`
-  parameter the Shiny panel does not surface).
+**Therefore: `use_cost=True` with any negative weight raises `ValueError`**,
+directing the user to express costs as negative features (the paper's own
+practice) or to pass `use_cost=False`. This is the conservative direction:
+relaxing it later is backward-compatible, tightening it later would not be.
 
-## 3. CAZ semantics (normative)
+## 4. The semantic we ship, stated honestly
 
-Let `held_i` = the set of features with a stored (nonzero) amount in row `i`,
-and `extant` = features with `Q_j > 0`.
+Our ABF marginal is `w_j · q_ij / Q_j`, proportional to `1/R_j` — the
+proportional / remaining-sum member of the additive-benefit family that
+pymarxan has used since v0.13. For a **negative** feature this makes exclusion
+*increasingly* urgent as the feature nears elimination (`|marginal|` runs
+1 → 100 as `R` falls 1.0 → 0.01).
 
-```
-delta_i = max_{j ∈ held_i ∩ extant} ( w_j · q_ij / Q_j ) / c_i      (nonempty)
-delta_i = 0.0                                                        (empty set)
-```
+Moilanen 2011 does the **opposite**, deliberately: it inverts the benefit
+function for negative features (`z_k = 1/0.25 = 4` against `z_j = 0.25` for
+biodiversity) so they become *decreasingly* important to exclude once mostly
+excluded — "implementing the notion of generalized complementarity". Their
+marginal runs 4.0 → 4e-6 over the same range. **Removal orders differ
+materially.**
 
-**Equivalence to the shipped formula for `w >= 0`** (the load-bearing claim):
-every term is then `>= 0`, and the shipped code computes
-`max({terms of held∩extant} ∪ {0 for absent} ∪ {0 for dead})`. If the new set is
-nonempty its maximum is `>= 0`, so adding zeros cannot change it; if the new set
-is empty the shipped max over all-zeros is `0.0`, which the floor reproduces
-exactly. `max` is order-free and selects an existing float, so the surviving
-value is **bitwise identical**. This is why the existing suite — including the
-dense oracle, which keeps the *old* formula — is the compatibility proof and
-must not be modified.
+This deviation is *not* covered by pymarxan's existing documented departure from
+`z ≈ 0.25`, because that departure preserves direction for positive features
+(both forms increase as `R` falls; only steepness differs) and **changes kind at
+the sign boundary**. Nor is it covered by the grid-smoothing precedent of
+shipping a documented variant: that was licensed by proven ranking-*inertness*,
+whereas this is ranking-*active*.
 
-**Why "held" must come from the amount buffer, not from `r == 0`:** a *zero
-weight* (legal, and already tested) makes a held term exactly `0.0`, which is
-indistinguishable from an absent feature by value. With negatives present the
-distinction is observable: for a cell holding one zero-weighted and one
-negatively-weighted feature, including the `0` yields `delta = 0` while
-excluding it yields the negative term. The mask is therefore `qd != 0` on the
-dense amount buffer (valid because `eliminate_zeros()` guarantees stored
-amounts are nonzero, and validation guarantees them positive).
+So the docstring and CHANGELOG cite Moilanen 2011 for the **concept only**
+(negative weights represent opportunity costs / alternative land uses, and their
+carriers should be removed first) and state the divergence plainly. The faithful
+form needs a per-feature benefit exponent, which attaches to the docstring's
+pre-existing deferral ("the concave power-benefit generalization is a future
+extension") and is logged in the roadmap — not attempted here.
 
-**Extinct features are excluded, not zeroed.** A cell holding only extinct
-features scores `0.0` (via the floor) — identical to today for `w >= 0`, and it
-avoids an extinct feature masking a negative term at `max(0, negative) = 0`.
-For **ABF this distinction does not exist**: excluding a term from a sum and
-zeroing it are the same operation, which is why ABF keeps `r[:, dead] = 0.0`
-unchanged under both weight regimes.
+## 5. What changes
 
-## 4. Implementation
-
-All in `src/pymarxan/zonation/rank_removal.py`.
+All in `src/pymarxan/zonation/rank_removal.py`; **`rescore` is not touched.**
 
 1. **`_validate_inputs`** (`:81-87`): delete the negative-weight raise; keep the
-   finiteness check. One docstring sentence updated.
-2. **`rescore`** (`:310-333`): bind the dense amount buffer
-   (`qd = q[chunk].toarray()`; `r = qd * fac`) — a naming change only, values
-   identical — and split the CAZ reduction:
+   finiteness check; update the docstring sentence.
+2. **Two new guards** in `rank_removal`, after the `w` array is filled (so they
+   see weights aligned to actual features, not raw dict values keyed to absent
+   ids): `has_neg_w = bool((w < 0).any())`; then
+   - `rule == "caz" and has_neg_w` → `ValueError` naming `rule="abf"` and the
+     reason (`max` cannot trade off);
+   - `use_cost and has_neg_w` → `ValueError` naming both escapes.
+3. **Heap routing** (`:335`): `use_heap = ... and not has_neg_w`, plus a
+   filterable `UserWarning` from a module-level helper called beside
+   `_warn_if_small_warp`. Review-verified as correct and necessary: with
+   `w_j < 0` the term is strictly *decreasing* under removal, so cached heap keys
+   become upper bounds and the Minoux-1978 lazy-greedy exactness argument fails.
+   Batch selection is unaffected — its dirty set tracks changed *inputs*, never
+   monotone scores.
+4. **Docs**: the §4 divergence; the curve-reading inversion (§6); a `ValueError`
+   summary line.
+5. **`ZonationSolver`**: no signature change (it already forwards `weights`), but
+   its metadata gains `negative_weight_features` — the ids given negative
+   weights — following the existing `smoothed` / `smoothing_alpha` provenance
+   precedent, so curve consumers can flip the affected series.
 
-   ```python
-   if rule == "caz":
-       if has_neg_w:
-           r[qd == 0] = -np.inf     # absent: not held
-           r[:, dead] = -np.inf     # extinct: no longer counts
-           out = r.max(axis=1)
-           out[out == -np.inf] = 0.0
-       else:
-           r[:, dead] = 0.0         # shipped path, untouched
-           out = r.max(axis=1)
-   else:
-       r[:, dead] = 0.0
-       out = r.sum(axis=1)          # ABF: correct for either sign
-   ```
+## 6. Curve-reading inversion (new failure mode)
 
-   `out == -np.inf` (not `~np.isfinite`): `+inf` is a legal score in the
-   subnormal-`Q` regime that v0.32's `RuntimeError` guard owns, and must not be
-   silently rewritten to `0.0`.
-   Naming `qd` keeps two chunk buffers alive simultaneously (~26 MB each at
-   `_RESCORE_CHUNK=32768`, `n_feat=100`) instead of one — accepted; the existing
-   benches are the regression net.
-3. **`has_neg_w`**: `bool((w < 0).any())`, computed once immediately after the
-   `w` array is filled from the `weights` dict (before `rescore` is defined, so
-   the closure captures it).
-4. **Heap routing** (`:335`): `use_heap = warp == 1 and not _force_batch and
-   not _force_full_rescore and not has_neg_w`. The warning fires from a
-   module-level helper (mirroring `_warn_if_small_warp`) called immediately
-   after the `warp` clamp, i.e. beside the existing advisory call, when
-   `warp == 1 and has_neg_w`: negative weights make scores non-monotone, so the
-   exact lazy heap is unavailable and batch selection is used — same results,
-   slower. Filterable `UserWarning`.
-5. **Docstring**: negative weights supported with the CAZ rule stated; the
-   warp=1 routing consequence; the Moilanen 2011 citation.
+`performance_curves` stores `Q/T` per feature. For a positive feature that reads
+"fraction of the feature retained" — higher is better, the convention every
+consumer and the Shiny panel's plot assumes. For a **negative** feature the
+identical number means "fraction of the threat still inside the reserve", where
+**lower is better**. Curves are weight-independent (§7), so nothing in the
+output distinguishes them: a mixed run yields a plot whose rows must be read in
+opposite directions. Before this change the uniform reading was always valid.
+Mitigated by documenting it and by the §5.5 metadata marker.
 
-## 5. What provably does not change
+## 7. What provably does not change
 
-Weights enter *only* `fac = w / Q_safe` inside `rescore`. Therefore: `Q`, `T`,
-and every performance-curve value are weight-independent; locks/phases,
-`curve_every`, smoothing (applied to amounts before weighting), `top_fraction`,
-`priority_rank`, and `ZonationResult` are untouched. Selection is sign-agnostic
-(`argpartition`/`argsort` order any finite floats), and `use_cost` divides by a
-validated-positive cost, so sign is preserved. The `RuntimeError` progress guard
-is unaffected — negative weights produce finite scores, never NaN.
-`ZonationSolver` needs no edit: it already forwards a `weights` dict
-(`zonation_solver.py:45`), so it inherits the capability with the validation
-change alone. Note the solver's `warp` **defaults to 1**
-(`zonation_solver.py:44`), so every negative-weight `solve()` takes the batch
-route and emits the routing warning — intended (the user should know the exact
-heap is off), but it sharpens the §9 question about warning granularity.
+Weights enter *only* `fac = w / Q_safe` inside `rescore`, which this phase does
+not modify. So `Q`, `T`, and every curve **value** are weight-independent;
+locks/phases, `curve_every`, smoothing, `top_fraction`, `priority_rank` and
+`ZonationResult` are untouched; selection is sign-agnostic. The `RuntimeError`
+progress guard still fires for ABF with negative weights (review-verified on the
+pinned subnormal fixture) — the `0.0 * inf → NaN` mechanism is unchanged.
+Note negative terms are unbounded *below* as `Q → 0` (`Q=1e-9` → `-1e9`), a
+magnitude regime the guard has only met from the positive side; §8.5 covers it.
 
-## 6. Testing
+## 8. Testing
 
-Appended to `tests/pymarxan/zonation/test_rank_removal_scale.py`; the existing
-suite is modified only where noted.
+Appended to `tests/pymarxan/zonation/test_rank_removal_scale.py`, plus one
+**edit** to an existing test.
 
-1. **Backward compatibility (no new test):** the entire existing suite green,
-   unmodified — the dense oracle still encodes the *old* CAZ formula, so its
-   continued agreement is the bitwise proof of §3's equivalence claim.
-2. **Hand-computed semantics**, both rules, on one small fixture with a mixed
-   positive/negative weight set: assert the exact `removal_order` derived by
-   hand in the test's comment (a negatively-weighted cell must be removed
-   before a neutral one).
-3. **The formerly-inexpressible case:** a cell holding *only* a
-   negatively-weighted feature must rank below (be removed before) a cell
-   holding nothing — impossible under the shipped `max`-with-zeros formula.
-4. **Zero-weight × negative-weight interaction** (§3): a cell holding one
-   `w=0` feature and one `w<0` feature scores the negative term, not `0`.
-5. **The `-inf` floor:** a cell holding nothing scores exactly `0.0` and ranks
-   accordingly (asserted inside test 2). *Amended during planning:* the
-   originally-promised "cell whose only held feature is extinct" state is
-   unreachable by construction — a remaining holder with `q_ij > 0` keeps
-   `Q_j > 0` — except via the FP-residue path the CELF phase already covers
-   with positive weights. Empty cells exercise the identical code line
-   (all-excluded row → `-inf` → floor), so no impossible test is written.
-6. **Heap routing:** with a negative weight at `warp=1`, monkeypatch
-   `heapq.heapify` (called once per lock-phase by the heap path, never by the
-   batch path) to raise `AssertionError`; the run must complete normally —
-   a positive, loud probe rather than counting pops. The `UserWarning` must
-   fire; with all-nonnegative weights at `warp=1` it must not (and `heapify`
-   must then be reached, confirming the probe has teeth).
-7. **Self-consistency:** negative weights, `warp ∈ {1, 3, n}`, `use_cost` both,
-   `_force_full_rescore` on/off — all agree (the dirty-set shortcut is still
-   valid; only monotonicity was lost).
-8. **Cost interaction:** negative delta divided by differing positive costs
-   reorders as expected (hand-computed).
-9. `make check` green; parity anchor untouched (no Marxan solver touched).
+1. **Existing test edit (review finding #6):** `test_negative_or_nan_weight_raises`
+   (`:421-425`) asserts the raise being deleted. Its NaN half stays; its negative
+   half is replaced by assertions on the two new guards.
+2. **ABF semantics, hand-computed** (fixture arithmetic verified by the review):
+   PU1 benefit-10, PU2 threat-10, PU3 holds both at 5, PU4 empty, `use_cost=False`,
+   weights `{1: +1, 2: -1}` → `[2, 3, 4, 1]`. PU3's score flips sign as `Q₂`
+   shrinks (0.0 → −0.667), a concrete demonstration of the non-monotonicity that
+   makes the heap unusable.
+3. **A cell holding only a threat** ranks before a cell holding nothing.
+4. **Guards:** CAZ + negative → `ValueError`; `use_cost=True` + negative →
+   `ValueError`; both messages assert-matched. Positive-weight CAZ and
+   `use_cost=True` still work (no regression).
+5. **Heap routing:** monkeypatch `heapq.heapify` (called once per lock-phase by
+   the heap path, never by the batch path) to raise; a negative-weight `warp=1`
+   run must complete and must emit the `UserWarning`; a positive-weight `warp=1`
+   run must reach `heapify` (proving the probe has teeth); no warning without
+   negative weights. Plus the near-extinction magnitude regime (§7) against the
+   progress guard.
+6. **Self-consistency** at fixed warp: default == `_force_batch=True` ==
+   `_force_full_rescore=True` (only monotonicity was lost; the dirty-set
+   shortcut and batch selection remain valid).
+7. **Solver:** `ZonationSolver` end-to-end with negative weights
+   (`use_cost=False`, `rule="abf"`), asserting the `negative_weight_features`
+   metadata marker.
+8. **The whole existing suite green** — with `rescore` untouched, positive-weight
+   behavior is unchanged by construction, not by argument.
+9. `make check` green; parity anchor untouched.
 
-## 7. Performance
+## 9. Files touched
 
-The negative branch adds two masked writes and one comparison per chunk versus
-the shipped path, and is taken *only* when a negative weight exists — the
-positive-weight hot path executes the same instructions as v0.33. The extra
-chunk buffer (§4.2) is the one unconditional cost. Existing benches
-(`bench_zonation.py`: warp-batch, warp=1 heap, grid-smoothed) are the regression
-net; no new bench — this phase changes semantics, not scale.
+- `src/pymarxan/zonation/rank_removal.py` — validation, two guards, routing,
+  warning helper, docstrings.
+- `src/pymarxan/solvers/zonation_solver.py` — metadata marker only.
+- `tests/pymarxan/zonation/test_rank_removal_scale.py` — §8 (append + one edit).
+- `CHANGELOG.md` — `[Unreleased]` → **v0.34.0**.
+- Roadmap memory post-merge: negative weights shipped ABF-only; **new deferral:
+  per-feature benefit exponent (`z_j`) for Moilanen-2011-faithful negative-feature
+  dynamics**, joined to the existing power-benefit deferral. Edge removal remains.
 
-## 8. Files touched
+## 10. Review outcome
 
-- `src/pymarxan/zonation/rank_removal.py` — validation, `rescore`, routing,
-  warning helper, docstring.
-- `tests/pymarxan/zonation/test_rank_removal_scale.py` — §6 tests (append).
-- `CHANGELOG.md` — `[Unreleased]` Added + Changed → **v0.34.0**.
-- Roadmap memory post-merge: negative weights done; edge removal remains.
-
-## 9. Risks / open questions for review
-
-- **Science (primary):** does Zonation itself admit negative weights under CAZ,
-  or only in the additive/ABF framework (Moilanen 2011 is framed additively)?
-  And does Zonation's CAZ maximize over held features or over all features?
-  If CAZ+negative is not a real Zonation combination, the fallback is to raise
-  for `rule="caz"` and ship ABF-only — the spec should be revised, not the code
-  patched after the fact.
-- **Grounding:** verify the §3 bitwise-equivalence claim by execution across the
-  existing fixture families (positive weights, both rules, warps, locks,
-  extinction, smoothing) — not by reading; and verify negative-weight results
-  against an independently written brute-force scorer.
-- **Cost division of a negative score** (surfaced while hand-computing the
-  fixtures): `delta/c` with `delta < 0` and a larger `c` yields a *less*
-  negative score, so an expensive cell carrying a threat is removed **later**
-  than an identical cheap one. That is the consistent extension of the shipped
-  formula, and the plan pins it as current behavior — but is it the right
-  conservation semantic? Moilanen 2011 divides benefit by cost; whether the
-  same division should apply to opportunity-cost terms needs checking. If the
-  literature says otherwise, this is a spec change, not a patch.
-- Does any *other* consumer assume `delta >= 0`? (`analysis`, the Shiny panel,
-  `ZonationSolver.build_solution` metadata — grounding to grep and confirm.)
-- Is one warning per call the right granularity, or should it fire only once per
-  process? (Precedent `_warn_if_small_warp` fires per call — but `ZonationSolver`
-  defaults to `warp=1`, so negative-weight users hit this on every solve.)
-- Should `ZonationSolver` gain a test asserting negative weights flow through
-  end-to-end, or is the `rank_removal` coverage sufficient given it is a pure
-  pass-through?
+Reviewed by `wf_255edcca-6b7`; all findings folded (synthesis doc). Verified and
+not to be re-litigated: heap bypass correctness; removal-direction correctness;
+the "Zonation v3+" attribution; that nothing downstream assumes `delta >= 0`;
+that warning granularity is a non-issue (Python's default filter shows it once
+per call site per process). The first draft's `-inf` sentinel defect is recorded
+in the synthesis as the reason a value-sentinel must never be used for masking in
+this engine, should a later phase add a masked reduction.
