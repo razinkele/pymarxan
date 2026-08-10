@@ -149,8 +149,8 @@ def rank_removal(
 
     Performance curves for a negatively weighted feature read inversely: the
     stored fraction is the share of that feature still INSIDE the remaining
-    set, so lower is better. ``ZonationSolver`` records the affected feature
-    ids in ``Solution.metadata["negative_weight_features"]``.
+    set, so lower is better. ``ZonationSolver`` records the negatively weighted
+    feature ids, as configured, in ``Solution.metadata["negative_weight_features"]``.
 
     Scaling: the engine is sparse and incremental. Per batch it rescores only
     cells whose features' remaining totals changed (dirty set) — via chunked
@@ -158,7 +158,8 @@ def rank_removal(
     per-row scores are bitwise-identical to the pre-rewrite engine given
     identical remaining totals — selects the ``warp`` smallest (ties by PU
     index) via partition, and updates totals, cost and curves incrementally.
-    Init is O(nnz). ``warp=1`` selects via lazy-greedy (accelerated greedy,
+    Init is O(nnz). ``warp=1`` (with all-nonnegative weights; negative weights
+    route to batch selection) selects via lazy-greedy (accelerated greedy,
     Minoux 1978; popularized as CELF, Leskovec et al. 2007) mirrored to
     minimization: removal only increases remaining cells' scores, so cached
     keys are lower bounds on a min-heap and a popped fresh top is the true

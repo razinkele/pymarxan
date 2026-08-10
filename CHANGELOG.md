@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Zonation v3+ opportunity-cost / alternative-land-use layers (concept:
   Moilanen et al. 2011, doi:10.1890/10-1865.1) — so cells carrying them rank
   for removal first. `ZonationSolver` inherits this through its existing
-  `weights` parameter and records the affected ids in
+  `weights` parameter and records the negatively weighted feature ids, as configured, in
   `Solution.metadata["negative_weight_features"]`, since performance curves for
   those features read inversely (lower is better).
 

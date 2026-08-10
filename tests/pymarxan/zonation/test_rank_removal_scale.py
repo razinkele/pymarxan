@@ -1078,6 +1078,9 @@ def test_no_heap_warning_without_negative_weights() -> None:
 def test_negative_weight_self_consistency(warp: int) -> None:
     # Only monotonicity was lost; the dirty-set shortcut and batch selection
     # stay valid, so these must agree exactly at a FIXED warp.
+    # (At warp=1 both sides are the batch path — negative weights disable the
+    # heap — so the discriminator here is the dirty-set shortcut, not
+    # heap-vs-batch.)
     p = _threat_problem()
     kw = {"rule": "abf", "weights": NEG_W, "use_cost": False, "warp": warp}
     base = rank_removal(p, **kw)  # type: ignore[arg-type]
