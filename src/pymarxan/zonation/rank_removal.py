@@ -56,6 +56,25 @@ def _warn_if_small_warp(n_pu: int, warp: int) -> None:
         )
 
 
+def _warn_if_negative_weights_at_warp1(warp: int, has_neg_w: bool) -> None:
+    """Advise that negative weights disable the exact warp=1 lazy heap.
+
+    A term ``w_j q_ij / Q_j`` with ``w_j < 0`` grows MORE negative as ``Q_j``
+    shrinks, so scores are no longer nondecreasing under removal, cached heap
+    keys stop being lower bounds, and the lazy-greedy exactness argument
+    fails. Batch selection has no such dependency — its dirty set tracks
+    changed inputs, not monotone scores — so it is used instead.
+    """
+    if warp == 1 and has_neg_w:
+        warnings.warn(
+            "negative feature weights make rank_removal scores non-monotone, "
+            "so the exact warp=1 lazy heap is unavailable; using batch "
+            "selection instead (identical results, slower). Silence via "
+            "warnings.filterwarnings if deliberate.",
+            stacklevel=3,
+        )
+
+
 def _validate_inputs(
     problem: ConservationProblem, weights: dict[int, float] | None
 ) -> None:
@@ -63,9 +82,11 @@ def _validate_inputs(
 
     Raw (pre-duplicate-sum, pre-smoothing) amounts are checked so the plain and
     smoothing paths enforce one contract. NaNs must be rejected up front: they
-    pass every ``< 0`` comparison and would stall the removal loop. Negative
-    weights are a real Zonation v3+ workflow (opportunity-cost features;
-    Moilanen et al. 2011, doi:10.1890/10-1865.1) but are not yet supported.
+    pass every ``< 0`` comparison and would stall the removal loop.
+    Negative weights are supported under ``rule="abf"`` (Zonation v3+
+    opportunity-cost features; Moilanen et al. 2011, doi:10.1890/10-1865.1);
+    amounts must stay nonnegative — Zonation expresses negative features
+    through weights, not occurrence levels.
     """
     if problem.n_planning_units == 0:
         raise ValueError("rank_removal requires at least one planning unit")
@@ -78,12 +99,6 @@ def _validate_inputs(
         wv = np.asarray(list(weights.values()), dtype=float)
         if not np.isfinite(wv).all():
             raise ValueError("feature weights must be finite for rank_removal")
-        if (wv < 0).any():
-            raise ValueError(
-                "feature weights must be >= 0 for rank_removal (negative "
-                "weights, used by Zonation v3+ for opportunity-cost features, "
-                "are not yet supported)"
-            )
 
 
 def rank_removal(
@@ -112,13 +127,39 @@ def rank_removal(
     Locked-out cells are removed first, locked-in last; the removal order is the
     priority ranking (last removed = rank 1.0).
 
+    Feature weights may be negative under ``rule="abf"`` (Zonation v3+
+    opportunity-cost / alternative-land-use features; Moilanen et al. 2011,
+    doi:10.1890/10-1865.1) so that cells carrying them rank for removal first.
+    Two combinations raise ``ValueError``: ``rule="caz"`` (a max cannot trade a
+    negative term against a positive one, so the weight would be silently
+    inert) and ``use_cost=True`` (dividing a negative score by cost inverts
+    the cost response). Negative weights also make scores non-monotone under
+    removal, so ``warp=1`` uses batch selection rather than the exact lazy
+    heap — identical results, without the heap's speed (a filterable
+    ``UserWarning`` says so).
+
+    Semantics note: this engine's proportional / remaining-sum marginal makes a
+    negatively weighted feature INCREASINGLY urgent to exclude as it nears
+    elimination. Moilanen et al. 2011 instead inverts the benefit function for
+    negative features (``z_k = 4``) so they become DECREASINGLY urgent once
+    mostly excluded; removal orders differ materially. The citation is for the
+    concept — negative weights represent opportunity costs — not for identical
+    dynamics; the faithful form needs the per-feature benefit exponent listed
+    as a future extension.
+
+    Performance curves for a negatively weighted feature read inversely: the
+    stored fraction is the share of that feature still INSIDE the remaining
+    set, so lower is better. ``ZonationSolver`` records the negatively weighted
+    feature ids, as configured, in ``Solution.metadata["negative_weight_features"]``.
+
     Scaling: the engine is sparse and incremental. Per batch it rescores only
     cells whose features' remaining totals changed (dirty set) — via chunked
     dense row buffers that reuse the reference engine's exact expressions, so
     per-row scores are bitwise-identical to the pre-rewrite engine given
     identical remaining totals — selects the ``warp`` smallest (ties by PU
     index) via partition, and updates totals, cost and curves incrementally.
-    Init is O(nnz). ``warp=1`` selects via lazy-greedy (accelerated greedy,
+    Init is O(nnz). ``warp=1`` (with all-nonnegative weights; negative weights
+    route to batch selection) selects via lazy-greedy (accelerated greedy,
     Minoux 1978; popularized as CELF, Leskovec et al. 2007) mirrored to
     minimization: removal only increases remaining cells' scores, so cached
     keys are lower bounds on a min-heap and a popped fresh top is the true
@@ -143,8 +184,10 @@ def rank_removal(
     smoothed matrices) can differ only via initial-total summation order (a few
     ULPs), which can flip exact float near-ties; float costs affect curve
     values only. ``ValueError`` on invalid input: negative or non-finite
-    amounts/weights (negative weights — a Zonation v3+ opportunity-cost
-    workflow — are not yet supported), non-finite costs (when ``use_cost=True``),
+    amounts, non-finite weights, negative weights used with anything other
+    than ``rule="abf"`` and ``use_cost=False`` — the only combination negative
+    weights support (a Zonation v3+ opportunity-cost workflow; Moilanen
+    et al. 2011, doi:10.1890/10-1865.1) — non-finite costs (when ``use_cost=True``),
     zero planning units. Raises ``RuntimeError`` if any score evaluates to NaN
     (e.g. subnormal amounts overflowing ``w/Q``): immediately on the warp=1
     heap path, or when removal can make no progress on the batch path.
@@ -183,6 +226,37 @@ def rank_removal(
             f"vector-scale only (n_pu <= {_SMOOTHING_MAX_PU}); use "
             "GridSmoothingSpec for grid problems at raster scale "
             "(problems constructed with grid=GridGeometry(...))."
+        )
+
+    # Negative-weight guards, hoisted ahead of the q build (fail fast, before
+    # any smoothing convolution runs): n_feat == len(problem.features) in both
+    # build_pu_feature_matrix and build_pu_feature_csr, so w can be sized and
+    # filled from problem.features directly, without the matrix.
+    feat_ids = problem.features["id"].to_numpy()
+    w = np.ones(problem.n_features, dtype=float)
+    if weights:
+        for j, fid in enumerate(feat_ids):
+            if int(fid) in weights:
+                w[j] = float(weights[int(fid)])
+
+    has_neg_w = bool((w < 0).any())
+    if has_neg_w and rule == "caz":
+        raise ValueError(
+            "negative feature weights are not supported with rule='caz': the "
+            "core-area max cannot trade a negative term against a positive "
+            "one (any positive term masks it entirely), so the weight would "
+            "be silently inert. Use rule='abf', whose additive form is the "
+            "one Zonation's negative-feature machinery is defined for "
+            "(Moilanen et al. 2011, doi:10.1890/10-1865.1)."
+        )
+    if has_neg_w and use_cost:
+        raise ValueError(
+            "negative feature weights cannot be combined with use_cost=True: "
+            "dividing a negative score by cost inverts the cost response, so "
+            "a costlier threat-carrying cell would rank for removal LATER "
+            "than an identical cheap one. Pass use_cost=False, or express "
+            "costs as negatively weighted features (Moilanen et al. 2011, "
+            "doi:10.1890/10-1865.1)."
         )
 
     from scipy.sparse import csr_matrix
@@ -225,14 +299,7 @@ def rank_removal(
     n_pu, n_feat = q.shape
     csc = q.tocsc()
     pu_ids = problem.planning_units["id"].to_numpy()
-    feat_ids = problem.features["id"].to_numpy()
     status = problem.planning_units["status"].to_numpy()
-
-    w = np.ones(n_feat, dtype=float)
-    if weights:
-        for j, fid in enumerate(feat_ids):
-            if int(fid) in weights:
-                w[j] = float(weights[int(fid)])
 
     if use_cost:
         c = problem.planning_units["cost"].to_numpy().astype(float)
@@ -245,6 +312,7 @@ def rank_removal(
 
     warp = max(1, min(int(warp), max(n_pu, 1)))
     _warn_if_small_warp(n_pu, warp)
+    _warn_if_negative_weights_at_warp1(warp, has_neg_w)
 
     remaining = np.ones(n_pu, dtype=bool)
     n_remaining = n_pu
@@ -332,7 +400,12 @@ def rank_removal(
             delta[chunk] = out / c[chunk]
         dirty[rows] = False
 
-    use_heap = warp == 1 and not _force_batch and not _force_full_rescore
+    use_heap = (
+        warp == 1
+        and not _force_batch
+        and not _force_full_rescore
+        and not has_neg_w
+    )
 
     if use_heap:
         while n_remaining > 0:

@@ -418,12 +418,15 @@ def test_nan_cost_raises() -> None:
         rank_removal(p)
 
 
-def test_negative_or_nan_weight_raises() -> None:
+def test_nan_weight_raises_and_negative_weight_is_accepted() -> None:
+    # The negative-weight raise is gone (ABF opportunity-cost features);
+    # the NaN check stays. Review finding #6: this test previously asserted
+    # `weights must be >= 0`, which this phase deliberately removes.
     p = _random_problem(0)
-    with pytest.raises(ValueError, match="weights must be >= 0"):
-        rank_removal(p, weights={1: -2.0})
     with pytest.raises(ValueError, match="weights must be finite"):
         rank_removal(p, weights={1: float("nan")})
+    res = rank_removal(p, rule="abf", weights={1: -2.0}, use_cost=False, warp=4)
+    assert len(res.removal_order) == p.n_planning_units
 
 
 def test_zero_pu_raises() -> None:
@@ -980,3 +983,166 @@ def test_unknown_smoothing_spec_raises_type_error() -> None:
     p = _random_problem(0)
     with pytest.raises(TypeError, match="unsupported smoothing spec"):
         rank_removal(p, smoothing=Bogus())  # type: ignore[arg-type]
+
+
+# --- Negative (opportunity-cost) feature weights, ABF-only ---------------
+NEG_W = {1: 1.0, 2: -1.0}
+
+
+def _threat_problem() -> ConservationProblem:
+    """PU1 benefit-only, PU2 threat-only, PU3 holds both, PU4 empty.
+
+    Hand-computed ABF trace with weights {1:+1, 2:-1}, unit costs, Q1=Q2=15:
+      PU1 10/15=0.6667 | PU2 -10/15=-0.6667 | PU3 5/15-5/15=0.0 | PU4 0.0
+      -> remove PU2; Q2=5
+      PU3 5/15-5/5 = -0.6667   -> remove PU3; Q1=10, Q2=0 (extinct)
+      PU4 0.0 < PU1 10/10=1.0  -> remove PU4, then PU1.
+    PU3's score FLIPS SIGN as Q2 shrinks (0.0 -> -0.6667): the concrete
+    demonstration of the non-monotonicity that makes the warp=1 lazy heap
+    unusable with negative weights.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["benefit", "threat"], "target": [1.0, 1.0],
+         "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 10.0},
+            {"species": 2, "pu": 2, "amount": 10.0},
+            {"species": 1, "pu": 3, "amount": 5.0},
+            {"species": 2, "pu": 3, "amount": 5.0},
+        ]
+    )
+    return ConservationProblem(pu, feats, pvf)
+
+
+def test_abf_negative_weight_removes_threat_cells_first() -> None:
+    res = rank_removal(
+        _threat_problem(), rule="abf", weights=NEG_W, use_cost=False, warp=1
+    )
+    assert res.removal_order == [2, 3, 4, 1]
+    # A cell holding ONLY a threat ranks before a cell holding nothing.
+    assert res.removal_order.index(2) < res.removal_order.index(4)
+
+
+def test_caz_with_negative_weight_raises() -> None:
+    # Design §2: max is not a trade-off operator — a positive term always
+    # masks a negative one, so CAZ + negative weights is degenerate.
+    with pytest.raises(ValueError, match="rule='abf'"):
+        rank_removal(
+            _threat_problem(), rule="caz", weights=NEG_W, use_cost=False
+        )
+    # Positive-weight CAZ is untouched.
+    res = rank_removal(_threat_problem(), rule="caz", weights={1: 1.0, 2: 2.0})
+    assert len(res.removal_order) == 4
+
+
+def test_use_cost_with_negative_weight_raises() -> None:
+    # Design §3: dividing a negative score by cost inverts the cost response
+    # (the costlier threat cell would be removed later).
+    with pytest.raises(ValueError, match="use_cost"):
+        rank_removal(_threat_problem(), rule="abf", weights=NEG_W, use_cost=True)
+    # use_cost=True is unaffected without negative weights.
+    res = rank_removal(_threat_problem(), rule="abf", weights={1: 1.0, 2: 2.0})
+    assert len(res.removal_order) == 4
+
+
+def test_negative_weight_routes_off_the_heap(monkeypatch: pytest.MonkeyPatch) -> None:
+    # heapq.heapify runs once per lock-phase on the heap path and never on the
+    # batch path — a loud probe rather than counting pops.
+    import heapq
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("heap path taken with negative weights")
+
+    monkeypatch.setattr(heapq, "heapify", _boom)
+    p = _threat_problem()
+    with pytest.warns(UserWarning, match="non-monotone"):
+        res = rank_removal(p, rule="abf", weights=NEG_W, use_cost=False, warp=1)
+    assert res.removal_order == [2, 3, 4, 1]
+    # The probe has teeth: positive weights at warp=1 DO reach heapify.
+    with pytest.raises(AssertionError, match="heap path taken"):
+        rank_removal(p, rule="abf", weights={1: 1.0, 2: 2.0}, warp=1)
+
+
+def test_no_heap_warning_without_negative_weights() -> None:
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        rank_removal(_threat_problem(), rule="abf", weights={1: 1.0, 2: 2.0}, warp=1)
+
+
+@pytest.mark.parametrize("warp", [1, 3])
+def test_negative_weight_self_consistency(warp: int) -> None:
+    # Only monotonicity was lost; the dirty-set shortcut and batch selection
+    # stay valid, so these must agree exactly at a FIXED warp.
+    # (At warp=1 both sides are the batch path — negative weights disable the
+    # heap — so the discriminator here is the dirty-set shortcut, not
+    # heap-vs-batch.)
+    p = _threat_problem()
+    kw = {"rule": "abf", "weights": NEG_W, "use_cost": False, "warp": warp}
+    base = rank_removal(p, **kw)  # type: ignore[arg-type]
+    _assert_equal_results(base, rank_removal(p, **kw, _force_batch=True))  # type: ignore[arg-type]
+    _assert_equal_results(
+        base, rank_removal(p, **kw, _force_full_rescore=True)  # type: ignore[arg-type]
+    )
+
+
+def test_negative_weight_near_extinction_magnitudes() -> None:
+    # Spec §7 / review finding #8: negative terms are unbounded BELOW as
+    # Q -> 0, a magnitude regime the progress guard has only met from the
+    # positive side. The run must complete (or raise the documented
+    # RuntimeError) — never hang or emit NaN ranks.
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0] * 3, "status": [0] * 3})
+    feats = pd.DataFrame(
+        {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}
+    )
+    pvf = pd.DataFrame(
+        [
+            {"species": 1, "pu": 1, "amount": 1e-300},
+            {"species": 2, "pu": 2, "amount": 1.0},
+            {"species": 2, "pu": 3, "amount": 2.0},
+        ]
+    )
+    p = ConservationProblem(pu, feats, pvf)
+    res = rank_removal(p, rule="abf", weights={1: -1.0}, use_cost=False, warp=1)
+    assert len(res.removal_order) == 3
+    assert all(np.isfinite(v) for v in res.priority_rank.values())
+
+
+def test_solver_negative_weights_metadata_marker() -> None:
+    from pymarxan.solvers.zonation_solver import ZonationSolver
+
+    solver = ZonationSolver(
+        rule="abf", weights=NEG_W, use_cost=False, warp=2, top_fraction=0.5
+    )
+    sols = solver.solve(_threat_problem(), {})
+    assert len(sols) == 1
+    # Curves for a negatively weighted feature read INVERSELY (fraction of
+    # the threat still inside the reserve; lower is better), so consumers
+    # need to know which series to flip — spec §6.
+    assert sols[0].metadata.get("negative_weight_features") == [2]
+
+
+def test_negative_weight_for_absent_feature_id_is_ignored() -> None:
+    # has_neg_w reads the FILLED w array, so a negative weight keyed to a
+    # feature id the problem does not contain must not trip the guards.
+    res = rank_removal(_threat_problem(), rule="caz", weights={99: -1.0})
+    assert len(res.removal_order) == 4
+
+
+def test_negative_weight_guard_raises_before_matrix_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The CAZ + negative-weight guard is hoisted ahead of the q build (review
+    # finding (a)): it reads problem.features directly and must fire without
+    # ever calling build_pu_feature_csr (which a grid-smoothed problem would
+    # otherwise pay a full per-column 2-D convolution for before raising).
+    def _boom(self: ConservationProblem) -> None:
+        raise AssertionError("matrix built before the negative-weight guard")
+
+    monkeypatch.setattr(ConservationProblem, "build_pu_feature_csr", _boom)
+    with pytest.raises(ValueError, match="rule='abf'"):
+        rank_removal(_threat_problem(), rule="caz", weights=NEG_W, use_cost=False)

@@ -17,7 +17,9 @@ class ZonationResult:
     deterministic. ``removal_order`` lists PU ids first-removed (lowest priority)
     first. ``performance_curves`` is wide form: ``prop_landscape_remaining`` and
     ``prop_cost_remaining`` columns plus one ``feat_<id>`` column per feature
-    (retained proportion), one row per recorded step.
+    (retained proportion), one row per recorded step. For negatively weighted
+    features the retained fraction reads inversely (lower is better) — see
+    rank_removal's docstring.
     """
 
     priority_rank: dict[int, float]
