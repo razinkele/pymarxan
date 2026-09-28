@@ -9,6 +9,7 @@ import pytest
 
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.mip_solver import ZoneMIPSolver
+from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import check_overall_targets, check_zone_targets
 from pymarxan.zones.readers import load_zone_project
 from tests.pymarxan.zones.marzone_anchor import OPTIMUM, OPTIMUM_COST, make_anchor_problem
@@ -162,3 +163,34 @@ class TestFixtureModeSwitch:
         assert weighted_assignment == ZERO_TARGET_WEIGHTED_OPTIMUM
         assert weighted_sol.objective == pytest.approx(ZERO_TARGET_WEIGHTED_OBJECTIVE)
         assert raw_assignment != weighted_assignment
+
+
+class TestMetFlagFloatTolerance:
+    """A MIP-optimal solution whose contribution-weighted sum rounds just below the target."""
+
+    def _problem(self) -> ZonalProblem:
+        amounts = [0.3, 0.6, 0.7, 0.6, 2.4]
+        ids = [1, 2, 3, 4, 5]
+        return ZonalProblem(
+            planning_units=pd.DataFrame({"id": ids, "cost": [0.0] * 5, "status": [0] * 5}),
+            features=pd.DataFrame({
+                "id": [1], "name": ["f1"], "target": [3.68], "spf": [1.0],
+            }),
+            pu_vs_features=pd.DataFrame({"species": [1] * 5, "pu": ids, "amount": amounts}),
+            boundary=None,
+            parameters={"BLM": 0.0},
+            zones=pd.DataFrame({"id": [1], "name": ["protect"]}),
+            zone_costs=pd.DataFrame({"pu": ids, "zone": [1] * 5, "cost": [1.0] * 5}),
+            zone_contributions=pd.DataFrame({
+                "feature": [1], "zone": [1], "contribution": [0.8],
+            }),
+            zone_targets=None,
+            zone_boundary_costs=None,
+        )
+
+    def test_all_units_needed_and_target_reported_met(self):
+        # 0.8 × (0.3 + 0.6 + 0.7 + 0.6 + 2.4) sums to 3.6799999999999997 in floating point.
+        sol = ZoneMIPSolver().solve(self._problem(), CONFIG)[0]
+        assert tuple(int(z) for z in sol.zone_assignment) == (1, 1, 1, 1, 1)
+        assert sol.targets_met == {1: True}
+        assert sol.all_targets_met

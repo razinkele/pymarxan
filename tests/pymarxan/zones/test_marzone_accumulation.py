@@ -5,7 +5,7 @@ Runs on tests/data/zones. MarZone accumulates two arrays per reserve: zoneSpec[(
 (:170). Contributions come from zones.hpp:619 (0 for an unlisted pair when a contribution file
 is supplied). Only the ``zonecontrib.dat`` dialect (species × zone, ``zones.hpp:621-627``) is
 mirrored; ``zonecontrib2.dat`` (per zone, all species, ``:629-638``) and ``zonecontrib3.dat``
-(per PU, ``:639-647``, ``GetZoneContrib`` at ``:169-176``) are not read. PUs in pymarxan's
+(per PU, ``:639-647``, ``GetZoneContrib`` at ``:169-177``) are not read. PUs in pymarxan's
 zone 0 are skipped by construction (MarZone has no unassigned state; spec §8).
 """
 from __future__ import annotations
@@ -48,12 +48,34 @@ def marzone_accumulate(
     return zone_spec, species_amounts
 
 
-@pytest.fixture(params=["with_table", "without_table"])
+def _partial_table_problem() -> ZonalProblem:
+    """Fixture minus the (feature 2, zone 2) row: exercises the zones.hpp:619 zero default.
+
+    Built with ``copy_with`` (not the loader), so no partial-table warning fires.
+    """
+    p = load_zone_project(DATA_DIR)
+    zc = p.zone_contributions
+    keep = ~((zc["feature"] == 2) & (zc["zone"] == 2))
+    return p.copy_with(zone_contributions=zc[keep].reset_index(drop=True))
+
+
+@pytest.fixture(params=["with_table", "without_table", "partial_table"])
 def problem(request):
     p = load_zone_project(DATA_DIR)
     if request.param == "without_table":
         p = p.copy_with(zone_contributions=None)
+    elif request.param == "partial_table":
+        p = _partial_table_problem()
     return p
+
+
+def test_partial_table_arm_drops_the_unlisted_pair():
+    """Guard: the partial arm really changes the overall amount (feature 2 in zone 2 -> 0)."""
+    p = _partial_table_problem()
+    assert p.contribution_gaps() == [(2, 2)]
+    a = np.array((2, 2, 2, 2))
+    assert compute_overall_achieved(p, a)[2] == 0.0
+    assert compute_overall_achieved(load_zone_project(DATA_DIR), a)[2] > 0.0
 
 
 @pytest.mark.parametrize("assignment", ASSIGNMENTS)
@@ -84,3 +106,4 @@ def test_cache_held_matches_both_marzone_arrays(problem, assignment):
     for f, v in species_amounts.items():
         assert held.overall[cache.feat_id_to_col[f]] == pytest.approx(v)
     assert held.per_zone.sum() == pytest.approx(sum(zone_spec.values()))
+    assert held.overall.sum() == pytest.approx(sum(species_amounts.values()))

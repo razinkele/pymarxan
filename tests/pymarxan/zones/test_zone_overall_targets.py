@@ -6,6 +6,7 @@ import pytest
 
 from pymarxan.zones.objective import (
     check_overall_targets,
+    check_zone_targets,
     compute_overall_achieved,
     compute_overall_penalty,
     compute_overall_shortfall,
@@ -108,9 +109,9 @@ class TestOverallTargetsAndPenalty:
 class TestZoneShortfalls:
     def test_per_pair_shortfalls_on_anchor(self):
         p = make_anchor_problem()
-        # Task 2 is additive: _compute_zone_achieved is still contribution-weighted here, so
-        # only assignments whose zone-2 shortfall is invariant under both semantics are pinned.
-        # The raw pin [2, 0, 0] -> 0.0 lands in Task 3 (test_zone_target_met_on_raw_amounts).
+        # Only assignments whose zone-2 shortfall is the same under raw and
+        # contribution-weighted accumulation are pinned here; the raw-only case
+        # [2, 0, 0] -> 0.0 is pinned by test_zone_target_met_on_raw_amounts.
         # 30 raw / 12 weighted: met under both semantics
         assert compute_zone_shortfalls(p, np.array([2, 2, 2])) == {(2, 1): 0.0}
         assert compute_zone_shortfalls(p, np.array([1, 1, 0])) == {(2, 1): 10.0}
@@ -125,7 +126,7 @@ class TestZoneTargetsRawOnAnchor:
         from pymarxan.zones.objective import check_zone_targets
         p = make_anchor_problem()
         assert check_zone_targets(p, np.array([2, 0, 0])) == {(2, 1): True}     # 10 raw >= 10
-        # 10 raw in zone 2 (was 4.0 weighted before this task's flip)
+        # 10 raw in zone 2 (it would be 4.0 under contribution weighting)
         assert compute_zone_shortfalls(p, np.array([2, 0, 0])) == {(2, 1): 0.0}
 
     def test_zone_target_weighted_under_flag(self):
@@ -188,3 +189,24 @@ class TestBuildZoneSolution:
         a[0] = 0
         assert sol.zone_assignment is not None
         assert int(sol.zone_assignment[0]) == 1
+
+
+class TestMetToleranceDoesNotHideShortfalls:
+    """The met test tolerates float rounding (relative 1e-9), not real shortfalls."""
+
+    def test_overall_target_short_by_relative_1e_3_is_unmet(self):
+        p = make_anchor_problem()
+        p.features.loc[0, "target"] = 18.0 * (1.0 + 1e-3)   # OPTIMUM achieves 18
+        assert check_overall_targets(p, np.array(OPTIMUM)) == {1: False}
+        p.features.loc[0, "target"] = 18.0 * (1.0 + 1e-12)
+        assert check_overall_targets(p, np.array(OPTIMUM)) == {1: True}
+
+    def test_zone_target_short_by_relative_1e_3_is_unmet(self):
+        p = make_anchor_problem()
+        zt = p.zone_targets.copy()
+        zt.loc[0, "target"] = 20.0 * (1.0 + 1e-3)            # OPTIMUM holds 20 raw in zone 2
+        p = p.copy_with(zone_targets=zt)
+        assert check_zone_targets(p, np.array(OPTIMUM)) == {(2, 1): False}
+        zt.loc[0, "target"] = 20.0 * (1.0 + 1e-12)
+        p = p.copy_with(zone_targets=zt)
+        assert check_zone_targets(p, np.array(OPTIMUM)) == {(2, 1): True}

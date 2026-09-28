@@ -155,7 +155,7 @@ class TestZoneTargetType:
 
     def test_validate_flags_unresolved_targettype(self, tmp_path: Path):
         """A frame straight from read_zone_targets (or built by hand) with targettype 1 would
-        otherwise use 0.5 as an absolute amount and be trivially met (plan review M6)."""
+        otherwise use 0.5 as an absolute amount and be trivially met."""
         _copy_zone_project(load_zone_project(DATA_DIR), tmp_path)
         zt_path = tmp_path / "input" / "zonetarget.dat"
         zt_path.write_text("zone,feature,target,targettype\n1,1,0.5,1\n2,2,3.0,0\n")
@@ -177,6 +177,20 @@ class TestPartialContributionTableWarning:
             problem = load_zone_project(tmp_path)
         assert problem.contribution_gaps() == [(1, 2), (2, 1), (2, 2)]
         assert problem.validate() == []
+
+    def test_warning_names_the_configured_contribution_file(self, tmp_path: Path):
+        problem = load_zone_project(DATA_DIR)
+        renamed = problem.copy_with(
+            parameters={**problem.parameters, "ZONECONTRIBNAME": "custom.dat"}
+        )
+        _copy_zone_project(renamed, tmp_path)
+        (tmp_path / "input" / "zonecontrib.dat").unlink()
+        (tmp_path / "input" / "custom.dat").write_text("feature,zone,contribution\n1,1,1.0\n")
+        with pytest.warns(UserWarning, match="3 unlisted") as record:
+            load_zone_project(tmp_path)
+        messages = [str(w.message) for w in record]
+        assert any("custom.dat" in m for m in messages)
+        assert not any("zonecontrib.dat" in m for m in messages)
 
     def test_full_table_does_not_warn(self):
         with warnings.catch_warnings():

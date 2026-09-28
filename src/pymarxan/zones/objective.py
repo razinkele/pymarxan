@@ -122,6 +122,18 @@ def compute_standard_boundary(
 # ----------------------------------------------------------------------
 
 
+# Relative tolerance for the met flags only: a contribution-weighted sum such as
+# 0.8 × (0.3 + 0.6 + 0.7 + 0.6 + 2.4) evaluates to 3.6799999999999997, so a MIP-optimal
+# solution sitting exactly on its target would otherwise be reported unmet. Shortfalls and
+# penalties stay exact (the cache/objective identity tests compare them to 1e-10).
+_MET_RTOL = 1e-9
+
+
+def _meets(achieved: float, required: float) -> bool:
+    """achieved >= required, tolerating a relative 1e-9 of float summation error."""
+    return achieved >= required - _MET_RTOL * max(1.0, abs(required))
+
+
 def _feature_arrays(problem: ZonalProblem) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(feature ids, targets × MISSLEVEL, spf) aligned with ``features`` order."""
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
@@ -185,12 +197,16 @@ def check_overall_targets(
     *,
     achieved: dict[int, float] | None = None,
 ) -> dict[int, bool]:
-    """feature id -> A_f >= target × MISSLEVEL (True for inert targets), every feature."""
+    """feature id -> A_f >= target × MISSLEVEL (True for inert targets), every feature.
+
+    The met test tolerates a relative 1e-9 to absorb float summation of contribution
+    products; ``compute_overall_shortfalls`` / ``compute_overall_penalty`` are exact.
+    """
     ids, targets, _ = _feature_arrays(problem)
     if achieved is None:
         achieved = compute_overall_achieved(problem, zone_assignment)
     return {
-        int(fid): bool(t <= 0 or achieved.get(int(fid), 0.0) >= float(t))
+        int(fid): bool(t <= 0 or _meets(achieved.get(int(fid), 0.0), float(t)))
         for fid, t in zip(ids, targets, strict=True)
     }
 
@@ -254,6 +270,8 @@ def check_zone_targets(
     """(zone id, feature id) -> Z_kf >= zone target × MISSLEVEL for listed zone targets.
 
     ``zone_achieved`` is the dict ``_compute_zone_achieved`` returns; ``None`` recomputes it.
+    The met test tolerates a relative 1e-9 to absorb float summation;
+    ``compute_zone_shortfalls`` / ``compute_zone_penalty`` are exact.
     """
     if problem.zone_targets is None:
         return {}
@@ -266,7 +284,7 @@ def check_zone_targets(
         zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
     ):
         key = (int(zid), int(fid))
-        targets_met[key] = zone_achieved.get(key, 0.0) >= float(target) * misslevel
+        targets_met[key] = _meets(zone_achieved.get(key, 0.0), float(target) * misslevel)
     return targets_met
 
 
@@ -399,8 +417,10 @@ def build_zone_solution(
     cost = compute_zone_cost(problem, assignment)
     std_boundary = compute_standard_boundary(problem, assignment)
     zone_boundary = compute_zone_boundary(problem, assignment)
-    # Each tier's achieved dict is computed once and passed through (plan review M5c);
-    # only the ``objective`` field below recomputes independently (review H3 identity test).
+    # Each tier's achieved dict is computed once and passed to the penalty, shortfall and
+    # met helpers so the PU × feature matrix is built once per tier. The ``objective`` field
+    # alone is recomputed by an independent ``compute_zone_objective`` call, so the test that
+    # objective == cost + boundaries + penalties compares two separate code paths.
     overall_achieved = compute_overall_achieved(problem, assignment)
     zone_achieved = _compute_zone_achieved(problem, assignment)
     overall_penalty = compute_overall_penalty(problem, assignment, achieved=overall_achieved)

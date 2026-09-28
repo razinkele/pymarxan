@@ -148,7 +148,7 @@ def load_zone_project(project_dir: str | Path) -> ZonalProblem:
     total = len(problem.features) * len(problem.zone_ids)
     if gaps:
         warnings.warn(
-            f"{project_dir}: zonecontrib.dat lists {total - len(gaps)} of {total} "
+            f"{project_dir}: {zcontrib_path.name} lists {total - len(gaps)} of {total} "
             f"(feature, zone) pairs; {len(gaps)} unlisted pair(s) default to 0.0 "
             f"(MarZone zones.hpp:619); first: feature {gaps[0][0]}, zone {gaps[0][1]}",
             stacklevel=2,
