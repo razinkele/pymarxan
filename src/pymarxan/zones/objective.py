@@ -113,6 +113,109 @@ def compute_standard_boundary(
     return total
 
 
+# ----------------------------------------------------------------------
+# Overall (contribution-weighted) feature targets — MarZone reserve.hpp:158-171,
+# Watts et al. 2009 eq. 6.
+# ----------------------------------------------------------------------
+
+
+def _feature_arrays(problem: ZonalProblem) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(feature ids, targets × MISSLEVEL, spf) aligned with ``features`` order."""
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    ids = np.asarray(problem.features["id"].values, dtype=np.int64)
+    targets = np.asarray(problem.features["target"].values, dtype=np.float64) * misslevel
+    spf = (
+        np.asarray(problem.features["spf"].values, dtype=np.float64)
+        if "spf" in problem.features.columns
+        else np.ones(len(ids), dtype=np.float64)
+    )
+    return ids, targets, spf
+
+
+def compute_overall_achieved(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    amounts: np.ndarray | None = None,
+) -> dict[int, float]:
+    """A_f = Σ_i amount[i, f] × contribution[z_i, f] over PUs with z_i > 0.
+
+    ``amounts`` (n_pu, n_feat) defaults to ``problem.build_pu_feature_matrix()``; the
+    ``objectives`` package passes its (possibly probability-adjusted) effective amounts.
+    """
+    if amounts is None:
+        amounts = problem.build_pu_feature_matrix()
+    contrib = problem.contribution_matrix()
+    zidx = problem.zone_index()
+    rows = np.fromiter(
+        (zidx.get(int(z), 0) for z in zone_assignment), dtype=np.int64, count=len(zone_assignment)
+    )
+    totals = (amounts * contrib[rows]).sum(axis=0)
+    return {int(fid): float(totals[j]) for j, fid in enumerate(problem.features["id"].values)}
+
+
+def compute_overall_shortfalls(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
+) -> dict[int, float]:
+    """feature id -> max(0, target × MISSLEVEL − A_f) for features with target > 0.
+
+    ``achieved`` is the dict ``compute_overall_achieved`` returns; ``None`` recomputes it.
+    Callers that already hold it (``build_zone_solution``) pass it through so the PU ×
+    feature matrix is built once per solution.
+    """
+    ids, targets, _ = _feature_arrays(problem)
+    if achieved is None:
+        achieved = compute_overall_achieved(problem, zone_assignment)
+    return {
+        int(fid): max(0.0, float(t) - achieved.get(int(fid), 0.0))
+        for fid, t in zip(ids, targets, strict=True)
+        if t > 0
+    }
+
+
+def check_overall_targets(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
+) -> dict[int, bool]:
+    """feature id -> A_f >= target × MISSLEVEL (True for inert targets), every feature."""
+    ids, targets, _ = _feature_arrays(problem)
+    if achieved is None:
+        achieved = compute_overall_achieved(problem, zone_assignment)
+    return {
+        int(fid): bool(t <= 0 or achieved.get(int(fid), 0.0) >= float(t))
+        for fid, t in zip(ids, targets, strict=True)
+    }
+
+
+def compute_overall_penalty(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
+) -> float:
+    """Σ_f spf_f × overall shortfall_f (approximation of MarZone's spf × penalty × proportion)."""
+    ids, _, spf = _feature_arrays(problem)
+    spf_of = {int(fid): float(s) for fid, s in zip(ids, spf, strict=True)}
+    shortfalls = compute_overall_shortfalls(problem, zone_assignment, achieved=achieved)
+    return float(sum(spf_of[fid] * sf for fid, sf in shortfalls.items()))
+
+
+def compute_overall_shortfall(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
+) -> float:
+    """Unweighted total overall shortfall."""
+    shortfalls = compute_overall_shortfalls(problem, zone_assignment, achieved=achieved)
+    return float(sum(shortfalls.values()))
+
+
 def _compute_zone_achieved(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
@@ -158,91 +261,74 @@ def _compute_zone_achieved(
 def check_zone_targets(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> dict[tuple[int, int], bool]:
-    """Check which zone-specific targets are met. Returns dict of (zone_id, feature_id) -> bool."""
+    """(zone id, feature id) -> Z_kf >= zone target × MISSLEVEL for listed zone targets.
+
+    ``zone_achieved`` is the dict ``_compute_zone_achieved`` returns; ``None`` recomputes it.
+    """
     if problem.zone_targets is None:
         return {}
-
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _compute_zone_achieved(problem, zone_assignment)
-
-    targets_met: dict[tuple[int, int], bool] = {}
+    if zone_achieved is None:
+        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
     zt = problem.zone_targets
-    zone_col = zt["zone"].values
-    feat_col = zt["feature"].values
-    target_col = zt["target"].values
-
-    for k in range(len(zone_col)):
-        zid = int(zone_col[k])
-        fid = int(feat_col[k])
-        target = float(target_col[k])
-        targets_met[(zid, fid)] = achieved.get((zid, fid), 0.0) >= target * misslevel
-
+    targets_met: dict[tuple[int, int], bool] = {}
+    for zid, fid, target in zip(
+        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
+    ):
+        key = (int(zid), int(fid))
+        targets_met[key] = zone_achieved.get(key, 0.0) >= float(target) * misslevel
     return targets_met
+
+
+def compute_zone_shortfalls(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
+) -> dict[tuple[int, int], float]:
+    """(zone id, feature id) -> max(0, zone target × MISSLEVEL − Z_kf) for listed zone targets."""
+    if problem.zone_targets is None:
+        return {}
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    if zone_achieved is None:
+        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
+    zt = problem.zone_targets
+    out: dict[tuple[int, int], float] = {}
+    for zid, fid, target in zip(
+        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
+    ):
+        key = (int(zid), int(fid))
+        out[key] = max(0.0, float(target) * misslevel - zone_achieved.get(key, 0.0))
+    return out
 
 
 def compute_zone_penalty(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> float:
-    """Compute penalty for unmet zone targets (SPF * shortfall)."""
-    if problem.zone_targets is None:
+    """Penalty for unmet zone targets: Σ spf_f × shortfall_kf."""
+    shortfalls = compute_zone_shortfalls(problem, zone_assignment, zone_achieved=zone_achieved)
+    if not shortfalls:
         return 0.0
-
-    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _compute_zone_achieved(problem, zone_assignment)
-
-    # Pre-build SPF lookup
-    spf_lookup: dict[int, float] = {}
-    feat_ids = problem.features["id"].values
-    feat_spf = (
-        problem.features["spf"].values
-        if "spf" in problem.features.columns
-        else np.ones(len(feat_ids))
-    )
-    for i in range(len(feat_ids)):
-        spf_lookup[int(feat_ids[i])] = float(feat_spf[i])
-
-    zt = problem.zone_targets
-    zone_col = zt["zone"].values
-    feat_col = zt["feature"].values
-    target_col = zt["target"].values
-
-    total = 0.0
-    for k in range(len(zone_col)):
-        zid = int(zone_col[k])
-        fid = int(feat_col[k])
-        target = float(target_col[k])
-        shortfall = max(0.0, target * misslevel - achieved.get((zid, fid), 0.0))
-        total += spf_lookup.get(fid, 1.0) * shortfall
-
-    return total
+    ids, _, spf = _feature_arrays(problem)
+    spf_of = {int(fid): float(s) for fid, s in zip(ids, spf, strict=True)}
+    return float(sum(spf_of.get(fid, 1.0) * sf for (_, fid), sf in shortfalls.items()))
 
 
 def compute_zone_shortfall(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> float:
-    """Compute raw (unweighted) total shortfall across all zone targets."""
-    if problem.zone_targets is None:
-        return 0.0
-
-    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _compute_zone_achieved(problem, zone_assignment)
-
-    zt = problem.zone_targets
-    zone_col = zt["zone"].values
-    feat_col = zt["feature"].values
-    target_col = zt["target"].values
-
-    total = 0.0
-    for k in range(len(zone_col)):
-        zid = int(zone_col[k])
-        fid = int(feat_col[k])
-        target = float(target_col[k])
-        total += max(0.0, target * misslevel - achieved.get((zid, fid), 0.0))
-
-    return total
+    """Unweighted total shortfall across all zone targets."""
+    shortfalls = compute_zone_shortfalls(problem, zone_assignment, zone_achieved=zone_achieved)
+    return float(sum(shortfalls.values()))
 
 
 def compute_zone_connectivity(
