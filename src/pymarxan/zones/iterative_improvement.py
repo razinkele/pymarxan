@@ -18,6 +18,9 @@ class ZoneIISolver(Solver):
       1: Removal pass (try reassigning each PU to zone 0)
       2: Two-step (removal → addition → repeat until no improvement)
       3: Swap (for each PU, try all alternative zone assignments)
+
+    Both target tiers are part of the objective; mode 0 returns the start assignment
+    unchanged (anchor tests set ITIMPTYPE 3).
     """
 
     def name(self) -> str:

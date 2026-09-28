@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -11,6 +12,7 @@ from pymarxan.zones.heuristic import ZoneHeuristicSolver
 from pymarxan.zones.iterative_improvement import ZoneIISolver
 from pymarxan.zones.mip_solver import ZoneMIPSolver
 from pymarxan.zones.objective import (
+    build_zone_solution,
     check_overall_targets,
     check_zone_targets,
     compute_zone_objective,
@@ -101,3 +103,60 @@ class TestHeuristicOnAnchor:
         assert sol.targets_met == {1: True, 2: False}
         assert sol.penalty == pytest.approx(5.0)
         assert sol.all_targets_met is False
+
+
+class TestIIOnAnchor:
+    def test_swap_pass_meets_both_tiers(self):
+        """ITIMPTYPE 3 from the all-first-zone start (1, 1, 1): PU1->z2 (obj 14),
+        PU2->z2 (9); second sweep finds nothing. Ends at (2, 2, 1), cost 9."""
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        p.parameters["ITIMPTYPE"] = 3
+        sol = ZoneIISolver().solve(p, SolverConfig(num_solutions=1))[0]
+        assert sol.targets_met == {1: True}
+        assert sol.metadata["zone_targets_met"] == {"z2_f1": True}
+        assert sol.cost >= OPTIMUM_COST
+        assert tuple(int(z) for z in sol.zone_assignment) == (2, 2, 1)
+        assert sol.cost == pytest.approx(9.0)
+
+    def test_itimptype_zero_returns_the_start_unchanged(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        p.parameters["ITIMPTYPE"] = 0
+        sol = ZoneIISolver().solve(p, SolverConfig(num_solutions=1))[0]
+        assert tuple(int(z) for z in sol.zone_assignment) == (1, 1, 1)
+        assert sol.targets_met == {1: True}                       # 30 >= 15
+        assert sol.metadata["zone_targets_met"] == {"z2_f1": False}
+        assert sol.penalty == pytest.approx(HEURISTIC_SPF * 10.0)
+
+    def test_improve_from_infeasible_corner(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        p.parameters["ITIMPTYPE"] = 3
+        start = build_zone_solution(p, np.array([2, 2, 2]), 0.0, solver_name="seed")
+        improved = ZoneIISolver().improve(p, start)
+        assert improved.targets_met == {1: True}
+        assert improved.objective < start.objective
+
+
+class TestSAOnAnchor:
+    def test_sa_reaches_the_optimum_with_both_tiers_met(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        p.parameters["NUMITNS"] = 3000
+        p.parameters["NUMTEMP"] = 100
+        sols = ZoneSASolver().solve(p, SolverConfig(num_solutions=3, seed=42))
+        for sol in sols:
+            assert sol.targets_met == {1: True}
+            assert sol.metadata["zone_targets_met"] == {"z2_f1": True}
+            assert sol.cost >= OPTIMUM_COST
+            assert sol.objective == pytest.approx(
+                compute_zone_objective(p, sol.zone_assignment, 0.0),
+            )
+        assert min(s.cost for s in sols) == pytest.approx(OPTIMUM_COST)
+
+    def test_sa_all_locked_in_uses_shared_builder(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        p.planning_units["status"] = 2                     # all locked into zone 1
+        p.parameters["NUMITNS"] = 100
+        sol = ZoneSASolver().solve(p, SolverConfig(num_solutions=1, seed=1))[0]
+        assert tuple(int(z) for z in sol.zone_assignment) == (1, 1, 1)
+        assert sol.targets_met == {1: True}
+        assert "overall_penalty" in sol.metadata
+        assert sol.objective == pytest.approx(compute_zone_objective(p, sol.zone_assignment, 0.0))
