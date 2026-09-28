@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-09-28
+
 ### Fixed
 - `ZoneMIPSolver.solve` no longer discards the `zone_targets_met` metadata that
   `_build_zone_solution` records; it merges its `solver` / `status` / `mip_backend`
@@ -1173,7 +1175,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.35.0
 [0.34.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.34.0
 [0.33.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.33.0
 [0.32.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.32.0
