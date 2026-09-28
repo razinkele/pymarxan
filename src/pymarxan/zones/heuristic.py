@@ -7,19 +7,16 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
-from pymarxan.zones.objective import (
-    build_zone_solution,
-    check_zone_targets,
-    compute_zone_objective,
-)
+from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
 
 
 class ZoneHeuristicSolver(Solver):
     """Zone-aware greedy heuristic solver.
 
     Iteratively assigns PUs to zones, selecting the (PU, zone) pair
-    that most improves the objective at each step. Stops when all zone
-    targets are met or no candidate improves the objective.
+    that most improves the objective at each step. Stops when no candidate move
+    improves the objective (both target tiers are part of the objective, so meeting
+    the zone targets alone no longer ends the search).
     """
 
     def name(self) -> str:
@@ -110,11 +107,6 @@ class ZoneHeuristicSolver(Solver):
                 assignment[best_idx] = best_zone
                 current_obj += best_delta
                 improved = True
-
-            # Check if all targets met
-            targets = check_zone_targets(problem, assignment)
-            if targets and all(targets.values()):
-                break
 
         return assignment
 

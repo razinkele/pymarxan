@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from pymarxan.solvers.base import SolverConfig
@@ -16,6 +17,7 @@ from pymarxan.zones.objective import (
 )
 from pymarxan.zones.readers import load_zone_project
 from pymarxan.zones.solver import ZoneSASolver
+from tests.pymarxan.zones.marzone_anchor import HEURISTIC_SPF, OPTIMUM_COST, make_anchor_problem
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
 
@@ -67,3 +69,35 @@ class TestCrossSolverAgreement:
         assert improved.objective == pytest.approx(
             compute_zone_objective(p, improved.zone_assignment, float(p.parameters["BLM"])),
         )
+
+
+class TestHeuristicOnAnchor:
+    def test_greedy_meets_both_tiers_and_lands_at_or_above_optimum(self):
+        """Hand trace at spf = 10 from (0, 0, 0): PU1->z2 (obj 111), PU2->z1 (17),
+        PU3->z2 (8); no further improving move. v0.35 stopped at (2, 0, 0) cost 1 because
+        the zone target was already met (review H2)."""
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        sol = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1))[0]
+        assert sol.targets_met == {1: True}
+        assert sol.metadata["zone_targets_met"] == {"z2_f1": True}
+        assert sol.cost >= OPTIMUM_COST
+        assert tuple(int(z) for z in sol.zone_assignment) == (2, 1, 2)
+        assert sol.cost == pytest.approx(8.0)
+        assert sol.penalty == 0.0
+
+    def test_greedy_no_longer_stops_when_only_zone_targets_are_met(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        sol = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1))[0]
+        assert tuple(int(z) for z in sol.zone_assignment) != (2, 0, 0)
+
+    def test_feature_without_amounts_is_penalised_not_fatal(self):
+        p = make_anchor_problem(spf=HEURISTIC_SPF)
+        features = pd.concat([
+            p.features,
+            pd.DataFrame({"id": [2], "name": ["ghost"], "target": [5.0], "spf": [1.0]}),
+        ], ignore_index=True)
+        p = p.copy_with(features=features)
+        sol = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1))[0]
+        assert sol.targets_met == {1: True, 2: False}
+        assert sol.penalty == pytest.approx(5.0)
+        assert sol.all_targets_met is False
