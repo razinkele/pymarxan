@@ -202,6 +202,15 @@ class ZonalProblem(ConservationProblem):
         except ValueError as exc:
             errors.append(str(exc))
 
+        if self.zone_targets is not None and "targettype" in self.zone_targets.columns:
+            bad = self.zone_targets["targettype"].fillna(0).astype(int) != 0
+            if bad.any():
+                errors.append(
+                    f"zone_targets has {int(bad.sum())} row(s) with unresolved targettype "
+                    "!= 0; pass the frame through resolve_zone_target_types(zone_targets, "
+                    "pu_vs_features) or use load_zone_project"
+                )
+
         if "target2" in self.features.columns:
             t2 = self.features["target2"].fillna(0.0).astype(float)
             if (t2 > 0).any():
