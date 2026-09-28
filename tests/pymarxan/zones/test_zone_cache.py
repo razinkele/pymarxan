@@ -9,6 +9,7 @@ import pytest
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.objective import compute_zone_objective
 from pymarxan.zones.readers import load_zone_project
+from tests.pymarxan.zones.marzone_anchor import all_assignments, make_anchor_problem, oracle
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
 
@@ -128,29 +129,29 @@ class TestConstruction:
 
 
 class TestHeldPerZone:
-    """Verify held_per_zone computation."""
+    """Verify ZoneHeld.per_zone (raw) computation."""
 
     def test_all_unassigned(self, cache):
         assignment = np.zeros(4, dtype=int)
-        held = cache.compute_held_per_zone(assignment)
-        assert held.shape == (3, 2)  # (n_zones+1, n_feat)
+        held = cache.compute_held(assignment)
+        assert held.per_zone.shape == (3, 2)  # (n_zones+1, n_feat)
         # All unassigned => all held is zero (contribution[0, :] = 0)
-        np.testing.assert_array_almost_equal(held, np.zeros((3, 2)))
+        np.testing.assert_array_almost_equal(held.per_zone, np.zeros((3, 2)))
 
     def test_all_zone1(self, cache):
         assignment = np.array([1, 1, 1, 1], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
         col1 = cache.zone_id_to_col[1]
         # All PUs in zone 1, contribution for zone1 is [1.0, 1.0]
         # PU amounts: feature1=[10,8,6,5]=29, feature2=[5,7,9,4]=25
         # held[col1, 0] = 29 * 1.0, held[col1, 1] = 25 * 1.0
-        assert held[col1, cache.feat_id_to_col[1]] == pytest.approx(29.0)
-        assert held[col1, cache.feat_id_to_col[2]] == pytest.approx(25.0)
+        assert held.per_zone[col1, cache.feat_id_to_col[1]] == pytest.approx(29.0)
+        assert held.per_zone[col1, cache.feat_id_to_col[2]] == pytest.approx(25.0)
 
     def test_mixed_assignment(self, cache):
         # PU0->zone1, PU1->zone2, PU2->zone1, PU3->unassigned
         assignment = np.array([1, 2, 1, 0], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
         col1 = cache.zone_id_to_col[1]
         col2 = cache.zone_id_to_col[2]
         f0 = cache.feat_id_to_col[1]
@@ -158,53 +159,56 @@ class TestHeldPerZone:
         # Zone1: PU0(10,5) + PU2(6,9) contrib=[1.0, 1.0]
         # held[col1, f0] = (10+6)*1.0 = 16
         # held[col1, f1] = (5+9)*1.0 = 14
-        assert held[col1, f0] == pytest.approx(16.0)
-        assert held[col1, f1] == pytest.approx(14.0)
+        assert held.per_zone[col1, f0] == pytest.approx(16.0)
+        assert held.per_zone[col1, f1] == pytest.approx(14.0)
         # Zone2: PU1(8,7) — raw amounts (MarZone reserve.hpp:164); contributions no longer apply
         # to zone targets. Old pins were 4.0 / 2.1 (8×0.5, 7×0.3).
-        assert held[col2, f0] == pytest.approx(8.0)
-        assert held[col2, f1] == pytest.approx(7.0)
+        assert held.per_zone[col2, f0] == pytest.approx(8.0)
+        assert held.per_zone[col2, f1] == pytest.approx(7.0)
 
-    def test_update_held_per_zone(self, cache):
+    def test_update_held(self, cache):
         """Incremental update matches full recomputation."""
         assignment = np.array([1, 2, 1, 0], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
 
         # Change PU1 from zone2 -> zone1
         old_zone = 2
         new_zone = 1
         idx = 1
-        cache.update_held_per_zone(held, idx, old_zone, new_zone)
+        cache.update_held(held, idx, old_zone, new_zone)
 
         # Compute from scratch with updated assignment
         assignment[idx] = new_zone
-        held_expected = cache.compute_held_per_zone(assignment)
+        held_expected = cache.compute_held(assignment)
 
-        np.testing.assert_array_almost_equal(held, held_expected)
+        np.testing.assert_array_almost_equal(held.per_zone, held_expected.per_zone)
+        np.testing.assert_array_almost_equal(held.overall, held_expected.overall)
 
     def test_update_to_unassigned(self, cache):
         """Moving a PU to unassigned (zone 0)."""
         assignment = np.array([1, 2, 1, 2], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
 
         # Change PU3 from zone2 -> unassigned
-        cache.update_held_per_zone(held, 3, 2, 0)
+        cache.update_held(held, 3, 2, 0)
         assignment[3] = 0
-        held_expected = cache.compute_held_per_zone(assignment)
+        held_expected = cache.compute_held(assignment)
 
-        np.testing.assert_array_almost_equal(held, held_expected)
+        np.testing.assert_array_almost_equal(held.per_zone, held_expected.per_zone)
+        np.testing.assert_array_almost_equal(held.overall, held_expected.overall)
 
     def test_update_from_unassigned(self, cache):
         """Moving a PU from unassigned (zone 0) to a zone."""
         assignment = np.array([0, 0, 0, 0], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
 
         # Change PU0 from unassigned -> zone2
-        cache.update_held_per_zone(held, 0, 0, 2)
+        cache.update_held(held, 0, 0, 2)
         assignment[0] = 2
-        held_expected = cache.compute_held_per_zone(assignment)
+        held_expected = cache.compute_held(assignment)
 
-        np.testing.assert_array_almost_equal(held, held_expected)
+        np.testing.assert_array_almost_equal(held.per_zone, held_expected.per_zone)
+        np.testing.assert_array_almost_equal(held.overall, held_expected.overall)
 
 
 class TestFullObjective:
@@ -220,9 +224,9 @@ class TestFullObjective:
             assignment = np.array(
                 [rng.choice(zone_options) for _ in range(4)], dtype=int
             )
-            held = cache.compute_held_per_zone(assignment)
+            held = cache.compute_held(assignment)
             cached_obj = cache.compute_full_zone_objective(
-                assignment, held, blm
+                assignment, held=held, blm=blm
             )
             ref_obj = compute_zone_objective(zone_problem, assignment, blm)
             assert cached_obj == pytest.approx(
@@ -233,8 +237,8 @@ class TestFullObjective:
         """All unassigned => objective should be 0 + penalty."""
         assignment = np.zeros(4, dtype=int)
         blm = 1.0
-        held = cache.compute_held_per_zone(assignment)
-        cached_obj = cache.compute_full_zone_objective(assignment, held, blm)
+        held = cache.compute_held(assignment)
+        cached_obj = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
         ref_obj = compute_zone_objective(zone_problem, assignment, blm)
         assert cached_obj == pytest.approx(ref_obj, abs=1e-10)
 
@@ -242,8 +246,8 @@ class TestFullObjective:
         """All PUs in zone 1."""
         assignment = np.array([1, 1, 1, 1], dtype=int)
         blm = 1.0
-        held = cache.compute_held_per_zone(assignment)
-        cached_obj = cache.compute_full_zone_objective(assignment, held, blm)
+        held = cache.compute_held(assignment)
+        cached_obj = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
         ref_obj = compute_zone_objective(zone_problem, assignment, blm)
         assert cached_obj == pytest.approx(ref_obj, abs=1e-10)
 
@@ -251,8 +255,8 @@ class TestFullObjective:
         """BLM=0 => no boundary contribution."""
         assignment = np.array([1, 2, 1, 2], dtype=int)
         blm = 0.0
-        held = cache.compute_held_per_zone(assignment)
-        cached_obj = cache.compute_full_zone_objective(assignment, held, blm)
+        held = cache.compute_held(assignment)
+        cached_obj = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
         ref_obj = compute_zone_objective(zone_problem, assignment, blm)
         assert cached_obj == pytest.approx(ref_obj, abs=1e-10)
 
@@ -263,22 +267,22 @@ class TestDeltaObjective:
     def _verify_delta(self, cache, zone_problem, assignment, idx, new_zone, blm):
         """Helper: verify delta matches difference of full computations."""
         old_zone = int(assignment[idx])
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
 
         # Full objective before
-        obj_before = cache.compute_full_zone_objective(assignment, held, blm)
+        obj_before = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
 
         # Compute delta
         delta = cache.compute_delta_zone_objective(
-            idx, old_zone, new_zone, assignment, held, blm
+            idx, old_zone, new_zone, assignment, held=held, blm=blm
         )
 
         # Apply change and compute full objective after
         assignment_after = assignment.copy()
         assignment_after[idx] = new_zone
-        held_after = cache.compute_held_per_zone(assignment_after)
+        held_after = cache.compute_held(assignment_after)
         obj_after = cache.compute_full_zone_objective(
-            assignment_after, held_after, blm
+            assignment_after, held=held_after, blm=blm
         )
 
         expected_delta = obj_after - obj_before
@@ -312,9 +316,9 @@ class TestDeltaObjective:
         """No-op: unassigned to unassigned should be zero delta."""
         assignment = np.array([0, 1, 2, 0], dtype=int)
         blm = 1.0
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
         delta = cache.compute_delta_zone_objective(
-            0, 0, 0, assignment, held, blm
+            0, 0, 0, assignment, held=held, blm=blm
         )
         assert delta == pytest.approx(0.0, abs=1e-10)
 
@@ -322,9 +326,9 @@ class TestDeltaObjective:
         """No-op: zone1 to zone1 should be zero delta."""
         assignment = np.array([1, 2, 1, 2], dtype=int)
         blm = 1.0
-        held = cache.compute_held_per_zone(assignment)
+        held = cache.compute_held(assignment)
         delta = cache.compute_delta_zone_objective(
-            0, 1, 1, assignment, held, blm
+            0, 1, 1, assignment, held=held, blm=blm
         )
         assert delta == pytest.approx(0.0, abs=1e-10)
 
@@ -401,8 +405,8 @@ class TestMissLevel:
         cache = ZoneProblemCache.from_zone_problem(problem)
 
         assignment = np.array([1, 2, 1, 2], dtype=int)
-        held = cache.compute_held_per_zone(assignment)
-        cached_obj = cache.compute_full_zone_objective(assignment, held, 0.0)
+        held = cache.compute_held(assignment)
+        cached_obj = cache.compute_full_zone_objective(assignment, held=held, blm=0.0)
 
         from pymarxan.zones.objective import compute_zone_objective
         ref_obj = compute_zone_objective(problem, assignment, 0.0)
@@ -431,8 +435,8 @@ class TestZoneTargetWeight:
         rng = np.random.default_rng(7)
         for _ in range(10):
             assignment = rng.integers(0, 3, size=4)
-            held = c.compute_held_per_zone(assignment)
-            assert c.compute_full_zone_objective(assignment, held, 1.0) == pytest.approx(
+            held = c.compute_held(assignment)
+            assert c.compute_full_zone_objective(assignment, held=held, blm=1.0) == pytest.approx(
                 compute_zone_objective(zone_problem, assignment, 1.0), abs=1e-10,
             )
 
@@ -445,12 +449,124 @@ class TestZoneTargetWeight:
             idx = int(rng.integers(4))
             old_zone = int(assignment[idx])
             new_zone = int(rng.choice([z for z in (0, 1, 2) if z != old_zone]))
-            held = c.compute_held_per_zone(assignment)
-            before = c.compute_full_zone_objective(assignment, held, 1.0)
-            delta = c.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held, 1.0)
+            held = c.compute_held(assignment)
+            before = c.compute_full_zone_objective(assignment, held=held, blm=1.0)
+            delta = c.compute_delta_zone_objective(
+                idx, old_zone, new_zone, assignment, held=held, blm=1.0,
+            )
             after_assignment = assignment.copy()
             after_assignment[idx] = new_zone
             after = c.compute_full_zone_objective(
-                after_assignment, c.compute_held_per_zone(after_assignment), 1.0,
+                after_assignment, held=c.compute_held(after_assignment), blm=1.0,
             )
             assert delta == pytest.approx(after - before, abs=1e-10)
+
+
+class TestZoneHeld:
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_overall_equals_contribution_weighted_per_zone(self, zone_problem, flag):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = flag
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        rng = np.random.default_rng(3)
+        for _ in range(10):
+            a = rng.integers(0, 3, size=4)
+            held = c.compute_held(a)
+            np.testing.assert_allclose(
+                (c.contribution_matrix * held.per_zone).sum(axis=0), held.overall, atol=1e-12,
+            )
+
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_per_zone_is_raw_in_both_modes(self, zone_problem, flag):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = flag
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        held = c.compute_held(np.array([1, 2, 1, 0]))
+        assert held.per_zone[c.zone_id_to_col[2], c.feat_id_to_col[1]] == pytest.approx(8.0)
+
+    def test_overall_is_contribution_weighted(self, cache):
+        held = cache.compute_held(np.array([1, 2, 1, 0]))
+        # f1: PU0 10×1.0 + PU2 6×1.0 + PU1 8×0.5 = 20; f2: 5 + 9 + 7×0.3 = 16.1
+        assert held.overall[cache.feat_id_to_col[1]] == pytest.approx(20.0)
+        assert held.overall[cache.feat_id_to_col[2]] == pytest.approx(16.1)
+
+    def test_update_keeps_invariant_through_a_walk(self, cache):
+        rng = np.random.default_rng(5)
+        a = rng.integers(0, 3, size=4)
+        held = cache.compute_held(a)
+        for _ in range(50):
+            idx = int(rng.integers(4))
+            new = int(rng.integers(0, 3))
+            cache.update_held(held, idx, int(a[idx]), new)
+            a[idx] = new
+        fresh = cache.compute_held(a)
+        np.testing.assert_allclose(held.per_zone, fresh.per_zone, atol=1e-12)
+        np.testing.assert_allclose(held.overall, fresh.overall, atol=1e-12)
+
+
+class TestOverallTermInCache:
+    def test_overall_target_vector_applies_misslevel_and_zeroes_inert(self, zone_problem):
+        zone_problem.parameters["MISSLEVEL"] = 0.5
+        zone_problem.features.loc[1, "target"] = 0.0
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        np.testing.assert_array_equal(c.overall_target_vector, [10.0, 0.0])
+        assert c.has_overall_targets
+
+    def test_no_overall_targets_flag(self, zone_problem):
+        zone_problem.features["target"] = 0.0
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        assert not c.has_overall_targets
+        held = c.compute_held(np.array([0, 0, 0, 0]))
+        assert c._compute_overall_penalty(held.overall) == 0.0
+
+    def test_contrib_differs_gate(self, zone_problem):
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        assert c.contrib_differs[1, 2]          # fixture contributions differ (1.0 vs 0.5/0.3)
+        assert c.contrib_differs[0, 1]
+        assert not c.contrib_differs[1, 1]
+        plain = ZoneProblemCache.from_zone_problem(
+            zone_problem.copy_with(zone_contributions=None),
+        )
+        assert not plain.contrib_differs[1, 2]  # default contributions: zone-to-zone moves free
+        assert plain.contrib_differs[0, 2]      # assigning an unassigned PU still changes A_f
+
+    def test_gated_move_has_zero_overall_delta(self, zone_problem):
+        plain = ZoneProblemCache.from_zone_problem(
+            zone_problem.copy_with(zone_contributions=None),
+        )
+        held = plain.compute_held(np.array([1, 1, 2, 2]))
+        assert plain._overall_penalty_delta(0, 1, 2, held.overall) == 0.0
+
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_delta_matches_full_recomputation_random_flips(self, zone_problem, flag):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = flag
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        rng = np.random.default_rng(13)
+        for _ in range(40):
+            a = rng.integers(0, 3, size=4)
+            idx = int(rng.integers(4))
+            old = int(a[idx])
+            new = int(rng.choice([z for z in (0, 1, 2) if z != old]))
+            held = c.compute_held(a)
+            before = c.compute_full_zone_objective(a, held=held, blm=1.0)
+            delta = c.compute_delta_zone_objective(idx, old, new, a, held=held, blm=1.0)
+            b = a.copy()
+            b[idx] = new
+            after = c.compute_full_zone_objective(b, held=c.compute_held(b), blm=1.0)
+            assert delta == pytest.approx(after - before, abs=1e-10)
+
+    def test_spf_column_absent_defaults_to_one(self):
+        p = make_anchor_problem()
+        p = p.copy_with(features=p.features.drop(columns=["spf"]))
+        c = ZoneProblemCache.from_zone_problem(p)
+        np.testing.assert_array_equal(c.feat_spf, [1.0])
+
+
+class TestCacheAgainstAnchorOracle:
+    @pytest.mark.parametrize("spf", [1.0, 10.0])
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_full_objective_equals_oracle_for_all_27(self, spf, flag):
+        p = make_anchor_problem(spf=spf, zone_target_contrib=flag)
+        c = ZoneProblemCache.from_zone_problem(p)
+        for a in all_assignments():
+            arr = np.array(a)
+            got = c.compute_full_zone_objective(arr, held=c.compute_held(arr), blm=0.0)
+            assert got == pytest.approx(oracle(a, spf=spf, zone_target_contrib=flag)["objective"])

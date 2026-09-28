@@ -110,8 +110,8 @@ class TestZoneCacheConnectivity:
 
         cache = ZoneProblemCache.from_zone_problem(problem)
         assignment = np.array([1, 1, 2, 0])
-        held = cache.compute_held_per_zone(assignment)
-        cache_obj = cache.compute_full_zone_objective(assignment, held, blm=0.0)
+        held = cache.compute_held(assignment)
+        cache_obj = cache.compute_full_zone_objective(assignment, held=held, blm=0.0)
         direct_obj = compute_zone_objective(problem, assignment, blm=0.0)
         np.testing.assert_allclose(cache_obj, direct_obj, atol=1e-10)
 
@@ -125,20 +125,20 @@ class TestZoneCacheConnectivity:
 
         cache = ZoneProblemCache.from_zone_problem(problem)
         assignment = np.array([1, 1, 2, 2])
-        held = cache.compute_held_per_zone(assignment)
-        obj_before = cache.compute_full_zone_objective(assignment, held, blm=0.0)
+        held = cache.compute_held(assignment)
+        obj_before = cache.compute_full_zone_objective(assignment, held=held, blm=0.0)
 
         # Try changing PU 1 from zone 1 to zone 2
         idx, old_zone, new_zone = 1, 1, 2
         delta = cache.compute_delta_zone_objective(
-            idx, old_zone, new_zone, assignment, held, blm=0.0
+            idx, old_zone, new_zone, assignment, held=held, blm=0.0
         )
 
         # Apply change and recompute
         new_assignment = assignment.copy()
         new_assignment[idx] = new_zone
-        new_held = cache.compute_held_per_zone(new_assignment)
-        obj_after = cache.compute_full_zone_objective(new_assignment, new_held, blm=0.0)
+        new_held = cache.compute_held(new_assignment)
+        obj_after = cache.compute_full_zone_objective(new_assignment, held=new_held, blm=0.0)
 
         np.testing.assert_allclose(delta, obj_after - obj_before, atol=1e-10)
 
@@ -148,8 +148,8 @@ class TestZoneCacheConnectivity:
         problem.connectivity = None
         cache = ZoneProblemCache.from_zone_problem(problem)
         assignment = np.array([1, 2, 1, 0])
-        held = cache.compute_held_per_zone(assignment)
-        obj = cache.compute_full_zone_objective(assignment, held, blm=0.0)
+        held = cache.compute_held(assignment)
+        obj = cache.compute_full_zone_objective(assignment, held=held, blm=0.0)
         assert obj >= 0
 
 

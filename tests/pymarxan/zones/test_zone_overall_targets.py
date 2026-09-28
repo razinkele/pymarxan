@@ -133,3 +133,20 @@ class TestZoneTargetsRawOnAnchor:
         p = make_anchor_problem(zone_target_contrib=1)
         assert check_zone_targets(p, np.array([2, 2, 0])) == {(2, 1): False}    # 8 < 10
         assert check_zone_targets(p, np.array([2, 2, 2])) == {(2, 1): True}     # 12 >= 10
+
+
+class TestZoneObjectiveIncludesBothTiers:
+    @pytest.mark.parametrize("spf", [1.0, 10.0])
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_compute_zone_objective_equals_oracle(self, spf, flag):
+        from pymarxan.zones.objective import compute_zone_objective
+        p = make_anchor_problem(spf=spf, zone_target_contrib=flag)
+        for a in all_assignments():
+            got = compute_zone_objective(p, np.array(a), 0.0)
+            assert got == pytest.approx(oracle(a, spf=spf, zone_target_contrib=flag)["objective"])
+
+    def test_spf_one_penalised_minimum_is_the_infeasible_corner(self):
+        from pymarxan.zones.objective import compute_zone_objective
+        p = make_anchor_problem(spf=1.0)
+        assert compute_zone_objective(p, np.array([2, 2, 2]), 0.0) == pytest.approx(6.0)
+        assert check_overall_targets(p, np.array([2, 2, 2])) == {1: False}

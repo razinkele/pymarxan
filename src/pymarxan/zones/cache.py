@@ -3,6 +3,9 @@
 Converts ZonalProblem DataFrames into dense NumPy arrays once,
 then provides O(degree + features) delta computation for single-PU
 zone reassignments.
+
+Two accumulators (``ZoneHeld``) mirror MarZone's ``zoneSpec`` (raw, per zone;
+``reserve.hpp:164``) and ``speciesAmounts`` (contribution-weighted; ``:170``).
 """
 from __future__ import annotations
 
@@ -12,6 +15,18 @@ import numpy as np
 
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import _feature_arrays
+
+
+@dataclass
+class ZoneHeld:
+    """Held amounts carried through a solver run.
+
+    per_zone : (n_zones+1, n_feat) raw amounts per (zone row, feature) — zone targets.
+    overall  : (n_feat,) Σ_z contribution[z, f] × per_zone[z, f] — overall targets.
+    """
+
+    per_zone: np.ndarray
+    overall: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -53,6 +68,13 @@ class ZoneProblemCache:
     zone_target_weight : np.ndarray
         (n_zones+1, n_feat) float64 — weight applied to raw held amounts when scoring zone
         targets; ones by default, the contribution matrix under ZONETARGETCONTRIB=1.
+    overall_target_vector : np.ndarray
+        (n_feat,) features.target × MISSLEVEL, 0 where target <= 0.
+    has_overall_targets : bool
+        Any overall_target_vector > 0 (skips the term entirely).
+    contrib_differs : np.ndarray
+        (n_zones+1, n_zones+1) bool — contrib_differs[a, b] is True when any
+        feature's contribution differs between zone rows a and b (MarZone reserve.hpp:393 gate).
     zone_boundary_costs : dict[tuple[int, int], float]
         Cross-zone boundary cost keyed by (zone_col1, zone_col2).
     neighbors : list[list[tuple[int, float]]]
@@ -73,6 +95,9 @@ class ZoneProblemCache:
     contribution_matrix: np.ndarray
     zone_target_matrix: np.ndarray
     zone_target_weight: np.ndarray
+    overall_target_vector: np.ndarray
+    has_overall_targets: bool
+    contrib_differs: np.ndarray
     zone_boundary_costs: dict[tuple[int, int], float]
     neighbors: list[list[tuple[int, float]]]
     self_boundary: np.ndarray
@@ -135,6 +160,22 @@ class ZoneProblemCache:
         contribution_matrix = problem.contribution_matrix()
         zone_target_weight = problem.zone_target_weight_matrix()
 
+        # --- Overall (contribution-weighted) targets ---
+        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+        raw_targets = (
+            np.asarray(feat_df["target"].values, dtype=np.float64)
+            if "target" in feat_df.columns
+            else np.zeros(n_feat, dtype=np.float64)
+        )
+        overall_target_vector = np.where(raw_targets > 0, raw_targets * misslevel, 0.0)
+        has_overall_targets = bool(np.any(overall_target_vector > 0))
+        contrib_differs = np.zeros((n_zones + 1, n_zones + 1), dtype=bool)
+        for a in range(n_zones + 1):
+            for b in range(n_zones + 1):
+                contrib_differs[a, b] = bool(
+                    np.any(contribution_matrix[a] != contribution_matrix[b])
+                )
+
         # --- Zone target matrix: (n_zones+1, n_feat) ---
         zone_target_matrix = np.zeros((n_zones + 1, n_feat), dtype=np.float64)
         if problem.zone_targets is not None:
@@ -148,7 +189,6 @@ class ZoneProblemCache:
                     zone_target_matrix[zcol, fcol] = float(zt_tg[k])
 
         # Apply MISSLEVEL to zone targets (match objective.py behavior)
-        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
         zone_target_matrix *= misslevel
 
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
@@ -216,6 +256,9 @@ class ZoneProblemCache:
             contribution_matrix=contribution_matrix,
             zone_target_matrix=zone_target_matrix,
             zone_target_weight=zone_target_weight,
+            overall_target_vector=overall_target_vector,
+            has_overall_targets=has_overall_targets,
+            contrib_differs=contrib_differs,
             zone_boundary_costs=zbc,
             neighbors=neighbors,
             self_boundary=self_boundary,
@@ -224,72 +267,41 @@ class ZoneProblemCache:
         )
 
     # ------------------------------------------------------------------
-    # Held-per-zone computation
+    # Held-amount accumulators (ZoneHeld)
     # ------------------------------------------------------------------
 
-    def compute_held_per_zone(self, assignment: np.ndarray) -> np.ndarray:
-        """Compute held amounts per (zone, feature).
+    def _zone_col(self, zone_id: int) -> int:
+        return 0 if zone_id == 0 else self.zone_id_to_col.get(zone_id, 0)
 
-        For each zone z and feature f:
-            held[z_col, f] = Σ raw amount (no contribution; MarZone reserve.hpp:164)
-                             over PUs i where assignment[i] maps to z_col
-
-        Parameters
-        ----------
-        assignment : np.ndarray
-            (n_pu,) int — zone ID for each PU (0 = unassigned).
-
-        Returns
-        -------
-        np.ndarray
-            (n_zones+1, n_feat) float64 — held amount per (zone_col, feature).
-        """
-        held = np.zeros((self.n_zones + 1, self.n_feat), dtype=np.float64)
-        # Map zone IDs in assignment to column indices
+    def compute_held(self, assignment: np.ndarray) -> ZoneHeld:
+        """Both accumulators from scratch: raw per zone, contribution-weighted overall."""
+        per_zone = np.zeros((self.n_zones + 1, self.n_feat), dtype=np.float64)
+        overall = np.zeros(self.n_feat, dtype=np.float64)
         for i in range(self.n_pu):
-            zid = int(assignment[i])
-            if zid == 0:
-                zcol = 0
-            else:
-                zcol = self.zone_id_to_col.get(zid, 0)
+            zcol = self._zone_col(int(assignment[i]))
             if zcol == 0:
-                continue  # unassigned contributes nothing
-            held[zcol] += self.pu_feat_matrix[i]
-        return held
+                continue
+            per_zone[zcol] += self.pu_feat_matrix[i]
+            overall += self.pu_feat_matrix[i] * self.contribution_matrix[zcol]
+        return ZoneHeld(per_zone, overall)
 
-    def update_held_per_zone(
+    def update_held(
         self,
-        held: np.ndarray,
+        held: ZoneHeld,
         idx: int,
         old_zone: int,
         new_zone: int,
     ) -> None:
-        """In-place incremental update of held_per_zone after a zone change.
-
-        Parameters
-        ----------
-        held : np.ndarray
-            (n_zones+1, n_feat) float64 — current held, modified in place.
-        idx : int
-            Index of the planning unit being changed.
-        old_zone : int
-            Previous zone ID (0 = unassigned).
-        new_zone : int
-            New zone ID (0 = unassigned).
-        """
+        """In-place update of both accumulators after PU ``idx`` moves old_zone -> new_zone."""
         amounts = self.pu_feat_matrix[idx]
-
-        # Remove from old zone
-        if old_zone != 0:
-            old_col = self.zone_id_to_col.get(old_zone, 0)
-            if old_col != 0:
-                held[old_col] -= amounts
-
-        # Add to new zone
-        if new_zone != 0:
-            new_col = self.zone_id_to_col.get(new_zone, 0)
-            if new_col != 0:
-                held[new_col] += amounts
+        old_col = self._zone_col(old_zone)
+        new_col = self._zone_col(new_zone)
+        if old_col != 0:
+            held.per_zone[old_col] -= amounts
+            held.overall -= amounts * self.contribution_matrix[old_col]
+        if new_col != 0:
+            held.per_zone[new_col] += amounts
+            held.overall += amounts * self.contribution_matrix[new_col]
 
     # ------------------------------------------------------------------
     # Full objective computation
@@ -298,19 +310,21 @@ class ZoneProblemCache:
     def compute_full_zone_objective(
         self,
         assignment: np.ndarray,
-        held_per_zone: np.ndarray,
+        *,
+        held: ZoneHeld,
         blm: float,
     ) -> float:
         """Compute the full MarZone objective using precomputed arrays.
 
-        objective = zone_cost + BLM * standard_boundary + zone_boundary + zone_penalty
+        objective = zone_cost + BLM * standard_boundary + zone_boundary +
+        overall_penalty + zone_penalty + connectivity
 
         Parameters
         ----------
         assignment : np.ndarray
             (n_pu,) int — zone ID for each PU (0 = unassigned).
-        held_per_zone : np.ndarray
-            (n_zones+1, n_feat) float64 — from compute_held_per_zone.
+        held : ZoneHeld
+            Both accumulators, from compute_held (keyword-only).
         blm : float
             Boundary length modifier.
 
@@ -335,13 +349,23 @@ class ZoneProblemCache:
         # --- Zone boundary ---
         zone_boundary = self._compute_zone_boundary(assignment)
 
+        # --- Overall (contribution-weighted) penalty ---
+        overall_penalty = self._compute_overall_penalty(held.overall)
+
         # --- Zone penalty ---
-        zone_penalty = self._compute_zone_penalty(held_per_zone)
+        zone_penalty = self._compute_zone_penalty(held.per_zone)
 
         # --- Connectivity ---
         connectivity = self._compute_zone_connectivity(assignment)
 
-        return zone_cost + blm * std_boundary + zone_boundary + zone_penalty + connectivity
+        return (
+            zone_cost
+            + blm * std_boundary
+            + zone_boundary
+            + overall_penalty
+            + zone_penalty
+            + connectivity
+        )
 
     # ------------------------------------------------------------------
     # Delta objective computation
@@ -353,7 +377,8 @@ class ZoneProblemCache:
         old_zone: int,
         new_zone: int,
         assignment: np.ndarray,
-        held_per_zone: np.ndarray,
+        *,
+        held: ZoneHeld,
         blm: float,
     ) -> float:
         """Compute the change in zone objective from reassigning PU idx.
@@ -370,8 +395,8 @@ class ZoneProblemCache:
             New zone ID for PU idx (0 = unassigned).
         assignment : np.ndarray
             (n_pu,) int — current zone assignment (before the change).
-        held_per_zone : np.ndarray
-            (n_zones+1, n_feat) float64 — current held amounts.
+        held : ZoneHeld
+            Current accumulators (keyword-only).
         blm : float
             Boundary length modifier.
 
@@ -412,8 +437,8 @@ class ZoneProblemCache:
 
         # --- Penalty delta ---
         penalty_delta = self._penalty_delta(
-            idx, old_col, new_col, held_per_zone
-        )
+            idx, old_col, new_col, held.per_zone
+        ) + self._overall_penalty_delta(idx, old_col, new_col, held.overall)
 
         # --- Connectivity delta ---
         connectivity_delta = self._connectivity_delta(idx, old_zone, new_zone, assignment)
@@ -481,6 +506,36 @@ class ZoneProblemCache:
         # Multiply each feature's shortfall by its SPF and sum
         total = float(np.sum(shortfalls * self.feat_spf[np.newaxis, :]))
         return total
+
+    def _compute_overall_penalty(self, overall: np.ndarray) -> float:
+        """Σ_f spf[f] × max(0, overall_target[f] − overall[f])."""
+        if not self.has_overall_targets:
+            return 0.0
+        shortfalls = np.maximum(0.0, self.overall_target_vector - overall)
+        return float(np.dot(self.feat_spf, shortfalls))
+
+    def _overall_penalty_delta(
+        self,
+        idx: int,
+        old_col: int,
+        new_col: int,
+        overall: np.ndarray,
+    ) -> float:
+        """Overall-penalty change for moving PU idx old_col -> new_col.
+
+        Dense row op on the PU's row, skipped when no overall target exists or when no
+        feature's contribution differs between the two zones (``contrib_differs`` gate,
+        MarZone ``reserve.hpp:393``): under default contributions every zone-to-zone move
+        leaves ``overall`` unchanged.
+        """
+        if not self.has_overall_targets or not self.contrib_differs[old_col, new_col]:
+            return 0.0
+        change = self.pu_feat_matrix[idx] * (
+            self.contribution_matrix[new_col] - self.contribution_matrix[old_col]
+        )
+        before = np.maximum(0.0, self.overall_target_vector - overall)
+        after = np.maximum(0.0, self.overall_target_vector - (overall + change))
+        return float(np.dot(self.feat_spf, after - before))
 
     def _boundary_delta_add(self, idx: int, selected: np.ndarray) -> float:
         """Boundary delta when adding PU idx to the selection."""

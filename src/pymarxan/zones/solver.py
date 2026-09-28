@@ -166,11 +166,9 @@ class ZoneSASolver(Solver):
                 else:
                     assignment[idx] = zone_options[rng.integers(n_zone_options)]
 
-            # Compute held_per_zone and initial objective from cache
-            held_per_zone = cache.compute_held_per_zone(assignment)
-            current_obj = cache.compute_full_zone_objective(
-                assignment, held_per_zone, blm
-            )
+            # Both accumulators (raw per zone, contribution-weighted overall) from the cache
+            held = cache.compute_held(assignment)
+            current_obj = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
 
             # Estimate initial temperature using delta approach
             deltas = []
@@ -181,7 +179,7 @@ class ZoneSASolver(Solver):
                 if new_zone == old_zone:
                     continue
                 delta = cache.compute_delta_zone_objective(
-                    idx, old_zone, new_zone, assignment, held_per_zone, blm
+                    idx, old_zone, new_zone, assignment, held=held, blm=blm
                 )
                 if delta > 0:
                     deltas.append(delta)
@@ -235,16 +233,14 @@ class ZoneSASolver(Solver):
                     continue
 
                 delta = cache.compute_delta_zone_objective(
-                    idx, old_zone, new_zone, assignment, held_per_zone, blm
+                    idx, old_zone, new_zone, assignment, held=held, blm=blm
                 )
 
                 if delta <= 0 or (
                     temp > 0 and rng.random() < math.exp(-delta / temp)
                 ):
                     assignment[idx] = new_zone
-                    cache.update_held_per_zone(
-                        held_per_zone, idx, old_zone, new_zone
-                    )
+                    cache.update_held(held, idx, old_zone, new_zone)
                     current_obj += delta
 
                     if current_obj < best_obj:

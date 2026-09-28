@@ -360,12 +360,18 @@ def compute_zone_objective(
     zone_assignment: np.ndarray,
     blm: float,
 ) -> float:
-    """Compute the full MarZone objective.
-    Objective = zone_cost + BLM * standard_boundary + zone_boundary + penalty + connectivity
+    """Full MarZone-style objective.
+
+    zone_cost + BLM × standard_boundary + zone_boundary + overall_penalty + zone_penalty
+    + connectivity. Reference implementation (DataFrame-based); ``ZoneProblemCache`` must
+    agree to 1e-10.
     """
     cost = compute_zone_cost(problem, zone_assignment)
     std_boundary = compute_standard_boundary(problem, zone_assignment)
     zone_boundary = compute_zone_boundary(problem, zone_assignment)
-    penalty = compute_zone_penalty(problem, zone_assignment)
+    overall_penalty = compute_overall_penalty(problem, zone_assignment)
+    zone_penalty = compute_zone_penalty(problem, zone_assignment)
     connectivity = compute_zone_connectivity(problem, zone_assignment)
-    return cost + blm * std_boundary + zone_boundary + penalty + connectivity
+    return (
+        cost + blm * std_boundary + zone_boundary + overall_penalty + zone_penalty + connectivity
+    )
