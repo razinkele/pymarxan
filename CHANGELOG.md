@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ZoneMIPSolver.solve` no longer discards the `zone_targets_met` metadata that
+  `_build_zone_solution` records; it merges its `solver` / `status` / `mip_backend`
+  keys into it instead. The keys now use the same JSON-safe `"z{zone}_f{feature}"`
+  form as `ZoneSASolver`, so all zone solvers agree. The pre-existing
+  `test_zone_targets_respected` was silently iterating an empty dict and is now a
+  real assertion. (#1)
+- `pymarxan.spatial` imports without the `spatial` extra: the rasterio- and
+  requests-dependent helpers (`from_rasters`, `from_arrays`, cost-surface,
+  feature-intersection, GADM, WDPA) are resolved lazily on first access (PEP 562)
+  and raise an `ImportError` naming the extra when it is missing;
+  `pymarxan.spatial.grid`, `boundary` and `importers` stay eagerly importable. (#4)
+- Dependency pin `PuLP>=2.7,<4`: PuLP 4.0 removes direct `LpVariable(cat=...)`
+  construction and `PULP_CBC_CMD`, which the MIP solvers rely on. Migration to the
+  4.x API is tracked separately. (#5)
+
+### Changed
+- `pymarxan.zones` and `pymarxan.analysis` now re-export their public API with
+  `__all__` (`ZonalProblem`, the four zone solvers, `check_zone_targets`,
+  `compute_zone_objective`, `compute_zone_shortfall`, the zone readers/writers; the
+  `compute_*`, portfolio and robustness functions). No re-export shares a submodule
+  name, so `importlib.import_module` on submodules is unaffected. (#3)
+
 ## [0.34.0] — 2026-08-11
 
 ### Added

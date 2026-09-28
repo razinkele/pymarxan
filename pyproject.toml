@@ -24,7 +24,7 @@ dependencies = [
     "geopandas>=0.14",
     "shapely>=2.0",
     "scipy>=1.11",
-    "PuLP>=2.7",
+    "PuLP>=2.7,<4",
 ]
 
 [project.optional-dependencies]

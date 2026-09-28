@@ -221,11 +221,15 @@ class ZoneMIPSolver(Solver):
                     break
 
         sol = _build_zone_solution(problem, zone_assignment, blm)
-        sol.metadata = {
-            "solver": self.name(),
-            "status": pulp.LpStatus[model.status],
-            "mip_backend": resolved_backend,
-        }
+        # Merge, don't replace: _build_zone_solution already recorded zone_targets_met
+        # (issue #1: the old assignment silently discarded it).
+        sol.metadata.update(
+            {
+                "solver": self.name(),
+                "status": pulp.LpStatus[model.status],
+                "mip_backend": resolved_backend,
+            }
+        )
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
 
 
@@ -505,5 +509,11 @@ def _build_zone_solution(
         penalty=penalty,
         shortfall=shortfall,
         zone_assignment=zone_assignment,
-        metadata={"zone_targets_met": zone_targets_met},
+        # Same string-key form as ZoneSASolver ("z{zone}_f{feature}"): JSON-safe and
+        # identical across the zone solvers (issue #1).
+        metadata={
+            "zone_targets_met": {
+                f"z{z}_f{f}": bool(v) for (z, f), v in zone_targets_met.items()
+            }
+        },
     )
