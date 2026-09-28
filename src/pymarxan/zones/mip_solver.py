@@ -25,7 +25,9 @@ class ZoneMIPSolver(Solver):
         Σ_z x[i,z] <= 1           each PU in at most one zone
         x[i,z] = 1                locked-in PUs (status=2, first zone)
         x[i,z] = 0 ∀z             locked-out PUs (status=3)
-        zone-specific feature targets with contributions
+        zone-specific feature targets on raw amounts (hard + slack; weighted under
+            ZONETARGETCONTRIB=1)
+        overall feature targets on contribution-weighted amounts (hard; Watts eq. 6)
 
     Objective (minimize):
         zone costs + BLM * standard boundary + zone boundary costs + penalty
@@ -173,6 +175,7 @@ class ZoneMIPSolver(Solver):
 
         # --- Feature target constraints ---
         _add_zone_target_constraints(problem, zone_exprs, model)
+        _add_overall_target_constraints(problem, x, zone_ids, model)
 
         # Solve via the Phase 21 backend factory.
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
@@ -426,3 +429,39 @@ def _add_zone_target_constraints(
     ):
         zid, fid = int(zid), int(fid)
         model += (exprs[(zid, fid)] >= float(target) * misslevel, f"zone_target_{zid}_{fid}")
+
+
+def _add_overall_target_constraints(
+    problem: ZonalProblem,
+    x: dict[tuple[int, int], pulp.LpVariable],
+    zone_ids: list[int],
+    model: pulp.LpProblem,
+) -> None:
+    """Hard constraints Σ_i Σ_z amount[i, f] × contribution[f, z] × x[i, z] >= target × MISSLEVEL.
+
+    Watts et al. 2009 eq. 6; MarZone ``reserve.hpp:158-171``. One constraint per feature with
+    ``target > 0``; a feature with no amounts anywhere makes the model infeasible (the solver
+    then returns ``[]``), which is the honest answer rather than a silently met target.
+    Contributions come from ``contribution_matrix()`` / ``zone_index()`` / ``feature_index()``
+    exactly as ``_zone_achieved_exprs`` does (one convention per module).
+    """
+    contrib = problem.contribution_matrix()
+    zidx = problem.zone_index()
+    fidx = problem.feature_index()
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    groups = _feature_groups(problem)
+    for fid, target in zip(
+        problem.features["id"].values, problem.features["target"].values, strict=True,
+    ):
+        fid = int(fid)
+        t = float(target)
+        if t <= 0:
+            continue
+        col = fidx[fid]
+        terms = []
+        for pid, amt in groups.get(fid, []):
+            for zid in zone_ids:
+                c = float(contrib[zidx[zid], col])
+                if c != 0.0 and (pid, zid) in x:
+                    terms.append(amt * c * x[(pid, zid)])
+        model += (pulp.lpSum(terms) >= t * misslevel, f"overall_target_{fid}")
