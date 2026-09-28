@@ -69,6 +69,58 @@ project survives a `pymarxan` round-trip unchanged. This is what lets the
 large existing body of Marxan projects and teaching material carry forward
 into the Python toolchain.
 
+### 4. Marxan with Zones: two target tiers
+
+Multi-zone runs are checked against a second hand-verified anchor
+(`tests/pymarxan/zones/marzone_anchor.py`, spec
+`docs/plans/2026-09-28-marzone-overall-targets-design.md` §5). Three planning
+units, two zones, one feature with amount 10 everywhere; contributions zone 1 →
+1.0, zone 2 → 0.4; zone costs (5, 6, 7) and (1, 1, 1); overall target 15; a raw
+zone target of 10 in zone 2. Enumerating all 27 assignments gives a unique
+feasible optimum **(1, 2, 2) at cost 7** (runner-up 8). `ZoneMIPSolver` must
+return it; the SA, greedy and iterative-improvement zone solvers must meet both
+tiers at cost ≥ 7 (the heuristic tier of the anchor uses SPF 10, because at SPF 1
+the penalised minimum is the infeasible (2, 2, 2) at 6.0). Before v0.36 every
+solver returned (2, 2, 2) at cost 3 with the overall target reported as met.
+
+The semantics follow the MarZone C++ source
+(https://github.com/Marxan-source-code/marzone, branch `master`, commit `85082e3`;
+line numbers refer to that commit): overall feature targets on
+contribution-weighted amounts summed over zones (`reserve.hpp:158-171`; Watts et
+al. 2009 eq. 6); zone targets on raw amounts (`reserve.hpp:164`; eq. 7); unlisted
+contribution pairs default to 0 when a contribution file is supplied and to 1
+without one (`zones.hpp:619-627`, `:651-668`). Only the `zonecontrib.dat` dialect
+(species × zone, `zones.hpp:621-627`) is mirrored; `zonecontrib2.dat` (per zone,
+all species, `:629-638`) and `zonecontrib3.dat` (per planning unit, `:639-647`,
+`GetZoneContrib` at `:169-176`) are not read. A reimplementation of the
+accumulation loop is cross-checked against pymarxan on the zones fixture
+(`tests/pymarxan/zones/test_marzone_accumulation.py`).
+
+Three named deviations, all deliberate:
+
+- **MISSLEVEL.** The met test is identical (MarZone's `CountMissing`,
+  `reserve.hpp:193-275`, flags a feature when `amount/target < MISSLEVEL`). pymarxan
+  additionally scales the penalty and the MIP constraint of both tiers by MISSLEVEL;
+  MarZone's penalty (`:816-872`) and delta (`:350-563`) use the raw target.
+- **Penalty form.** pymarxan penalises `SPF × absolute shortfall` per tier; MarZone
+  uses `SPF × penalty_f × Σ(shortfall / target)` (`reserve.hpp:816-872`, delta
+  `:524`) where `penalty_f` is a per-feature baseline computed once in
+  `marzone.cpp:733-832` (`CalcPenalties`): the cost of the cheapest planning units
+  (raw amounts, no contributions) needed to reach `max(target_f, Σ_k zone_target_fk)`,
+  scaled up when unreachable; `reserve.hpp:298-345` handles target2 features. The two
+  agree on feasibility, not on the penalised value of infeasible assignments.
+  (`reserve.hpp:750-777` `GreedyPen` is the greedy heuristic's move score, not this
+  baseline.)
+- **Unassigned versus the "available" zone.** MarZone has no unassigned state.
+  Watts et al. (2009) state that Marxan with Zones reduces to Marxan under three
+  conditions: two zones, the unreserved zone contributing 0 and the reserved zone 1
+  for every feature; the unreserved zone costing 0 in every planning unit; and no
+  zone-specific targets. A fourth, implicit condition — the zone connectivity matrix
+  must reduce to Marxan's boundary term — is pymarxan's own statement. pymarxan's
+  zone 0 satisfies the first three by construction, so a MarZone project that lists
+  such an available zone reproduces; one **without** a contribution file (available
+  zone contributing 1, `zones.hpp:658-662`) does not.
+
 ## Comparing against the Marxan C++ binary
 
 The strongest possible check is a numerical comparison against the
@@ -104,3 +156,8 @@ by the unit-test suite, which encodes them directly from the Marxan source.
   integer linear programming solvers outperform simulated annealing for
   solving conservation planning problems. *PeerJ, 8*, e9258.
   https://doi.org/10.7717/peerj.9258
+- Watts, M. E., Ball, I. R., Stewart, R. S., Klein, C. J., Wilson, K.,
+  Steinback, C., Lourival, R., Kircher, L., & Possingham, H. P. (2009). Marxan
+  with Zones: Software for optimal conservation based land- and sea-use zoning.
+  *Environmental Modelling & Software, 24*(12), 1513–1521.
+  https://doi.org/10.1016/j.envsoft.2009.06.005

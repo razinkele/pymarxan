@@ -17,6 +17,13 @@ ZONES_EXPORTS = {
     "load_zone_project": "pymarxan.zones.readers",
     "read_zones": "pymarxan.zones.readers",
     "write_zone_solution": "pymarxan.zones.writers",
+    "ZoneHeld": "pymarxan.zones.cache",
+    "build_zone_solution": "pymarxan.zones.objective",
+    "check_overall_targets": "pymarxan.zones.objective",
+    "compute_overall_achieved": "pymarxan.zones.objective",
+    "compute_overall_shortfalls": "pymarxan.zones.objective",
+    "compute_zone_shortfalls": "pymarxan.zones.objective",
+    "resolve_zone_target_types": "pymarxan.zones.readers",
 }
 
 ANALYSIS_EXPORTS = {

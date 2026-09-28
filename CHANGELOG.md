@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (zone targets only): zone targets now accumulate raw amounts; unlisted
+  contribution pairs default to 0 when a contribution table is supplied; set
+  `ZONETARGETCONTRIB 1` to restore v0.35 zone-target behaviour.** Both follow the
+  Marxan with Zones source (`reserve.hpp:164`, `zones.hpp:619`). Projects whose
+  `zonecontrib.dat` lists every (feature, zone) pair and that never paired
+  contributions with zone targets are unaffected. `ZonalProblem.contribution_gaps()`
+  lists unlisted contribution pairs; `load_zone_project` warns once when a supplied
+  table is partial (they default to 0.0). ROWER_pymarxan_DST (issue #2 originator)
+  verified unaffected: full contribution tables, contribution 1.0 on every
+  zone-targeted pair, `features.target = 0`; its `evaluation.py:119` disagreement
+  guard is the canary. (#2)
+- All four zone solvers (`ZoneMIPSolver`, `ZoneSASolver`, `ZoneHeuristicSolver`,
+  `ZoneIISolver`) build their `Solution` through one shared
+  `pymarxan.zones.build_zone_solution`: `targets_met` is feature-keyed and reports
+  the overall targets (so `Solution.all_targets_met` means "overall targets met"
+  for zone runs), per-zone targets live in `metadata["zone_targets_met"]` as
+  `"z{zone}_f{feature}"`, `penalty`/`shortfall` sum both tiers, and
+  `metadata["overall_penalty"]` / `metadata["zone_penalty"]` split them. The
+  heuristic and II solvers previously put tuple-keyed zone results in
+  `targets_met` and no metadata.
+- `ZoneProblemCache`: `compute_held_per_zone` / `update_held_per_zone` are replaced by
+  `compute_held` / `update_held` returning and mutating a `ZoneHeld` (raw per-zone
+  and contribution-weighted overall accumulators); `compute_full_zone_objective` and
+  `compute_delta_zone_objective` take `held=` and `blm=` as keyword arguments.
+- `write_zone_summary` now writes two row groups computed by the objective module
+  (`tier` = `overall` per feature, `zone` per listed zone target; columns `tier, zone,
+  feature, target, mean_achieved, times_met, total_runs`). The previous writer scored
+  per-zone contribution-weighted amounts against the overall target, which matched
+  neither tier.
+- `ZoneHeuristicSolver` no longer stops as soon as the zone targets are met (it ended
+  with the overall target unmet); it stops when no move improves the objective.
+
+### Added
+- **Overall feature targets in Marxan with Zones** (Watts et al. 2009 eq. 6;
+  `reserve.hpp:158-171`): every zone solver enforces `features.target` on the
+  contribution-weighted amount summed over zones — a hard constraint in the MIP,
+  `SPF × shortfall` in the heuristics. New helpers `compute_overall_achieved`,
+  `check_overall_targets`, `compute_overall_shortfalls`, `compute_zone_shortfalls`
+  (issue #6, part 1), all exported from `pymarxan.zones`. Hand-verified anchor and a
+  `reserve.hpp` accumulation cross-check documented in `docs/VALIDATION.md` §4. (#2)
+- `ZonalProblem.contribution_lookup()`, `contribution_matrix()`, `contribution_gaps()`,
+  `zone_target_weight_matrix()`, `zone_index()`, `feature_index()` — the single
+  contribution source for the objective, MIP, cache, writers and the `objectives`
+  zone methods (which previously keyed the lookup backwards and used 1.0).
+- `zonetarget.dat` optional `targettype` column: 0 as before, 1 = fraction of the
+  feature's total raw amount (resolved in `load_zone_project`, rewritten as 0 so a
+  save/load cycle is idempotent), 2/3 (occurrence targets) rejected naming the row.
+- `ZonalProblem.validate()` rejects `ZONETARGETCONTRIB` outside {0, 1}, `target2 > 0`
+  in zone problems, contribution rows naming unknown zones or features (up to five
+  enumerated), and `zone_targets` rows with an unresolved `targettype != 0`.
+  `read_zone_targets` rejects MarZone's `speciesid = -1` all-species wildcard.
+- Comparative per-flip bench (`bench` marker): the overall term is gated by
+  `contrib_differs[old, new]` (`reserve.hpp:393`), so under default contributions it
+  costs ≤ 5 % per flip.
+
+### Not included (follow-ons)
+- `save_zone_project` (the symmetric partner of `load_zone_project`; its body is
+  `tests/pymarxan/zones/test_readers.py::_copy_zone_project`); occurrence targets and
+  `zonetarget2.dat`; the `zonecontrib2.dat` / `zonecontrib3.dat` contribution dialects;
+  MarZone's proportional penalty form; `target2` in zone problems;
+  lock-into-a-named-zone (#6 part 2); single-pass DataFrame accumulation of both
+  tiers (heuristic/II candidate evaluation now runs two puvspr passes; the cache is
+  the fast path).
+
 ## [0.35.0] — 2026-09-28
 
 ### Fixed

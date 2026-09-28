@@ -56,8 +56,9 @@ and `contribution_matrix()` of shape `(n_zones + 1, n_feat)` with row 0 (unassig
 are the single source for every consumer (objective, both MIP builders, the cache, the writers,
 the `objectives/` zone methods that today key the lookup backwards and silently use 1.0).
 Default for an unlisted pair: **1.0 when `zone_contributions` is `None`; 0.0 when a table is
-supplied** (MarZone `zones.hpp:619` / `:651`). `validate()` lists unlisted pairs so a partial
-table is visible.
+supplied** (MarZone `zones.hpp:619` / `:651`). `contribution_gaps()` lists unlisted pairs and
+the loader warns, so a partial table is visible; `validate()` does not report them (advisory,
+plan review M1).
 
 ### 3.2 Overall feature targets
 
@@ -241,17 +242,23 @@ MarZone contribution default, summary writer rewritten); eleven MEDIUM accepted.
 - Occurrence targets (`targetocc`; zone target types 2–3), `zonetarget2.dat`, and the
   MarZone-native column dialect (`zoneid,speciesid,fraction/multiplier`; positional reads,
   `zones.hpp:878-920`).
-- MarZone's penalty form: `spf × penalty_f × Σ(shortfall / target)` with the greedy
-  cost-to-meet baseline (`reserve.hpp:751-775`, `:816-872`); `compute_baseline_penalty` already
-  exists as the building block.
+- MarZone's penalty form: `spf × penalty_f × Σ(shortfall / target)` (`reserve.hpp:816-872`,
+  delta `:524`) with the per-feature baseline `penalty_f` computed once in
+  `marzone.cpp:733-832` (`CalcPenalties`: the cheapest planning units on raw amounts needed to
+  reach `max(target_f, Σ_k zone_target_fk)`, scaled up when unreachable);
+  `compute_baseline_penalty` already exists as the building block. (`reserve.hpp:750-777`
+  `GreedyPen` is the greedy heuristic's move score, not this baseline.)
 - `target2` / clumping features in zone problems (`reserve.hpp:172-189`).
 - Lock-into-a-named-zone status (issue #6 part 2).
-- **Unassigned versus MarZone's "available" zone.** MarZone has no unassigned state; Watts'
-  reduction to Marxan holds only when the available zone has zero cost, zero contribution for
-  every feature, no zone targets and matching boundary treatment. pymarxan's zone 0 satisfies
-  the first three by construction, so a project that lists an explicit available zone with
-  those properties reproduces; a MarZone project **without** a contribution file (available
-  zone contributing 1) does not. Named deviation in VALIDATION.md.
+- **Unassigned versus MarZone's "available" zone.** MarZone has no unassigned state. Watts et
+  al. (2009) state that Marxan with Zones reduces to Marxan under three conditions: two zones,
+  the unreserved zone contributing 0 and the reserved zone 1 for every feature; the unreserved
+  zone costing 0 in every planning unit; and no zone-specific targets. A fourth, implicit
+  condition — the zone connectivity matrix must reduce to Marxan's boundary term — is
+  pymarxan's own statement. pymarxan's zone 0 satisfies the first three by construction, so a
+  MarZone project that lists such an available zone reproduces; one **without** a contribution
+  file (available zone contributing 1, `zones.hpp:658-662`) does not. Named deviation in
+  VALIDATION.md.
 
 ## 9. References
 
