@@ -5,10 +5,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from pymarxan.solvers.base import Solution
-from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.readers import (
+    load_zone_project,
     read_zone_boundary_costs,
     read_zone_contributions,
     read_zone_costs,
@@ -87,41 +88,6 @@ def _make_solution(
         penalty=5.0,
         shortfall=2.0,
         zone_assignment=za,
-    )
-
-
-def _make_zonal_problem() -> ZonalProblem:
-    pu = pd.DataFrame({"id": [1, 2], "cost": [100, 200], "status": [0, 0]})
-    features = pd.DataFrame({
-        "id": [1, 2],
-        "name": ["feat_a", "feat_b"],
-        "target": [50.0, 30.0],
-        "spf": [1.0, 1.0],
-    })
-    puvspr = pd.DataFrame({
-        "species": [1, 1, 2, 2],
-        "pu": [1, 2, 1, 2],
-        "amount": [30.0, 40.0, 20.0, 25.0],
-    })
-    zones = _make_zones_df()
-    zone_costs = pd.DataFrame({
-        "pu": [1, 1, 2, 2],
-        "zone": [1, 2, 1, 2],
-        "cost": [100.0, 50.0, 200.0, 80.0],
-    })
-    zone_contributions = _make_zone_contributions_df()
-
-    return ZonalProblem(
-        planning_units=pu,
-        features=features,
-        pu_vs_features=puvspr,
-        boundary=None,
-        parameters={},
-        zones=zones,
-        zone_costs=zone_costs,
-        zone_contributions=zone_contributions,
-        zone_targets=None,
-        zone_boundary_costs=None,
     )
 
 
@@ -249,60 +215,84 @@ class TestWriteZoneSolution:
 
 
 class TestWriteZoneSummary:
-    def test_summary_structure(self, tmp_path: Path) -> None:
-        problem = _make_zonal_problem()
-        sol1 = _make_solution(
-            selected=[True, True],
-            zone_assignment=[1, 2],
-        )
-        sol2 = _make_solution(
-            selected=[True, False],
-            zone_assignment=[1, 0],
-        )
-        out = tmp_path / "zone_summary.csv"
-        write_zone_summary(problem, [sol1, sol2], out)
-        result = pd.read_csv(out)
-        assert set(result.columns) == {
-            "zone", "feature", "target", "times_met", "total_runs",
-        }
-        # 2 zones × 2 features = 4 rows
-        assert len(result) == 4
-        assert (result["total_runs"] == 2).all()
+    """Rows equal the objective module's numbers (review H5: old writer matched neither tier)."""
 
-    def test_summary_times_met(self, tmp_path: Path) -> None:
-        problem = _make_zonal_problem()
-        # Both PUs in zone 1: achieved = (30+40)*1.0 = 70 >= 50 → met
-        sol = _make_solution(
-            selected=[True, True],
-            zone_assignment=[1, 1],
-        )
+    def _problem_and_solutions(self):
+        problem = load_zone_project(DATA_DIR)
+        sols = [
+            _make_solution([True, True, True, True], [1, 1, 2, 1]),
+            _make_solution([True, True, True, True], [2, 2, 2, 2]),
+        ]
+        return problem, sols
+
+    def test_columns_and_row_groups(self, tmp_path: Path) -> None:
+        problem, sols = self._problem_and_solutions()
+        out = tmp_path / "zone_summary.csv"
+        write_zone_summary(problem, sols, out)
+        df = pd.read_csv(out)
+        assert list(df.columns) == [
+            "tier", "zone", "feature", "target", "mean_achieved", "times_met", "total_runs",
+        ]
+        assert (df["tier"] == "overall").sum() == 2          # one per feature
+        assert (df["tier"] == "zone").sum() == 4             # one per listed zone target
+        assert (df["total_runs"] == 2).all()
+        assert (df.loc[df["tier"] == "overall", "zone"] == 0).all()
+
+    def test_overall_rows_match_objective_module(self, tmp_path: Path) -> None:
+        from pymarxan.zones.objective import check_overall_targets, compute_overall_achieved
+        problem, sols = self._problem_and_solutions()
+        out = tmp_path / "zone_summary.csv"
+        write_zone_summary(problem, sols, out)
+        df = pd.read_csv(out)
+        for fid in (1, 2):
+            row = df[(df["tier"] == "overall") & (df["feature"] == fid)].iloc[0]
+            achieved = [compute_overall_achieved(problem, s.zone_assignment)[fid] for s in sols]
+            met = [check_overall_targets(problem, s.zone_assignment)[fid] for s in sols]
+            assert row["mean_achieved"] == pytest.approx(sum(achieved) / 2)
+            assert row["times_met"] == sum(met)
+            assert row["target"] == float(problem.features.set_index("id").loc[fid, "target"])
+
+    def test_zone_rows_match_objective_module(self, tmp_path: Path) -> None:
+        from pymarxan.zones.objective import _compute_zone_achieved, check_zone_targets
+        problem, sols = self._problem_and_solutions()
+        out = tmp_path / "zone_summary.csv"
+        write_zone_summary(problem, sols, out)
+        df = pd.read_csv(out)
+        for zid, fid, target in problem.zone_targets[["zone", "feature", "target"]].itertuples(
+            index=False,
+        ):
+            row = df[(df["tier"] == "zone") & (df["zone"] == zid) & (df["feature"] == fid)].iloc[0]
+            achieved = [
+                _compute_zone_achieved(problem, s.zone_assignment).get((zid, fid), 0.0)
+                for s in sols
+            ]
+            met = [check_zone_targets(problem, s.zone_assignment)[(zid, fid)] for s in sols]
+            assert row["mean_achieved"] == pytest.approx(sum(achieved) / 2)
+            assert row["times_met"] == sum(met)
+            assert row["target"] == float(target)
+
+    def test_zone_rows_are_raw_by_default(self, tmp_path: Path) -> None:
+        problem, sols = self._problem_and_solutions()
+        out = tmp_path / "zone_summary.csv"
+        write_zone_summary(problem, sols, out)
+        df = pd.read_csv(out)
+        row = df[(df["tier"] == "zone") & (df["zone"] == 2) & (df["feature"] == 1)].iloc[0]
+        # run 1: PU3 raw 6; run 2: all four raw 29 -> mean 17.5 (weighted would be 8.75)
+        assert row["mean_achieved"] == pytest.approx(17.5)
+
+    def test_no_zone_targets_gives_overall_rows_only(self, tmp_path: Path) -> None:
+        problem, sols = self._problem_and_solutions()
+        problem = problem.copy_with(zone_targets=None)
+        out = tmp_path / "zone_summary.csv"
+        write_zone_summary(problem, sols, out)
+        df = pd.read_csv(out)
+        assert set(df["tier"]) == {"overall"}
+
+    def test_selected_only_solution_counts_as_first_zone(self, tmp_path: Path) -> None:
+        problem, _ = self._problem_and_solutions()
+        sol = _make_solution([True, True, False, False], None)
         out = tmp_path / "zone_summary.csv"
         write_zone_summary(problem, [sol], out)
-        result = pd.read_csv(out)
-        z1_f1 = result[
-            (result["zone"] == 1) & (result["feature"] == 1)
-        ]
-        assert z1_f1["times_met"].iloc[0] == 1
-
-    def test_summary_multiple_solutions(self, tmp_path: Path) -> None:
-        problem = _make_zonal_problem()
-        # sol1: PU1→zone1, PU2→zone1
-        #   zone1 feat1: (30+40)*1.0=70 >=50 → met
-        sol1 = _make_solution(
-            selected=[True, True],
-            zone_assignment=[1, 1],
-        )
-        # sol2: PU1→zone2, PU2→zone2
-        #   zone1 feat1: nothing → 0 < 50 → not met
-        sol2 = _make_solution(
-            selected=[True, True],
-            zone_assignment=[2, 2],
-        )
-        out = tmp_path / "zone_summary.csv"
-        write_zone_summary(problem, [sol1, sol2], out)
-        result = pd.read_csv(out)
-        z1_f1 = result[
-            (result["zone"] == 1) & (result["feature"] == 1)
-        ]
-        assert z1_f1["times_met"].iloc[0] == 1
-        assert z1_f1["total_runs"].iloc[0] == 2
+        df = pd.read_csv(out)
+        row = df[(df["tier"] == "zone") & (df["zone"] == 1) & (df["feature"] == 1)].iloc[0]
+        assert row["mean_achieved"] == pytest.approx(18.0)   # PU1 10 + PU2 8, raw
