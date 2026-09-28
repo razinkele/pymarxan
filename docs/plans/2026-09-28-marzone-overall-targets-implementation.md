@@ -17,7 +17,9 @@ so the existing cache-equals-objective tests stay green after every task.
 env; ruff; mypy.
 
 **Spec:** `docs/plans/2026-09-28-marzone-overall-targets-design.md` (revision 2, approved).
-Review synthesis: `docs/plans/2026-09-28-marzone-overall-targets-review.md`.
+**Review:** `docs/plans/2026-09-28-marzone-overall-targets-plan-review.md` (absorbed,
+revision 2 of this plan).
+Design-review synthesis: `docs/plans/2026-09-28-marzone-overall-targets-review.md`.
 
 ## Global Constraints
 
@@ -64,12 +66,22 @@ Review synthesis: `docs/plans/2026-09-28-marzone-overall-targets-review.md`.
   because it needs `pu_vs_features`. After resolution the row's `targettype` is set to 0 so a
   write → read cycle does not multiply twice (mirrors the idempotence of
   `io.readers._resolve_prop_targets`).
-- **R3 — unlisted contribution pairs produce one summary message** in `validate()` (count
-  listed / total, count unlisted, first unlisted pair, the 0.0 default), not one line per pair.
+- **R3 — unlisted contribution pairs are advisory, not errors** (plan review M1):
+  `ZonalProblem.contribution_gaps()` lists them, `load_zone_project` emits one `warnings.warn`
+  when a supplied table is partial, and `validate()` stays silent on gaps. This supersedes the
+  design review's H4 wording ("`validate()` lists missing pairs") and spec line 59, both of
+  which conflict with spec line 112 ("advisory"), CLAUDE.md's `validate()` contract (a
+  `list[str]` of errors) and the gate consumers (ROWER raises `ScenarioBuildError` on any
+  non-empty `validate()`; Shiny `upload.py` shows it as a warning notification). A partial
+  `zonecontrib.dat` is a legal MarZone input. Cost if wrong: one more public method.
 - **R4 — `Solution.targets_met` keeps its union type annotation;** only the comment changes.
   Zone solvers now populate int keys; narrowing the annotation is a follow-on.
 - **R5 — `write_zone_summary` emits zone rows only for listed zone targets** (the spec's "zone
   block (zone, feature, zone_target, …)"), not for every zone × feature pair as today.
+- **R6 — the unknown-pair message enumerates up to five pairs** (`unknown[:5]`, `; `-joined,
+  ` …` appended when truncated) rather than naming only the first: the Task 1 test then
+  exercises both bad rows, and the cap keeps a stale table from producing a thousand-entry
+  string. Cost if wrong: a longer message.
 
 ## Review Focus
 
@@ -82,8 +94,12 @@ Inputs the spec implies but no spec test exercises; each is pinned in the owning
 3. A feature with `target > 0` and no `puvspr` rows — the MIP returns `[]`, the heuristics
    return a penalised assignment, nothing crashes (Task 6, Task 7).
 4. A `zone_contributions` row naming a zone or feature that does not exist — `validate()`
-   reports it instead of silently dropping it (Task 1).
+   reports them (enumerating up to five) instead of silently dropping them (Task 1).
 5. `features` without an `spf` column — the cache and the objective module use 1.0 (Task 5).
+6. `zone_targets` built by hand with an unresolved `targettype = 1` row — `validate()` flags
+   it (Task 11).
+7. `zonetarget.dat` with MarZone's `speciesid = -1` wildcard — rejected with a clear message
+   (Task 11).
 
 ## File structure
 
@@ -121,9 +137,10 @@ Inputs the spec implies but no spec test exercises; each is pinned in the owning
   - `ZonalProblem.contribution_lookup() -> dict[tuple[int, int], float]` keyed `(feature, zone)`, listed pairs only
   - `ZonalProblem.get_contribution(feature_id, zone_id) -> float` (lookup + default)
   - `ZonalProblem.contribution_matrix() -> np.ndarray` shape `(n_zones + 1, n_feat)`, row 0 zero
+  - `ZonalProblem.contribution_gaps() -> list[tuple[int, int]]` unlisted `(feature, zone)` pairs of a supplied table, `[]` without one (advisory; ruling R3)
   - `ZonalProblem.zone_target_contrib() -> int` (0 or 1; `ValueError` otherwise)
   - `ZonalProblem.zone_target_weight_matrix() -> np.ndarray` same shape; ones (rows 1..n) or the contribution matrix
-  - `ZonalProblem.validate()` new messages (parameter domain, `target2`, unknown pairs, unlisted pairs)
+  - `ZonalProblem.validate()` new messages (parameter domain, `target2`, unknown pairs enumerated up to five; silent on unlisted pairs)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -132,9 +149,6 @@ and `_make_zone_data()` returning `zones, zone_costs, zone_contributions, zone_t
 zone_boundary_costs` with contributions listed for all four (feature, zone) pairs):
 
 ```python
-import numpy as np
-
-
 class TestContributionSource:
     def _problem(self, **kw):
         pu, feat, puvspr = _make_base_data()
@@ -224,18 +238,21 @@ class TestContributionSource:
         zp = self._problem(zone_contributions=bad)
         msgs = [e for e in zp.validate() if "unknown" in e]
         assert len(msgs) == 1
-        assert "zone 7" in msgs[0] and "feature 9" in msgs[0]
+        assert "feature 1, zone 7" in msgs[0] and "feature 9, zone 1" in msgs[0]
+        assert "2 unknown" in msgs[0]
 
-    def test_validate_summarises_unlisted_pairs_once(self):
+    def test_contribution_gaps_lists_unlisted_pairs(self):
         partial = pd.DataFrame({
             "feature": [1], "zone": [1], "contribution": [1.0],
         })
         zp = self._problem(zone_contributions=partial)
-        msgs = [e for e in zp.validate() if "unlisted" in e]
-        assert len(msgs) == 1
-        assert "1 of 4" in msgs[0]
-        assert "3 unlisted" in msgs[0]
-        assert "default to 0.0" in msgs[0]
+        assert zp.contribution_gaps() == [(1, 2), (2, 1), (2, 2)]
+        assert zp.validate() == []                  # advisory, not an error (ruling R3)
+        _, _, zcontrib, _, _ = _make_zone_data()
+        zp_full = self._problem(zone_contributions=zcontrib)
+        assert zp_full.contribution_gaps() == []
+        zp_none = self._problem()
+        assert zp_none.contribution_gaps() == []
 
     def test_validate_clean_when_all_pairs_listed(self):
         zones, zc, zcontrib, zt, zbc = _make_zone_data()
@@ -245,14 +262,15 @@ class TestContributionSource:
         assert zp.validate() == []
 ```
 
-`pytest` and `pd` are already imported at the top of `test_model.py`; add `import numpy as np`
-next to them (not mid-file, or ruff E402 fires).
+`test_model.py` imports only `pd` and `ZonalProblem`; add `import numpy as np` and
+`import pytest` to the header (isort order: numpy, pandas, pytest), never mid-file (E402).
+Then `~/.local/bin/ruff check tests/pymarxan/zones/test_model.py` must be clean before Step 2.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_model.py -q -k TestContributionSource`
-Expected: FAIL — `AttributeError: 'ZonalProblem' object has no attribute 'zone_index'` (and
-siblings).
+Expected: 15 FAIL with `AttributeError: 'ZonalProblem' object has no attribute 'zone_index'`
+(and siblings); `test_validate_clean_when_all_pairs_listed` passes already (regression pin).
 
 - [ ] **Step 3: Implement on `ZonalProblem`**
 
@@ -316,6 +334,24 @@ the block below (keep `get_zone_cost` as is):
                 m[row, col] = c
         return m
 
+    def contribution_gaps(self) -> list[tuple[int, int]]:
+        """Unlisted (feature, zone) pairs of a supplied table, in (feature, sorted zone) order.
+
+        Advisory only: the pairs default to ``contribution_default()`` (0.0), ``validate()``
+        does not report them, and ``load_zone_project`` warns once when a table is partial.
+        ``[]`` when ``zone_contributions`` is ``None``.
+        """
+        if self.zone_contributions is None:
+            return []
+        lookup = self.contribution_lookup()
+        z_sorted = sorted(int(z) for z in self.zone_ids)
+        return [
+            (int(fid), z)
+            for fid in self.features["id"].values
+            for z in z_sorted
+            if (int(fid), z) not in lookup
+        ]
+
     # ------------------------------------------------------------------
     # Zone-target weighting (pymarxan extension; MarZone always uses raw amounts)
     # ------------------------------------------------------------------
@@ -356,31 +392,23 @@ Then extend `validate()`: after the existing `zone_contributions` column check, 
                 )
             else:
                 feat_ids = [int(f) for f in self.features["id"].values]
-                z_sorted = sorted(int(z) for z in self.zone_ids)
                 lookup = self.contribution_lookup()
                 unknown = [
                     (f, z) for (f, z) in lookup
                     if z not in self.zone_ids or f not in feat_ids
                 ]
                 if unknown:
-                    f0, z0 = unknown[0]
+                    shown = "; ".join(f"feature {f}, zone {z}" for f, z in unknown[:5])
+                    more = " …" if len(unknown) > 5 else ""
                     errors.append(
                         f"zone_contributions references {len(unknown)} unknown "
-                        f"(feature, zone) pair(s); first: feature {f0}, zone {z0}"
-                    )
-                total = len(feat_ids) * len(z_sorted)
-                listed = len(lookup) - len(unknown)
-                missing = [
-                    (f, z) for f in feat_ids for z in z_sorted if (f, z) not in lookup
-                ]
-                if missing:
-                    f0, z0 = missing[0]
-                    errors.append(
-                        f"zone_contributions lists {listed} of {total} (feature, zone) "
-                        f"pairs; {len(missing)} unlisted pair(s) default to 0.0 "
-                        f"(MarZone zones.hpp:619); first: feature {f0}, zone {z0}"
+                        f"(feature, zone) pair(s): {shown}{more}"
                     )
 ```
+
+Unlisted pairs are **not** reported here (ruling R3): `contribution_gaps()` lists them and
+`load_zone_project` warns (Task 11). Do not leave `total` / `listed` / `missing` locals behind
+(ruff F841).
 
 and append before `return errors`:
 
@@ -419,7 +447,8 @@ git add src/pymarxan/zones/model.py tests/pymarxan/zones/test_model.py
 git commit -m "feat(zones): contribution lookup/matrix, zone-target weight matrix, validate() domain checks (#2)
 
 MarZone default for unlisted contribution pairs (zones.hpp:619 / :651); ZONETARGETCONTRIB
-parameter domain; target2 rejected in zone problems; one summary message for partial tables.
+parameter domain; target2 rejected in zone problems; unknown pairs enumerated (up to five);
+contribution_gaps() lists unlisted pairs (advisory, ruling R3).
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
@@ -438,11 +467,13 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 - Consumes: `ZonalProblem.contribution_matrix()`, `zone_index()`, `feature_index()` (Task 1).
 - Produces:
   - `compute_overall_achieved(problem, zone_assignment, *, amounts=None) -> dict[int, float]`
-  - `compute_overall_shortfalls(problem, zone_assignment) -> dict[int, float]` (features with target > 0)
-  - `check_overall_targets(problem, zone_assignment) -> dict[int, bool]` (every feature id)
-  - `compute_overall_penalty(problem, zone_assignment) -> float`
-  - `compute_overall_shortfall(problem, zone_assignment) -> float`
-  - `compute_zone_shortfalls(problem, zone_assignment) -> dict[tuple[int, int], float]` (issue #6 part 1)
+  - `compute_overall_shortfalls(problem, zone_assignment, *, achieved=None) -> dict[int, float]` (features with target > 0)
+  - `check_overall_targets(problem, zone_assignment, *, achieved=None) -> dict[int, bool]` (every feature id)
+  - `compute_overall_penalty(problem, zone_assignment, *, achieved=None) -> float`
+  - `compute_overall_shortfall(problem, zone_assignment, *, achieved=None) -> float`
+  - `compute_zone_shortfalls(problem, zone_assignment, *, zone_achieved=None) -> dict[tuple[int, int], float]` (issue #6 part 1)
+  - `check_zone_targets`, `compute_zone_penalty`, `compute_zone_shortfall` gain the same kw-only `zone_achieved=None`
+  - the kw-only `achieved: dict[int, float] | None` is the dict `compute_overall_achieved` returns; `zone_achieved: dict[tuple[int, int], float] | None` is what `_compute_zone_achieved` returns. `None` recomputes (plan review M5c: the Task 5 builder computes each tier once and passes it through).
   - test helpers `make_anchor_problem(...)`, `oracle(...)`, `all_assignments()`, constants
     `OPTIMUM`, `OPTIMUM_COST`, `RUNNER_UP_COST`.
 
@@ -665,8 +696,11 @@ class TestOverallTargetsAndPenalty:
 class TestZoneShortfalls:
     def test_per_pair_shortfalls_on_anchor(self):
         p = make_anchor_problem()
-        # Zone target (2, 1) = 10 raw; (2, 0, 0) holds 10 raw in zone 2 -> met.
-        assert compute_zone_shortfalls(p, np.array([2, 0, 0])) == {(2, 1): 0.0}
+        # Task 2 is additive: _compute_zone_achieved is still contribution-weighted here, so
+        # only assignments whose zone-2 shortfall is invariant under both semantics are pinned.
+        # The raw pin [2, 0, 0] -> 0.0 lands in Task 3 (test_zone_target_met_on_raw_amounts).
+        # 30 raw / 12 weighted: met under both semantics
+        assert compute_zone_shortfalls(p, np.array([2, 2, 2])) == {(2, 1): 0.0}
         assert compute_zone_shortfalls(p, np.array([1, 1, 0])) == {(2, 1): 10.0}
 
     def test_empty_without_zone_targets(self):
@@ -693,10 +727,10 @@ Add after `compute_standard_boundary` (before `_compute_zone_achieved`):
 def _feature_arrays(problem: ZonalProblem) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(feature ids, targets × MISSLEVEL, spf) aligned with ``features`` order."""
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    ids = problem.features["id"].values.astype(int)
-    targets = problem.features["target"].values.astype(np.float64) * misslevel
+    ids = np.asarray(problem.features["id"].values, dtype=np.int64)
+    targets = np.asarray(problem.features["target"].values, dtype=np.float64) * misslevel
     spf = (
-        problem.features["spf"].values.astype(np.float64)
+        np.asarray(problem.features["spf"].values, dtype=np.float64)
         if "spf" in problem.features.columns
         else np.ones(len(ids), dtype=np.float64)
     )
@@ -728,10 +762,18 @@ def compute_overall_achieved(
 def compute_overall_shortfalls(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
 ) -> dict[int, float]:
-    """feature id -> max(0, target × MISSLEVEL − A_f) for features with target > 0."""
+    """feature id -> max(0, target × MISSLEVEL − A_f) for features with target > 0.
+
+    ``achieved`` is the dict ``compute_overall_achieved`` returns; ``None`` recomputes it.
+    Callers that already hold it (``build_zone_solution``) pass it through so the PU ×
+    feature matrix is built once per solution.
+    """
     ids, targets, _ = _feature_arrays(problem)
-    achieved = compute_overall_achieved(problem, zone_assignment)
+    if achieved is None:
+        achieved = compute_overall_achieved(problem, zone_assignment)
     return {
         int(fid): max(0.0, float(t) - achieved.get(int(fid), 0.0))
         for fid, t in zip(ids, targets, strict=True)
@@ -742,10 +784,13 @@ def compute_overall_shortfalls(
 def check_overall_targets(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
 ) -> dict[int, bool]:
     """feature id -> A_f >= target × MISSLEVEL (True for inert targets), every feature."""
     ids, targets, _ = _feature_arrays(problem)
-    achieved = compute_overall_achieved(problem, zone_assignment)
+    if achieved is None:
+        achieved = compute_overall_achieved(problem, zone_assignment)
     return {
         int(fid): bool(t <= 0 or achieved.get(int(fid), 0.0) >= float(t))
         for fid, t in zip(ids, targets, strict=True)
@@ -755,20 +800,54 @@ def check_overall_targets(
 def compute_overall_penalty(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
 ) -> float:
     """Σ_f spf_f × overall shortfall_f (approximation of MarZone's spf × penalty × proportion)."""
     ids, _, spf = _feature_arrays(problem)
     spf_of = {int(fid): float(s) for fid, s in zip(ids, spf, strict=True)}
-    shortfalls = compute_overall_shortfalls(problem, zone_assignment)
+    shortfalls = compute_overall_shortfalls(problem, zone_assignment, achieved=achieved)
     return float(sum(spf_of[fid] * sf for fid, sf in shortfalls.items()))
 
 
 def compute_overall_shortfall(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    achieved: dict[int, float] | None = None,
 ) -> float:
     """Unweighted total overall shortfall."""
-    return float(sum(compute_overall_shortfalls(problem, zone_assignment).values()))
+    shortfalls = compute_overall_shortfalls(problem, zone_assignment, achieved=achieved)
+    return float(sum(shortfalls.values()))
+```
+
+Replace `check_zone_targets` with the same-behaviour body that accepts a precomputed
+`zone_achieved` (the dict `_compute_zone_achieved` returns):
+
+```python
+def check_zone_targets(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
+) -> dict[tuple[int, int], bool]:
+    """(zone id, feature id) -> Z_kf >= zone target × MISSLEVEL for listed zone targets.
+
+    ``zone_achieved`` is the dict ``_compute_zone_achieved`` returns; ``None`` recomputes it.
+    """
+    if problem.zone_targets is None:
+        return {}
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    if zone_achieved is None:
+        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
+    zt = problem.zone_targets
+    targets_met: dict[tuple[int, int], bool] = {}
+    for zid, fid, target in zip(
+        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
+    ):
+        key = (int(zid), int(fid))
+        targets_met[key] = zone_achieved.get(key, 0.0) >= float(target) * misslevel
+    return targets_met
 ```
 
 Add after `check_zone_targets`:
@@ -777,19 +856,22 @@ Add after `check_zone_targets`:
 def compute_zone_shortfalls(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> dict[tuple[int, int], float]:
     """(zone id, feature id) -> max(0, zone target × MISSLEVEL − Z_kf) for listed zone targets."""
     if problem.zone_targets is None:
         return {}
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    achieved = _compute_zone_achieved(problem, zone_assignment)
+    if zone_achieved is None:
+        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
     zt = problem.zone_targets
     out: dict[tuple[int, int], float] = {}
     for zid, fid, target in zip(
         zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
     ):
         key = (int(zid), int(fid))
-        out[key] = max(0.0, float(target) * misslevel - achieved.get(key, 0.0))
+        out[key] = max(0.0, float(target) * misslevel - zone_achieved.get(key, 0.0))
     return out
 ```
 
@@ -799,9 +881,11 @@ and rewrite `compute_zone_penalty` / `compute_zone_shortfall` on top of it (beha
 def compute_zone_penalty(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> float:
     """Penalty for unmet zone targets: Σ spf_f × shortfall_kf."""
-    shortfalls = compute_zone_shortfalls(problem, zone_assignment)
+    shortfalls = compute_zone_shortfalls(problem, zone_assignment, zone_achieved=zone_achieved)
     if not shortfalls:
         return 0.0
     ids, _, spf = _feature_arrays(problem)
@@ -812,9 +896,12 @@ def compute_zone_penalty(
 def compute_zone_shortfall(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
+    *,
+    zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> float:
     """Unweighted total shortfall across all zone targets."""
-    return float(sum(compute_zone_shortfalls(problem, zone_assignment).values()))
+    shortfalls = compute_zone_shortfalls(problem, zone_assignment, zone_achieved=zone_achieved)
+    return float(sum(shortfalls.values()))
 ```
 
 - [ ] **Step 5: Run the new tests and the whole zones suite**
@@ -823,10 +910,15 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones -q -m "not slow
 Expected: PASS (new file green; `test_objective.py` unchanged because
 `_compute_zone_achieved` is untouched in this task).
 
-- [ ] **Step 6: Lint and commit**
+- [ ] **Step 6: Lint, types and commit**
+
+`make types` runs here, not first at Task 5: bare `mypy` is not on `PATH` under the shiny env,
+and pandas-stubs rejects `Series.values.astype(...)` arithmetic (plan review H3) — the
+`np.asarray(..., dtype=...)` form above is clean.
 
 ```bash
 ~/.local/bin/ruff check src/pymarxan/zones/objective.py tests/pymarxan/zones/marzone_anchor.py tests/pymarxan/zones/test_zone_overall_targets.py
+PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make types
 git add src/pymarxan/zones/objective.py tests/pymarxan/zones/marzone_anchor.py tests/pymarxan/zones/test_zone_overall_targets.py
 git commit -m "feat(zones): overall-target helpers (achieved/met/penalty/shortfalls) + spec §5 anchor module (#2, #6)
 
@@ -852,7 +944,9 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 - Produces: `ZoneProblemCache.zone_target_weight: np.ndarray` (n_zones+1, n_feat);
   `ZoneProblemCache.contribution_matrix` now equals `problem.contribution_matrix()`;
   `held_per_zone` arrays are **raw** (no contribution multiply);
-  `mip_solver._zone_achieved_exprs(problem, x, zone_ids) -> dict[tuple[int, int], pulp.LpAffineExpression]`;
+  `mip_solver._zone_achieved_exprs(problem, x) -> dict[tuple[int, int], pulp.LpAffineExpression]`;
+  `mip_solver._spf_lookup` and `cache.from_zone_problem` take spf from `objective._feature_arrays`
+  (one "spf absent → ones" rule, plan review M5a);
   `_build_penalty_expr(problem, exprs, model)`, `_add_zone_target_constraints(problem, exprs, model)`.
 
 Why together: `test_zone_cache.py::TestFullObjective` and `TestDeltaObjective` pin the cache
@@ -928,7 +1022,7 @@ replace the docstring with the raw numbers:
 
         Zone targets accumulate raw amounts (MarZone reserve.hpp:164).
         PU1,PU2 in zone 1 meets Z1 targets (F1: 18>=10, F2: 12>=8).
-        PU3,PU4 in zone 2 meets Z2 targets (F1: 15>=5, F2: 13>=3).
+        PU3,PU4 in zone 2 meets Z2 targets (F1: 11>=5, F2: 13>=3).
         """
 ```
 
@@ -965,8 +1059,10 @@ class TestZoneAchievedWeighting:
         assert weighted.get((2, 1), 0.0) == 0.0
 ```
 
-(`test_objective.py` imports `pytest`? Check the top of the file; add `import pytest` there if
-missing.)
+`test_objective.py` imports `Path`, `np`, the objective functions and `load_zone_project` — no
+`pytest`, and `TestZoneAchievedWeighting` uses `pytest.approx`. Add `import pytest` after
+`import numpy as np` in the header (never mid-file, E402), then run
+`~/.local/bin/ruff check tests/pymarxan/zones/test_objective.py` before Step 2.
 
 Append to `tests/pymarxan/zones/test_zone_overall_targets.py`:
 
@@ -976,6 +1072,8 @@ class TestZoneTargetsRawOnAnchor:
         from pymarxan.zones.objective import check_zone_targets
         p = make_anchor_problem()
         assert check_zone_targets(p, np.array([2, 0, 0])) == {(2, 1): True}     # 10 raw >= 10
+        # 10 raw in zone 2 (was 4.0 weighted before this task's flip)
+        assert compute_zone_shortfalls(p, np.array([2, 0, 0])) == {(2, 1): 0.0}
 
     def test_zone_target_weighted_under_flag(self):
         from pymarxan.zones.objective import check_zone_targets
@@ -984,12 +1082,19 @@ class TestZoneTargetsRawOnAnchor:
         assert check_zone_targets(p, np.array([2, 2, 2])) == {(2, 1): True}     # 12 >= 10
 ```
 
+`compute_zone_shortfalls` is already imported at the top of `test_zone_overall_targets.py`
+(Task 2). **Trap:** do not re-declare `class TestZoneShortfalls:` in this file — Python would
+rebind the name and pytest would silently drop `test_empty_without_zone_targets`; the raw pin
+goes into the new `TestZoneTargetsRawOnAnchor` class above.
+
 - [ ] **Step 2: Run to verify failure**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_cache.py tests/pymarxan/zones/test_objective.py tests/pymarxan/zones/test_zone_overall_targets.py -q`
 Expected: FAIL — `test_mixed_assignment` (8.0 vs 4.0), `TestZoneTargetWeight` (no attribute
 `zone_target_weight`), `TestZoneAchievedWeighting.test_raw_by_default`,
-`TestZoneTargetsRawOnAnchor.test_zone_target_met_on_raw_amounts`.
+`TestZoneAchievedWeighting.test_partial_table_zero_weight_only_in_weighted_mode` (the raw
+half passes today; the weighted branch returns 29.0, not 0.0, because the flag is ignored),
+`TestZoneTargetsRawOnAnchor.test_zone_target_met_on_raw_amounts`. Five fail in total.
 
 - [ ] **Step 3: Flip `_compute_zone_achieved` in `objective.py`**
 
@@ -1037,13 +1142,11 @@ In `cache.py`:
    replace the whole "Contribution matrix" block with
    `contribution_matrix = problem.contribution_matrix()`, add
    `zone_target_weight = problem.zone_target_weight_matrix()` right after it, and pass
-   `zone_target_weight=zone_target_weight` to `cls(...)`. Guard spf:
+   `zone_target_weight=zone_target_weight` to `cls(...)`. Take spf from the objective module's
+   single rule (add `from pymarxan.zones.objective import _feature_arrays` to the module
+   imports; `objective.py` does not import `cache.py`, so there is no cycle):
    ```python
-   feat_spf = (
-       np.asarray(feat_df["spf"].values, dtype=np.float64)
-       if "spf" in feat_df.columns
-       else np.ones(n_feat, dtype=np.float64)
-   )
+   _, _, feat_spf = _feature_arrays(problem)
    ```
 3. `compute_held_per_zone`: the docstring becomes "held[z_col, f] = Σ raw amount (no
    contribution; MarZone reserve.hpp:164)" and the accumulation line becomes
@@ -1077,19 +1180,14 @@ def _feature_groups(problem: ZonalProblem) -> dict[int, list[tuple[int, float]]]
 
 
 def _spf_lookup(problem: ZonalProblem) -> dict[int, float]:
-    feat_ids = problem.features["id"].values
-    feat_spf = (
-        problem.features["spf"].values
-        if "spf" in problem.features.columns
-        else np.ones(len(feat_ids))
-    )
-    return {int(f): float(s) for f, s in zip(feat_ids, feat_spf, strict=True)}
+    """feature id -> spf (1.0 when the column is absent; one rule, ``_feature_arrays``)."""
+    ids, _, spf = _feature_arrays(problem)
+    return dict(zip(ids.tolist(), spf.tolist(), strict=True))
 
 
 def _zone_achieved_exprs(
     problem: ZonalProblem,
     x: dict[tuple[int, int], pulp.LpVariable],
-    zone_ids: list[int],
 ) -> dict[tuple[int, int], pulp.LpAffineExpression]:
     """Σ_i amount[i, f] × w[z, f] × x[i, z] for every listed (zone, feature) target.
 
@@ -1163,15 +1261,17 @@ and in `solve` replace the two call sites:
 
 ```python
         # 4. Zone-target penalty (slack) and hard constraints share one achieved expression
-        zone_exprs = _zone_achieved_exprs(problem, x, zone_ids)
+        zone_exprs = _zone_achieved_exprs(problem, x)
         penalty_expr, penalty_vars = _build_penalty_expr(problem, zone_exprs, model)
         ...
         # --- Feature target constraints ---
         _add_zone_target_constraints(problem, zone_exprs, model)
 ```
 
-Run `grep -rn "_build_penalty_expr\|_add_zone_target_constraints" tests/` — expected: no
-matches (the helpers are private). If a test calls them, update its call to the new signature.
+Add `_feature_arrays` to the existing `from pymarxan.zones.objective import (...)` list in
+`mip_solver.py`. Run `grep -rn "_build_penalty_expr\|_add_zone_target_constraints" tests/` —
+expected: no matches (the helpers are private). If a test calls them, update its call to the
+new signature.
 
 - [ ] **Step 6: Run the zones suite (incl. slow) and the parity harness**
 
@@ -1189,7 +1289,7 @@ git commit -m "feat(zones)!: zone targets accumulate raw amounts; contribution d
 Objective, cache and MIP flip together (the cache-equals-objective tests gate it).
 ZONETARGETCONTRIB=1 restores contribution-weighted zone targets via a weight matrix.
 Re-pins: test_zone_cache mixed_assignment zone-2 held 4.0/2.1 -> 8.0/7.0 (8x0.5, 7x0.3 ->
-raw 8, 7). test_objective docstring: zone-2 amounts 5.5/3.9 -> 15/13 raw.
+raw 8, 7). test_objective docstring: zone-2 amounts 5.5/3.9 -> 11/13 raw.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
@@ -1208,7 +1308,7 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 **Interfaces:**
 - Consumes: Task 2 helpers; Task 3 cache fields.
 - Produces:
-  - `ZoneHeld` dataclass: `per_zone: np.ndarray` (n_zones+1, n_feat) raw; `overall: np.ndarray` (n_feat,) contribution-weighted; `copy() -> ZoneHeld`.
+  - `ZoneHeld` dataclass: `per_zone: np.ndarray` (n_zones+1, n_feat) raw; `overall: np.ndarray` (n_feat,) contribution-weighted (no `copy()` — no caller, plan review L6).
   - `ZoneProblemCache.compute_held(assignment) -> ZoneHeld`
   - `ZoneProblemCache.update_held(held, idx, old_zone, new_zone) -> None` (zone **ids**)
   - `ZoneProblemCache.compute_full_zone_objective(assignment, *, held, blm) -> float`
@@ -1230,22 +1330,37 @@ apply, by hand (not blind sed — the `held[...]` reads must become `held.per_zo
 | `assert_array_almost_equal(held, held_expected)` | `assert_array_almost_equal(held.per_zone, held_expected.per_zone)` **and** `assert_array_almost_equal(held.overall, held_expected.overall)` |
 | `cache.compute_full_zone_objective(a, held, blm)` | `cache.compute_full_zone_objective(a, held=held, blm=blm)` |
 | `cache.compute_delta_zone_objective(idx, o, n, a, held, blm)` | `cache.compute_delta_zone_objective(idx, o, n, a, held=held, blm=blm)` |
+| Task 3 `TestZoneTargetWeight.test_full_objective_matches_reference_in_weighted_mode`: `c.compute_full_zone_objective(assignment, held, 1.0)` | `c.compute_full_zone_objective(assignment, held=held, blm=1.0)` |
+| Task 3 `TestZoneTargetWeight.test_delta_matches_reference_in_weighted_mode`: `before = c.compute_full_zone_objective(assignment, held, 1.0)` | `before = c.compute_full_zone_objective(assignment, held=held, blm=1.0)` |
+| same test: `delta = c.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held, 1.0)` | `delta = c.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held=held, blm=1.0)` |
+| same test: `after = c.compute_full_zone_objective(after_assignment, c.compute_held_per_zone(after_assignment), 1.0)` | `after = c.compute_full_zone_objective(after_assignment, held=c.compute_held(after_assignment), blm=1.0)` |
 
-Confirm the sweep: `grep -rn "held_per_zone" tests/ src/` must return only `solver.py` (fixed in
-Step 5) and the cache's private `_penalty_delta` parameter name.
+(The four Task 3 calls were positional because the Task 3 cache still took `held_per_zone`
+positionally; after this task's kw-only signature they would raise `TypeError: takes 2
+positional arguments but 4 were given`.)
+
+Confirm the sweep with two greps:
+
+```bash
+grep -rn "compute_held_per_zone\|update_held_per_zone" tests/ src/
+grep -rn "compute_full_zone_objective(\|compute_delta_zone_objective(" tests src | grep -v "held="
+```
+
+The first must return only `solver.py` (fixed in Step 5); other `held_per_zone` mentions
+(`cache.py` parameter names/docstrings, `test_zone_cache.py:131`, the test name at :169) are
+renamed in Step 4 / Step 1 or left as prose. The second must return only the two `def` lines
+in `src/pymarxan/zones/cache.py` plus solver.py's two positional calls (fixed in Step 5); a
+test call wrapped over several lines shows its opening line here — check that its
+continuation line carries `held=`.
 
 - [ ] **Step 2: Add the new failing tests**
 
-Append to `tests/pymarxan/zones/test_zone_cache.py`:
+Add `from tests.pymarxan.zones.marzone_anchor import all_assignments, make_anchor_problem, oracle`
+to the header import block of `test_zone_cache.py` after the `pymarxan` imports (first-party
+`tests.` imports last, I-sorted) — never after the existing classes (E402). Then append the
+classes:
 
 ```python
-from tests.pymarxan.zones.marzone_anchor import (
-    all_assignments,
-    make_anchor_problem,
-    oracle,
-)
-
-
 class TestZoneHeld:
     @pytest.mark.parametrize("flag", [0, 1])
     def test_overall_equals_contribution_weighted_per_zone(self, zone_problem, flag):
@@ -1426,9 +1541,6 @@ class ZoneHeld:
 
     per_zone: np.ndarray
     overall: np.ndarray
-
-    def copy(self) -> ZoneHeld:
-        return ZoneHeld(self.per_zone.copy(), self.overall.copy())
 ```
 
 3. Add fields after `zone_target_weight`: `overall_target_vector: np.ndarray`,
@@ -1548,15 +1660,23 @@ In `solver.py` replace lines 169–173 with
             current_obj = cache.compute_full_zone_objective(assignment, held=held, blm=blm)
 ```
 
-and the two delta calls with
-`cache.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held=held, blm=blm)`,
-and the update with `cache.update_held(held, idx, old_zone, new_zone)`.
+and **both** delta calls with
+`cache.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held=held, blm=blm)`:
+the main-loop call and the temperature-estimation call at `src/pymarxan/zones/solver.py:183–185`
+(`delta = cache.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held_per_zone, blm)`
+inside the `deltas` sampling loop). Replace the update with
+`cache.update_held(held, idx, old_zone, new_zone)`.
 
 - [ ] **Step 6: Run the zones suite (incl. slow) and the parity harness**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones tests/test_examples.py -q`
 Expected: PASS. Confirm `grep -rn "compute_held_per_zone\|update_held_per_zone" src tests`
-returns nothing.
+returns nothing (solver.py was fixed in Step 5), and that
+`grep -rn "compute_full_zone_objective(\|compute_delta_zone_objective(" tests src | grep -v "held="`
+returns only the two `def` lines in `cache.py` and the opening line of solver.py's two
+multi-line delta calls (the 16-space-indented call does not fit in 99 columns; check that its
+continuation line carries `held=held, blm=blm`). Remaining `held_per_zone` hits are the
+private `_penalty_delta` / `_compute_zone_penalty` parameter names and prose.
 
 - [ ] **Step 7: Lint and commit**
 
@@ -1748,9 +1868,13 @@ def build_zone_solution(
     cost = compute_zone_cost(problem, assignment)
     std_boundary = compute_standard_boundary(problem, assignment)
     zone_boundary = compute_zone_boundary(problem, assignment)
-    overall_penalty = compute_overall_penalty(problem, assignment)
-    zone_penalty = compute_zone_penalty(problem, assignment)
-    zone_targets_met = check_zone_targets(problem, assignment)
+    # Each tier's achieved dict is computed once and passed through (plan review M5c);
+    # only the ``objective`` field below recomputes independently (review H3 identity test).
+    overall_achieved = compute_overall_achieved(problem, assignment)
+    zone_achieved = _compute_zone_achieved(problem, assignment)
+    overall_penalty = compute_overall_penalty(problem, assignment, achieved=overall_achieved)
+    zone_penalty = compute_zone_penalty(problem, assignment, zone_achieved=zone_achieved)
+    zone_targets_met = check_zone_targets(problem, assignment, zone_achieved=zone_achieved)
     metadata: dict[str, Any] = {
         "solver": solver_name,
         "zone_boundary_cost": round(zone_boundary, 4),
@@ -1767,11 +1891,11 @@ def build_zone_solution(
         cost=cost,
         boundary=std_boundary,
         objective=compute_zone_objective(problem, assignment, blm),
-        targets_met=check_overall_targets(problem, assignment),
+        targets_met=check_overall_targets(problem, assignment, achieved=overall_achieved),
         penalty=overall_penalty + zone_penalty,
         shortfall=(
-            compute_overall_shortfall(problem, assignment)
-            + compute_zone_shortfall(problem, assignment)
+            compute_overall_shortfall(problem, assignment, achieved=overall_achieved)
+            + compute_zone_shortfall(problem, assignment, zone_achieved=zone_achieved)
         ),
         zone_assignment=assignment.copy(),
         metadata=metadata,
@@ -1812,8 +1936,9 @@ fresh interpreter and checking `sys.modules`.)
 
 - [ ] **Step 5: Run the zones suite (incl. slow), the objectives tests and the parity harness**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones tests/pymarxan/objectives tests/test_examples.py tests/test_integration_phase3.py -q`
-Expected: PASS. `test_zone_mip_metadata.py` still finds `status`, `mip_backend` and the
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones tests/pymarxan/objectives tests/pymarxan/solvers/test_run_mode.py tests/test_examples.py tests/test_integration_phase3.py -q`
+Expected: PASS (`test_run_mode.py::TestZoneRunModePipeline` is the only out-of-package
+behaviour test of the builder and `improve`). `test_zone_mip_metadata.py` still finds `status`, `mip_backend` and the
 `z{z}_f{f}` keys; `test_zone_heuristic_ii.py::test_targets_met_populated` still sees a dict.
 
 - [ ] **Step 6: Lint, types, commit**
@@ -1841,7 +1966,7 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 - Create: `tests/pymarxan/zones/test_zone_mip_overall.py`
 
 **Interfaces:**
-- Consumes: `contribution_lookup()`, `contribution_default()` (Task 1); `_feature_groups` (Task 3); `build_zone_solution` (Task 5).
+- Consumes: `contribution_matrix()`, `zone_index()`, `feature_index()` (Task 1; the same convention as `_zone_achieved_exprs`, plan review M5b); `_feature_groups` (Task 3); `build_zone_solution` (Task 5).
 - Produces: `_add_overall_target_constraints(problem, x, zone_ids, model) -> None`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1953,14 +2078,17 @@ def _add_overall_target_constraints(
     zone_ids: list[int],
     model: pulp.LpProblem,
 ) -> None:
-    """Hard constraints Σ_i Σ_z amount[i, f] × contribution[f, z] × x[i, z] >= target_f × MISSLEVEL.
+    """Hard constraints Σ_i Σ_z amount[i, f] × contribution[f, z] × x[i, z] >= target × MISSLEVEL.
 
     Watts et al. 2009 eq. 6; MarZone ``reserve.hpp:158-171``. One constraint per feature with
     ``target > 0``; a feature with no amounts anywhere makes the model infeasible (the solver
     then returns ``[]``), which is the honest answer rather than a silently met target.
+    Contributions come from ``contribution_matrix()`` / ``zone_index()`` / ``feature_index()``
+    exactly as ``_zone_achieved_exprs`` does (one convention per module).
     """
-    lookup = problem.contribution_lookup()
-    default = problem.contribution_default()
+    contrib = problem.contribution_matrix()
+    zidx = problem.zone_index()
+    fidx = problem.feature_index()
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     groups = _feature_groups(problem)
     for fid, target in zip(
@@ -1970,10 +2098,11 @@ def _add_overall_target_constraints(
         t = float(target)
         if t <= 0:
             continue
+        col = fidx[fid]
         terms = []
         for pid, amt in groups.get(fid, []):
             for zid in zone_ids:
-                c = lookup.get((fid, zid), default)
+                c = float(contrib[zidx[zid], col])
                 if c != 0.0 and (pid, zid) in x:
                     terms.append(amt * c * x[(pid, zid)])
         model += (pulp.lpSum(terms) >= t * misslevel, f"overall_target_{fid}")
@@ -2081,8 +2210,9 @@ objective, so meeting the zone targets alone no longer ends the search)."
 
 - [ ] **Step 4: Run the tests**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_solvers_overall.py tests/pymarxan/zones/test_zone_heuristic_ii.py -q`
-Expected: PASS.
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_solvers_overall.py tests/pymarxan/zones/test_zone_heuristic_ii.py tests/pymarxan/solvers/test_run_mode.py -q`
+Expected: PASS (`test_run_mode.py::TestZoneRunModePipeline` runs the heuristic through
+RUNMODE on the zones fixture).
 
 - [ ] **Step 5: Lint and commit**
 
@@ -2109,6 +2239,37 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 **Interfaces:**
 - Consumes: Tasks 4, 5, 7. No production code change beyond a docstring; these tests pin
   behaviour that the earlier tasks produced.
+
+- [ ] **Step 0: Record the v0.35 SA result on the anchor (plan review L13)**
+
+`ZoneSASolver` at v0.35 was never run on the anchor in any document (MIP, greedy and II were:
+all return (2, 2, 2) at cost 3). Run it against the pre-Task-4 code from a throwaway worktree
+at the plan's base commit — no `git stash` on the working branch:
+
+```bash
+git worktree add /tmp/v035 5fa7f6a
+cp tests/pymarxan/zones/marzone_anchor.py /tmp/v035/tests/pymarxan/zones/
+cd /tmp/v035 && PYTHONPATH=/tmp/v035/src:/tmp/v035 /opt/micromamba/envs/shiny/bin/python - <<'PY'
+import pymarxan
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.zones.solver import ZoneSASolver
+from tests.pymarxan.zones.marzone_anchor import HEURISTIC_SPF, make_anchor_problem
+
+assert pymarxan.__file__.startswith("/tmp/v035/"), pymarxan.__file__   # not the editable install
+p = make_anchor_problem(spf=HEURISTIC_SPF)
+p.parameters["NUMITNS"] = 3000
+p.parameters["NUMTEMP"] = 100
+for s in ZoneSASolver().solve(p, SolverConfig(num_solutions=3, seed=42)):
+    print(tuple(int(z) for z in s.zone_assignment), s.cost, s.targets_met)
+PY
+cd /home/razinka/marxan && git worktree remove --force /tmp/v035
+```
+
+(`marzone_anchor.py` does not exist at `5fa7f6a` — Task 2 created it — hence the copy;
+`PYTHONPATH` puts the worktree's `src/` ahead of the editable install.) Record the three
+printed lines in the task report and in this task's commit message (Step 4). Task 13's
+VALIDATION sentence says "the MIP, greedy and iterative-improvement solvers"; extend it to
+"every solver" only if all three v0.35 SA runs also return (2, 2, 2) at cost 3.
 
 - [ ] **Step 1: Write the tests**
 
@@ -2178,6 +2339,11 @@ class TestSAOnAnchor:
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_solvers_overall.py -q`
 Expected: PASS. If `test_swap_pass_meets_both_tiers` ends elsewhere than (2, 2, 1), report the
 assignment and objective trace in the task report instead of changing the pin.
+If `min(cost) == 7` in `test_sa_reaches_the_optimum_with_both_tiers_met` fails, the sanctioned
+change is `num_solutions=5` or `NUMITNS` 10_000, never the pin; record the per-run best
+assignments in the task report. (The {1, 2}³ landscape is 7 / 8 / 9 / 33 / 118 at spf 10, so
+three seeded runs at 3000 iterations are expected to find 7; the pin was never executed at
+review time.)
 
 - [ ] **Step 3: Docstring**
 
@@ -2191,6 +2357,9 @@ In `iterative_improvement.py` add to the class docstring after the mode list:
 ~/.local/bin/ruff check src/pymarxan/zones/iterative_improvement.py tests/pymarxan/zones/test_zone_solvers_overall.py
 git add src/pymarxan/zones/iterative_improvement.py tests/pymarxan/zones/test_zone_solvers_overall.py
 git commit -m "test(zones): II (ITIMPTYPE 3 / 0) and SA on the MarZone anchor (#2)
+
+v0.35 ZoneSASolver on the anchor (Step 0, worktree at 5fa7f6a, seed 42, 3 runs):
+<paste the three printed lines here>
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
@@ -2221,7 +2390,7 @@ class TestZoneScoresApplyContributions:
         from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
         p = make_anchor_problem()
         amounts = p.build_pu_feature_matrix()
-        pu_index = p.pu_id_to_index()
+        pu_index = p.pu_id_to_index
         return p, amounts, pu_index
 
     def test_min_shortfall_zone_score_uses_contribution_weighted_amounts(self):
@@ -2257,8 +2426,8 @@ class TestZoneScoresApplyContributions:
 ```
 
 (`np` and `pytest` are imported at the top of that file; verify, and add `import numpy as np`
-at the top if not.) `pu_id_to_index` is a method on `ConservationProblem`
-(`models/problem.py:87`); if it is a property there, drop the parentheses.
+at the top if not.) `pu_id_to_index` is a property (`models/problem.py:86`);
+`build_pu_feature_matrix` at `problem.py:114` uses it the same way.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2267,22 +2436,51 @@ Expected: FAIL — min-shortfall score 0.0, max-coverage −15.0.
 
 - [ ] **Step 3: Implement**
 
-In both files replace the body of the static `_compute_zone_achieved` with:
+In `min_shortfall.py` replace the body of the static `_compute_zone_achieved` with:
 
 ```python
         """Contribution-weighted achieved amount per feature (MarZone reserve.hpp:158-171).
 
         Delegates to ``pymarxan.zones.objective.compute_overall_achieved`` with the caller's
         (possibly probability-adjusted) ``effective_amounts``; ``pu_index`` is kept for
-        interface symmetry with ``_compute_achieved``.
+        interface symmetry with ``_compute_achieved``. A plain ``ConservationProblem``
+        (no zones) falls back to the selected-PU accumulator.
         """
+        from pymarxan.zones.model import ZonalProblem
         from pymarxan.zones.objective import compute_overall_achieved
 
+        if not isinstance(problem, ZonalProblem):
+            return MinShortfallObjective._compute_achieved(
+                problem, assignment > 0, effective_amounts, pu_index,
+            )
         return compute_overall_achieved(problem, assignment, amounts=effective_amounts)
 ```
 
-(Local import: `objectives` must not import `zones` at module level — `zones.objective`
-imports `solvers.base`, and `objectives` is imported by `solvers.mip_solver`.)
+and in `max_coverage.py` with:
+
+```python
+        """Contribution-weighted achieved amount per feature (MarZone reserve.hpp:158-171).
+
+        Delegates to ``pymarxan.zones.objective.compute_overall_achieved`` with the caller's
+        (possibly probability-adjusted) ``effective_amounts``; ``pu_index`` is kept for
+        interface symmetry with ``_compute_achieved``. A plain ``ConservationProblem``
+        (no zones) falls back to the selected-PU accumulator.
+        """
+        from pymarxan.zones.model import ZonalProblem
+        from pymarxan.zones.objective import compute_overall_achieved
+
+        if not isinstance(problem, ZonalProblem):
+            return MaxCoverageObjective._compute_achieved(
+                problem, assignment > 0, effective_amounts, pu_index,
+            )
+        return compute_overall_achieved(problem, assignment, amounts=effective_amounts)
+```
+
+(Local import: it keeps `objectives` free of a `zones` dependency at import time; there is no
+cycle today — nothing under `pymarxan.solvers` imports `pymarxan.objectives` at module level.
+The `isinstance` guard preserves the old tolerance of a plain `ConservationProblem`, which the
+previous `getattr(problem, "zone_contributions", {})` gave for free; `contribution_matrix()`
+would otherwise raise `AttributeError`.)
 
 - [ ] **Step 4: Run the objectives tests**
 
@@ -2307,7 +2505,7 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 ### Task 10: `write_zone_summary` rewritten on the shared helpers
 
 **Files:**
-- Modify: `src/pymarxan/zones/writers.py:111-186`
+- Modify: `src/pymarxan/zones/writers.py:111-184`
 - Test: `tests/pymarxan/zones/test_writers.py` (replace the three tests that call `write_zone_summary`: the column/row-count test around line 255, `test_summary_times_met`, `test_summary_multiple_solutions`)
 
 **Interfaces:**
@@ -2318,9 +2516,12 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 
 - [ ] **Step 1: Replace the three existing summary tests with these (failing first)**
 
+Also delete `_make_zonal_problem` (`test_writers.py:93–125`): its only three callers (:253,
+:273, :288) are the tests being replaced, and the new tests load the fixture instead.
+
 ```python
 class TestWriteZoneSummary:
-    """Rows equal the objective module's numbers (review H5: the old writer matched neither tier)."""
+    """Rows equal the objective module's numbers (review H5: old writer matched neither tier)."""
 
     def _problem_and_solutions(self):
         problem = load_zone_project(DATA_DIR)
@@ -2403,9 +2604,10 @@ class TestWriteZoneSummary:
         assert row["mean_achieved"] == pytest.approx(18.0)   # PU1 10 + PU2 8, raw
 ```
 
-`pytest`, `pd`, `Path`, `DATA_DIR`, `_make_solution` and `load_zone_project` already exist in
-`test_writers.py` (check the import block; add `from pymarxan.zones.readers import
-load_zone_project` and `import pytest` at the top if absent).
+`pd`, `Path`, `DATA_DIR` and `_make_solution` already exist in `test_writers.py`; `pytest` and
+`load_zone_project` do not. Header edits: add `import pytest` after `import pandas as pd`, and
+add `load_zone_project` to the existing `from pymarxan.zones.readers import (…)` list (keep it
+sorted). Then `~/.local/bin/ruff check tests/pymarxan/zones/test_writers.py` before Step 2.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2538,38 +2740,41 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 ### Task 11: `zonetarget.dat` `targettype` column; `ZONETARGETCONTRIB` round trip
 
 **Files:**
-- Modify: `src/pymarxan/zones/readers.py` (`read_zone_targets`, new `resolve_zone_target_types`, `load_zone_project`)
+- Modify: `src/pymarxan/zones/readers.py` (`read_zone_targets`, new `resolve_zone_target_types`, `load_zone_project` — resolution + partial-table warning)
+- Modify: `src/pymarxan/zones/model.py` (`validate()` flags unresolved `targettype` rows)
 - Test: `tests/pymarxan/zones/test_readers.py`
 
 **Interfaces:**
 - Consumes: `write_zone_targets` (existing), `io.writers.write_input_dat` / `save_project`, `io.readers.read_input_dat`.
 - Produces: `read_zone_targets(path)` keeps an optional int `targettype` column (0/1 pass, 2/3
-  raise); `resolve_zone_target_types(zone_targets, pu_vs_features) -> pd.DataFrame` (type 1 →
-  target × feature total raw amount, row becomes type 0); `load_zone_project` applies it.
-  Rulings R1 and R2.
+  raise; `feature < 0` — MarZone's `-1` all-species wildcard — raises);
+  `resolve_zone_target_types(zone_targets, pu_vs_features) -> pd.DataFrame` (type 1 →
+  target × feature total raw amount, row becomes type 0); `load_zone_project` applies it and
+  warns once (`UserWarning`) when a supplied contribution table is partial (ruling R3);
+  `ZonalProblem.validate()` flags `zone_targets` rows whose `targettype != 0` is unresolved.
+  Rulings R1, R2 and R3.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/pymarxan/zones/test_readers.py` (it already imports `Path`, `pd`, `pytest`,
-`DATA_DIR`/`INPUT_DIR` — check the header and add any of these that are missing at the top):
+`test_readers.py` imports `Path`, `ZonalProblem` and the readers only (`DATA_DIR` / `INPUT_DIR`
+are module constants). Merge into its header — never mid-file (E402), and do not re-import
+`load_zone_project` / `read_zone_targets`, which are already there (F811):
+
+- add `import warnings` before `from pathlib import Path`, and `import pandas as pd` and
+  `import pytest` after it;
+- add `from pymarxan.io.readers import read_input_dat` and
+  `from pymarxan.io.writers import save_project, write_input_dat` above the existing
+  `pymarxan.zones` imports;
+- add `resolve_zone_target_types` to the existing `from pymarxan.zones.readers import (…)`
+  list (keep it sorted);
+- add, after the `pymarxan.zones.readers` import,
+  `from pymarxan.zones.writers import (write_zone_boundary_costs, write_zone_contributions,
+  write_zone_costs, write_zone_targets, write_zones)` (one name per line, sorted).
+
+Run `~/.local/bin/ruff check tests/pymarxan/zones/test_readers.py` before Step 2. Then append
+`_write_zonetarget`, the classes and `_copy_zone_project`:
 
 ```python
-from pymarxan.io.readers import read_input_dat
-from pymarxan.io.writers import save_project, write_input_dat
-from pymarxan.zones.readers import (
-    load_zone_project,
-    read_zone_targets,
-    resolve_zone_target_types,
-)
-from pymarxan.zones.writers import (
-    write_zone_boundary_costs,
-    write_zone_contributions,
-    write_zone_costs,
-    write_zone_targets,
-    write_zones,
-)
-
-
 def _write_zonetarget(tmp_path: Path, rows: str) -> Path:
     path = tmp_path / "zonetarget.dat"
     path.write_text("zone,feature,target,targettype\n" + rows)
@@ -2609,26 +2814,62 @@ class TestZoneTargetType:
     @pytest.mark.parametrize("ttype", [2, 3])
     def test_occurrence_types_are_rejected_naming_the_row(self, tmp_path: Path, ttype: int):
         path = _write_zonetarget(tmp_path, f"1,1,10.0,0\n2,1,4,{ttype}\n")
-        with pytest.raises(ValueError, match=r"row 2 .*zone 2.*feature 1.*targettype " + str(ttype)):
+        pattern = r"row 2 .*zone 2.*feature 1.*targettype " + str(ttype)
+        with pytest.raises(ValueError, match=pattern):
             read_zone_targets(path)
 
     def test_unknown_type_is_rejected(self, tmp_path: Path):
         with pytest.raises(ValueError, match="targettype 7"):
             read_zone_targets(_write_zonetarget(tmp_path, "1,1,10.0,7\n"))
 
+    def test_all_species_wildcard_is_rejected(self, tmp_path: Path):
+        """MarZone's speciesid = -1 (zones.hpp:127-138) would resolve to a phantom target 0."""
+        with pytest.raises(ValueError, match=r"row 1 has feature -1; MarZone's -1 'all species'"):
+            read_zone_targets(_write_zonetarget(tmp_path, "1,-1,10.0,0\n"))
+
     def test_load_zone_project_applies_resolution(self, tmp_path: Path):
-        _copy_zone_project(tmp_path)
+        _copy_zone_project(load_zone_project(DATA_DIR), tmp_path)
         (tmp_path / "input" / "zonetarget.dat").write_text(
             "zone,feature,target,targettype\n1,1,0.5,1\n2,2,3.0,0\n"
         )
         problem = load_zone_project(tmp_path)
         assert problem.zone_targets.loc[0, "target"] == pytest.approx(14.5)
 
+    def test_validate_flags_unresolved_targettype(self, tmp_path: Path):
+        """A frame straight from read_zone_targets (or built by hand) with targettype 1 would
+        otherwise use 0.5 as an absolute amount and be trivially met (plan review M6)."""
+        _copy_zone_project(load_zone_project(DATA_DIR), tmp_path)
+        zt_path = tmp_path / "input" / "zonetarget.dat"
+        zt_path.write_text("zone,feature,target,targettype\n1,1,0.5,1\n2,2,3.0,0\n")
+        raw = load_zone_project(DATA_DIR).copy_with(zone_targets=read_zone_targets(zt_path))
+        msgs = [e for e in raw.validate() if "targettype" in e]
+        assert len(msgs) == 1
+        assert "1 row(s)" in msgs[0] and "resolve_zone_target_types" in msgs[0]
+        assert load_zone_project(tmp_path).validate() == []
 
-def _copy_zone_project(dest: Path) -> None:
-    """Write the zones fixture into ``dest`` with the existing writers (ruling R1: there is no
-    save_zone_project yet)."""
-    problem = load_zone_project(DATA_DIR)
+
+class TestPartialContributionTableWarning:
+    def test_load_zone_project_warns_on_partial_contributions(self, tmp_path: Path):
+        """Ruling R3: gaps are advisory — one UserWarning from the loader, validate() silent."""
+        _copy_zone_project(load_zone_project(DATA_DIR), tmp_path)
+        (tmp_path / "input" / "zonecontrib.dat").write_text(
+            "feature,zone,contribution\n1,1,1.0\n"
+        )
+        with pytest.warns(UserWarning, match="3 unlisted"):
+            problem = load_zone_project(tmp_path)
+        assert problem.contribution_gaps() == [(1, 2), (2, 1), (2, 2)]
+        assert problem.validate() == []
+
+    def test_full_table_does_not_warn(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            problem = load_zone_project(DATA_DIR)      # fixture lists all four pairs
+        assert problem.contribution_gaps() == []
+
+
+def _copy_zone_project(problem: ZonalProblem, dest: Path) -> None:
+    """Write ``problem`` into ``dest`` with the existing writers (ruling R1: there is no
+    save_zone_project yet; this helper is its future body)."""
     save_project(problem, dest)                                   # base files + input.dat
     input_dir = dest / "input"
     write_zones(problem.zones, input_dir / "zones.dat")
@@ -2647,28 +2888,22 @@ class TestZoneTargetContribRoundTrip:
 
     def test_full_project_round_trip_keeps_the_parameter(self, tmp_path: Path):
         problem = load_zone_project(DATA_DIR)
-        problem.parameters["ZONETARGETCONTRIB"] = 1
-        save_project(problem, tmp_path)
-        input_dir = tmp_path / "input"
-        write_zones(problem.zones, input_dir / "zones.dat")
-        write_zone_costs(problem.zone_costs, input_dir / "zonecost.dat")
-        write_zone_contributions(problem.zone_contributions, input_dir / "zonecontrib.dat")
-        write_zone_targets(problem.zone_targets, input_dir / "zonetarget.dat")
-        write_zone_boundary_costs(problem.zone_boundary_costs, input_dir / "zoneboundcost.dat")
+        mutated = problem.copy_with(parameters={**problem.parameters, "ZONETARGETCONTRIB": 1})
+        _copy_zone_project(mutated, tmp_path)
         again = load_zone_project(tmp_path)
         assert again.zone_target_contrib() == 1
         assert again.validate() == []
 
     def test_out_of_domain_value_loads_but_fails_validation(self, tmp_path: Path):
-        _copy_zone_project(tmp_path)
+        _copy_zone_project(load_zone_project(DATA_DIR), tmp_path)
         text = (tmp_path / "input.dat").read_text()
         (tmp_path / "input.dat").write_text(text + "ZONETARGETCONTRIB 2\n")
         problem = load_zone_project(tmp_path)
         assert any("ZONETARGETCONTRIB" in e for e in problem.validate())
 ```
 
-(`test_full_project_round_trip_keeps_the_parameter` inlines the writer calls instead of using
-`_copy_zone_project` because it mutates `parameters` before saving.)
+`_copy_zone_project` is the only place the writer sequence is spelled out (plan review M7);
+every test that needs a directory passes the problem it wants written.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2677,7 +2912,8 @@ Expected: FAIL at import — `cannot import name 'resolve_zone_target_types'`.
 
 - [ ] **Step 3: Implement**
 
-In `readers.py`:
+In `readers.py` add `import warnings` to the stdlib imports (before `from pathlib import Path`)
+and:
 
 ```python
 _ZONE_TARGET_TYPES_SUPPORTED = {0, 1}
@@ -2695,6 +2931,12 @@ def read_zone_targets(path: str | Path) -> pd.DataFrame:
     df["zone"] = df["zone"].astype(int)
     df["feature"] = df["feature"].astype(int)
     df["target"] = df["target"].astype(float)
+    for pos, fid in enumerate(df["feature"].values, start=1):
+        if int(fid) < 0:
+            raise ValueError(
+                f"{path}: row {pos} has feature {int(fid)}; MarZone's -1 'all species' "
+                "wildcard (zones.hpp:127-138) is not supported"
+            )
     if "targettype" in df.columns:
         df["targettype"] = df["targettype"].fillna(0).astype(int)
         for pos, (zid, fid, ttype) in enumerate(
@@ -2724,6 +2966,8 @@ def resolve_zone_target_types(
     MarZone ``zones.hpp:149-150``. Resolved rows are rewritten as type 0 so that a
     write → read cycle does not multiply again (same idempotence contract as
     ``io.readers._resolve_prop_targets``). Frames without the column pass through.
+    The total is the feature's amount over every planning unit regardless of status
+    (MarZone ``pu.TotalSpeciesAmount``, ``pu.hpp:142-151``; locked-out PUs included).
     """
     if "targettype" not in zone_targets.columns:
         return zone_targets
@@ -2745,6 +2989,54 @@ and in `load_zone_project` replace `zone_targets = read_zone_targets(ztarget_pat
         )
 ```
 
+and replace its trailing `return ZonalProblem(...)` with a bound problem plus the one advisory
+warning (ruling R3; `project_dir` is the function's `Path` argument, `readers.py:45`):
+
+```python
+    problem = ZonalProblem(
+        planning_units=base.planning_units,
+        features=base.features,
+        pu_vs_features=base.pu_vs_features,
+        boundary=base.boundary,
+        parameters=base.parameters,
+        zones=zones,
+        zone_costs=zone_costs,
+        zone_contributions=zone_contributions,
+        zone_targets=zone_targets,
+        zone_boundary_costs=zone_boundary_costs,
+    )
+    gaps = problem.contribution_gaps()
+    total = len(problem.features) * len(problem.zone_ids)
+    if gaps:
+        warnings.warn(
+            f"{project_dir}: zonecontrib.dat lists {total - len(gaps)} of {total} "
+            f"(feature, zone) pairs; {len(gaps)} unlisted pair(s) default to 0.0 "
+            f"(MarZone zones.hpp:619); first: feature {gaps[0][0]}, zone {gaps[0][1]}",
+            stacklevel=2,
+        )
+    return problem
+```
+
+(Safe: `pyproject.toml` has no `filterwarnings`, and `tests/data/zones/input/zonecontrib.dat`
+lists all four pairs, so no existing test starts warning.)
+
+In `model.py` `validate()`, append before the `target2` block added in Task 1:
+
+```python
+        if self.zone_targets is not None and "targettype" in self.zone_targets.columns:
+            bad = self.zone_targets["targettype"].fillna(0).astype(int) != 0
+            if bad.any():
+                errors.append(
+                    f"zone_targets has {int(bad.sum())} row(s) with unresolved targettype "
+                    "!= 0; pass the frame through resolve_zone_target_types(zone_targets, "
+                    "pu_vs_features) or use load_zone_project"
+                )
+```
+
+(Every consumer of `zone_targets` — `_compute_zone_achieved`, `check_zone_targets`, the cache's
+`zone_target_matrix`, the MIP's `_zone_achieved_exprs`, the writers — reads `target` and
+ignores `targettype`, so an unresolved proportion row would be scored as an absolute amount.)
+
 - [ ] **Step 4: Run the reader and writer tests**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_readers.py tests/pymarxan/zones/test_writers.py -q`
@@ -2754,12 +3046,14 @@ survives the write).
 - [ ] **Step 5: Lint and commit**
 
 ```bash
-~/.local/bin/ruff check src/pymarxan/zones/readers.py tests/pymarxan/zones/test_readers.py
-git add src/pymarxan/zones/readers.py tests/pymarxan/zones/test_readers.py
+~/.local/bin/ruff check src/pymarxan/zones/readers.py src/pymarxan/zones/model.py tests/pymarxan/zones/test_readers.py
+git add src/pymarxan/zones/readers.py src/pymarxan/zones/model.py tests/pymarxan/zones/test_readers.py
 git commit -m "feat(zones): read zonetarget.dat targettype (0/1), reject occurrence types 2/3 (#2)
 
 Type 1 resolves to a fraction of the feature's total raw amount in load_zone_project
-(zones.hpp:149-150) and is rewritten as type 0 so a save/load cycle is idempotent.
+(zones.hpp:149-150) and is rewritten as type 0 so a save/load cycle is idempotent;
+validate() flags unresolved rows. MarZone's speciesid = -1 wildcard is rejected.
+load_zone_project warns once when zonecontrib.dat is partial (ruling R3).
 ZONETARGETCONTRIB round-trips through input.dat as an int.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -2782,12 +3076,15 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 - [ ] **Step 1: Write the accumulation cross-check**
 
 ```python
-"""Cross-check against a reimplementation of MarZone reserve.hpp:148-182 on tests/data/zones.
+"""Cross-check against a reimplementation of MarZone reserve.hpp:148-182 (master@85082e3).
 
-MarZone accumulates two arrays per reserve: zoneSpec[(zone, species)] += raw amount (:164) and
-speciesAmounts[species] += amount × GetZoneContrib(species, zone) (:170). Contributions come
-from zones.hpp:619 (0 for an unlisted pair when a contribution file is supplied). PUs in
-pymarxan's zone 0 are skipped by construction (MarZone has no unassigned state; spec §8).
+Runs on tests/data/zones. MarZone accumulates two arrays per reserve: zoneSpec[(zone, species)]
++= raw amount (:164) and speciesAmounts[species] += amount × GetZoneContrib(species, zone)
+(:170). Contributions come from zones.hpp:619 (0 for an unlisted pair when a contribution file
+is supplied). Only the ``zonecontrib.dat`` dialect (species × zone, ``zones.hpp:621-627``) is
+mirrored; ``zonecontrib2.dat`` (per zone, all species, ``:629-638``) and ``zonecontrib3.dat``
+(per PU, ``:639-647``, ``GetZoneContrib`` at ``:169-176``) are not read. PUs in pymarxan's
+zone 0 are skipped by construction (MarZone has no unassigned state; spec §8).
 """
 from __future__ import annotations
 
@@ -2877,7 +3174,8 @@ def test_cache_held_matches_both_marzone_arrays(problem, assignment):
 Comparative, not absolute: under default contributions the contrib_differs gate must make
 every zone-to-zone move skip the overall term, so populated overall targets may cost at most
 5 % more per flip than zeroed ones. Absolute budgets are machine-relative and live in
-bench_zone_sa.py.
+bench_zone_sa.py. The zone-target weight multiply (Task 3's ``zone_target_weight`` in
+``_penalty_delta``) is unmeasured by design: n_feat-length, paid in both arms.
 """
 from __future__ import annotations
 
@@ -2971,11 +3269,20 @@ Run:
 grep -rn "contrib_lookup\|zone_contributions.get\|zone_contributions\[" src/pymarxan --include=*.py
 grep -rn "get_contribution(" src/pymarxan --include=*.py
 ```
-Expected: the first returns only `zones/model.py` (`contribution_lookup`) and
-`zones/model.py::validate`; the second returns only the definition in `zones/model.py`. Any
-other hit is a contribution site the earlier tasks missed — route it through
-`contribution_lookup()` / `contribution_matrix()` in this task and add a one-line test in
-`test_marzone_accumulation.py` that exercises it.
+Expected: the first grep returns no matches (`contrib_lookup` is not a substring of
+`contribution_lookup`; `zone_contributions.get` is gone after Task 9; `contribution_lookup`
+reads through the alias `zc = self.zone_contributions` and `validate()` touches only
+`.columns`); the second (`get_contribution(`) returns only the definition in
+`zones/model.py`. Sanctioned-callers check:
+
+```bash
+grep -rn "contribution_lookup(\|contribution_matrix(" src/pymarxan
+```
+
+hits only `zones/model.py`, `zones/objective.py`, `zones/cache.py`, `zones/mip_solver.py`,
+`zones/writers.py`. Any other hit is a contribution site the earlier tasks missed — route it
+through `contribution_lookup()` / `contribution_matrix()` in this task and add a one-line test
+in `test_marzone_accumulation.py` that exercises it.
 
 - [ ] **Step 5: Lint and commit**
 
@@ -2996,6 +3303,7 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 - Modify: `src/pymarxan/zones/__init__.py`, `tests/pymarxan/zones/test_package_exports.py`
 - Modify: `docs/VALIDATION.md` (new subsection before "## Comparing against the Marxan C++ binary"; reference added)
 - Modify: `CHANGELOG.md` (`## [Unreleased]`)
+- Modify: `docs/plans/2026-09-28-marzone-overall-targets-design.md` (lines 59, 245, 251 — Step 4a)
 
 **Interfaces:**
 - Produces: `pymarxan.zones` re-exports `ZoneHeld`, `build_zone_solution`, `check_overall_targets`,
@@ -3043,34 +3351,51 @@ zone target of 10 in zone 2. Enumerating all 27 assignments gives a unique
 feasible optimum **(1, 2, 2) at cost 7** (runner-up 8). `ZoneMIPSolver` must
 return it; the SA, greedy and iterative-improvement zone solvers must meet both
 tiers at cost ≥ 7 (the heuristic tier of the anchor uses SPF 10, because at SPF 1
-the penalised minimum is the infeasible (2, 2, 2) at 6.0). Before v0.36 every
-solver returned (2, 2, 2) at cost 3 with the overall target reported as met.
+the penalised minimum is the infeasible (2, 2, 2) at 6.0). Before v0.36 the MIP,
+greedy and iterative-improvement solvers returned (2, 2, 2) at cost 3 with the
+overall target reported as met.
 
 The semantics follow the MarZone C++ source
-(https://github.com/Marxan-source-code/marzone): overall feature targets on
+(https://github.com/Marxan-source-code/marzone, branch `master`, commit `85082e3`;
+line numbers refer to that commit): overall feature targets on
 contribution-weighted amounts summed over zones (`reserve.hpp:158-171`; Watts et
 al. 2009 eq. 6); zone targets on raw amounts (`reserve.hpp:164`; eq. 7); unlisted
 contribution pairs default to 0 when a contribution file is supplied and to 1
-without one (`zones.hpp:619-627`, `:651-668`). A reimplementation of the
+without one (`zones.hpp:619-627`, `:651-668`). Only the `zonecontrib.dat` dialect
+(species × zone, `zones.hpp:621-627`) is mirrored; `zonecontrib2.dat` (per zone,
+all species, `:629-638`) and `zonecontrib3.dat` (per planning unit, `:639-647`,
+`GetZoneContrib` at `:169-176`) are not read. A reimplementation of the
 accumulation loop is cross-checked against pymarxan on the zones fixture
 (`tests/pymarxan/zones/test_marzone_accumulation.py`).
 
 Three named deviations, all deliberate:
 
-- **MISSLEVEL.** pymarxan scales the met test, the penalty and the MIP constraint
-  of both tiers by MISSLEVEL; MarZone applies it only when counting missing
-  features (`CountMissing`, `reserve.hpp:193-275`).
+- **MISSLEVEL.** The met test is identical (MarZone's `CountMissing`,
+  `reserve.hpp:193-275`, flags a feature when `amount/target < MISSLEVEL`). pymarxan
+  additionally scales the penalty and the MIP constraint of both tiers by MISSLEVEL;
+  MarZone's penalty (`:816-872`) and delta (`:350-563`) use the raw target.
 - **Penalty form.** pymarxan penalises `SPF × absolute shortfall` per tier; MarZone
-  uses `SPF × penalty_f × Σ(shortfall / target)` with a greedy cost-to-meet baseline
-  (`reserve.hpp:751-775`, `:816-872`). The two agree on feasibility, not on the
-  penalised value of infeasible assignments.
-- **Unassigned versus the "available" zone.** MarZone has no unassigned state; its
-  reduction to classic Marxan holds only when the available zone has zero cost,
-  zero contribution for every feature, no zone targets and matching boundary
-  treatment (Watts et al. 2009). pymarxan's zone 0 satisfies the first three by
-  construction, so a MarZone project that lists such an available zone reproduces;
-  one **without** a contribution file (available zone contributing 1) does not.
+  uses `SPF × penalty_f × Σ(shortfall / target)` (`reserve.hpp:816-872`, delta
+  `:524`) where `penalty_f` is a per-feature baseline computed once in
+  `marzone.cpp:733-832` (`CalcPenalties`): the cost of the cheapest planning units
+  (raw amounts, no contributions) needed to reach `max(target_f, Σ_k zone_target_fk)`,
+  scaled up when unreachable; `reserve.hpp:298-345` handles target2 features. The two
+  agree on feasibility, not on the penalised value of infeasible assignments.
+  (`reserve.hpp:750-777` `GreedyPen` is the greedy heuristic's move score, not this
+  baseline.)
+- **Unassigned versus the "available" zone.** MarZone has no unassigned state.
+  Watts et al. (2009) state that Marxan with Zones reduces to Marxan under three
+  conditions: two zones, the unreserved zone contributing 0 and the reserved zone 1
+  for every feature; the unreserved zone costing 0 in every planning unit; and no
+  zone-specific targets. A fourth, implicit condition — the zone connectivity matrix
+  must reduce to Marxan's boundary term — is pymarxan's own statement. pymarxan's
+  zone 0 satisfies the first three by construction, so a MarZone project that lists
+  such an available zone reproduces; one **without** a contribution file (available
+  zone contributing 1, `zones.hpp:658-662`) does not.
 ```
+
+(If Task 8 Step 0 recorded v0.35 `ZoneSASolver` at (2, 2, 2) / cost 3 on all three runs, the
+first paragraph's "the MIP, greedy and iterative-improvement solvers" becomes "every solver".)
 
 Add to `## References`:
 
@@ -3093,8 +3418,12 @@ Add to `## References`:
   `ZONETARGETCONTRIB 1` to restore v0.35 zone-target behaviour.** Both follow the
   Marxan with Zones source (`reserve.hpp:164`, `zones.hpp:619`). Projects whose
   `zonecontrib.dat` lists every (feature, zone) pair and that never paired
-  contributions with zone targets are unaffected. `ZonalProblem.validate()` now
-  reports partially listed contribution tables in one summary line. (#2)
+  contributions with zone targets are unaffected. `ZonalProblem.contribution_gaps()`
+  lists unlisted contribution pairs; `load_zone_project` warns once when a supplied
+  table is partial (they default to 0.0). ROWER_pymarxan_DST (issue #2 originator)
+  verified unaffected: full contribution tables, contribution 1.0 on every
+  zone-targeted pair, `features.target = 0`; its `evaluation.py:119` disagreement
+  guard is the canary. (#2)
 - All four zone solvers (`ZoneMIPSolver`, `ZoneSASolver`, `ZoneHeuristicSolver`,
   `ZoneIISolver`) build their `Solution` through one shared
   `pymarxan.zones.build_zone_solution`: `targets_met` is feature-keyed and reports
@@ -3124,7 +3453,7 @@ Add to `## References`:
   `check_overall_targets`, `compute_overall_shortfalls`, `compute_zone_shortfalls`
   (issue #6, part 1), all exported from `pymarxan.zones`. Hand-verified anchor and a
   `reserve.hpp` accumulation cross-check documented in `docs/VALIDATION.md` §4. (#2)
-- `ZonalProblem.contribution_lookup()`, `contribution_matrix()`,
+- `ZonalProblem.contribution_lookup()`, `contribution_matrix()`, `contribution_gaps()`,
   `zone_target_weight_matrix()`, `zone_index()`, `feature_index()` — the single
   contribution source for the objective, MIP, cache, writers and the `objectives`
   zone methods (which previously keyed the lookup backwards and used 1.0).
@@ -3132,16 +3461,86 @@ Add to `## References`:
   feature's total raw amount (resolved in `load_zone_project`, rewritten as 0 so a
   save/load cycle is idempotent), 2/3 (occurrence targets) rejected naming the row.
 - `ZonalProblem.validate()` rejects `ZONETARGETCONTRIB` outside {0, 1}, `target2 > 0`
-  in zone problems, and contribution rows naming unknown zones or features.
+  in zone problems, contribution rows naming unknown zones or features (up to five
+  enumerated), and `zone_targets` rows with an unresolved `targettype != 0`.
+  `read_zone_targets` rejects MarZone's `speciesid = -1` all-species wildcard.
 - Comparative per-flip bench (`bench` marker): the overall term is gated by
   `contrib_differs[old, new]` (`reserve.hpp:393`), so under default contributions it
   costs ≤ 5 % per flip.
 
 ### Not included (follow-ons)
-- `save_zone_project` (the symmetric partner of `load_zone_project`); occurrence
-  targets and `zonetarget2.dat`; MarZone's proportional penalty form; `target2` in
-  zone problems; lock-into-a-named-zone (#6 part 2).
+- `save_zone_project` (the symmetric partner of `load_zone_project`; its body is
+  `tests/pymarxan/zones/test_readers.py::_copy_zone_project`); occurrence targets and
+  `zonetarget2.dat`; the `zonecontrib2.dat` / `zonecontrib3.dat` contribution dialects;
+  MarZone's proportional penalty form; `target2` in zone problems;
+  lock-into-a-named-zone (#6 part 2); single-pass DataFrame accumulation of both
+  tiers (heuristic/II candidate evaluation now runs two puvspr passes; the cache is
+  the fast path).
 ```
+
+- [ ] **Step 4a: Patch the design spec so plan, spec and VALIDATION.md agree**
+
+Three exact replacements in `docs/plans/2026-09-28-marzone-overall-targets-design.md`
+(plan review M1, H5, H6). Line 59, old:
+
+```markdown
+supplied** (MarZone `zones.hpp:619` / `:651`). `validate()` lists unlisted pairs so a partial
+table is visible.
+```
+
+new:
+
+```markdown
+supplied** (MarZone `zones.hpp:619` / `:651`). `contribution_gaps()` lists unlisted pairs and
+the loader warns, so a partial table is visible; `validate()` does not report them (advisory,
+plan review M1).
+```
+
+Line 245, old:
+
+```markdown
+- MarZone's penalty form: `spf × penalty_f × Σ(shortfall / target)` with the greedy
+  cost-to-meet baseline (`reserve.hpp:751-775`, `:816-872`); `compute_baseline_penalty` already
+  exists as the building block.
+```
+
+new:
+
+```markdown
+- MarZone's penalty form: `spf × penalty_f × Σ(shortfall / target)` (`reserve.hpp:816-872`,
+  delta `:524`) with the per-feature baseline `penalty_f` computed once in
+  `marzone.cpp:733-832` (`CalcPenalties`: the cheapest planning units on raw amounts needed to
+  reach `max(target_f, Σ_k zone_target_fk)`, scaled up when unreachable);
+  `compute_baseline_penalty` already exists as the building block. (`reserve.hpp:750-777`
+  `GreedyPen` is the greedy heuristic's move score, not this baseline.)
+```
+
+Line 251, old:
+
+```markdown
+- **Unassigned versus MarZone's "available" zone.** MarZone has no unassigned state; Watts'
+  reduction to Marxan holds only when the available zone has zero cost, zero contribution for
+  every feature, no zone targets and matching boundary treatment. pymarxan's zone 0 satisfies
+  the first three by construction, so a project that lists an explicit available zone with
+  those properties reproduces; a MarZone project **without** a contribution file (available
+  zone contributing 1) does not. Named deviation in VALIDATION.md.
+```
+
+new:
+
+```markdown
+- **Unassigned versus MarZone's "available" zone.** MarZone has no unassigned state. Watts et
+  al. (2009) state that Marxan with Zones reduces to Marxan under three conditions: two zones,
+  the unreserved zone contributing 0 and the reserved zone 1 for every feature; the unreserved
+  zone costing 0 in every planning unit; and no zone-specific targets. A fourth, implicit
+  condition — the zone connectivity matrix must reduce to Marxan's boundary term — is
+  pymarxan's own statement. pymarxan's zone 0 satisfies the first three by construction, so a
+  MarZone project that lists such an available zone reproduces; one **without** a contribution
+  file (available zone contributing 1, `zones.hpp:658-662`) does not. Named deviation in
+  VALIDATION.md.
+```
+
+Spec §2's table cell at line 47 (`marzone.cpp` baseline) is already correct and stays.
 
 - [ ] **Step 5: Full gate**
 
@@ -3156,8 +3555,8 @@ prints 35.0 / 43.0 / 45.0. If `test_solutions_are_different` alone fails, rerun 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pymarxan/zones/__init__.py tests/pymarxan/zones/test_package_exports.py docs/VALIDATION.md CHANGELOG.md
-git commit -m "docs(zones): VALIDATION §4 MarZone two-tier anchor + deviations; CHANGELOG for 0.36.0; zones re-exports (#2)
+git add src/pymarxan/zones/__init__.py tests/pymarxan/zones/test_package_exports.py docs/VALIDATION.md CHANGELOG.md docs/plans/2026-09-28-marzone-overall-targets-design.md
+git commit -m "docs(zones): VALIDATION §4 MarZone two-tier anchor + deviations; CHANGELOG for 0.36.0; zones re-exports; spec citations patched (#2)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
@@ -3167,22 +3566,40 @@ Claude-Session: https://claude.ai/code/session_01X8aGAi384D5xybKRugtFXT"
 
 ## Self-review record
 
-- **Spec coverage.** §3.1 → Task 1; §3.2 → Tasks 2, 4, 6; §3.3 → Tasks 3, 11; §3.4 → Tasks 2, 4
-  (MISSLEVEL tests), 13 (doc); §3.5 → Task 5; §4.1 → 1; §4.2 → 2, 3, 4, 5; §4.3 → 3, 6; §4.4 →
-  3, 4; §4.5 → 4, 5, 7, 8; §4.6 → 10; §4.7 → 11; §4.8 → 13; §5 → 2 (module + oracle), 4
+- **Spec coverage.** §3.1 → Task 1 (+ Task 11 loader warning, ruling R3); §3.2 → Tasks 2, 4, 6;
+  §3.3 → Tasks 3, 11; §3.4 → Tasks 2, 4 (MISSLEVEL tests), 13 (doc); §3.5 → Task 5; §4.1 → 1,
+  11 (`targettype` validation); §4.2 → 2, 3, 4, 5; §4.3 → 3, 6; §4.4 →
+  3, 4; §4.5 → 4, 5, 7, 8; §4.6 → 10; §4.7 → 11; §4.8 → 13 (+ Step 4a spec patches); §5 → 2 (module + oracle), 4
   (cache vs oracle), 6, 7, 8; §6 test list → every bullet has a task (bench → 12; parity
   harness → 13; re-pins → 3 with old/new values in the commit message).
 - **Placeholders.** None: every step carries code or an exact command; no task defers to
   another task's text for its own code.
 - **Type consistency.** `build_zone_solution(problem, zone_assignment, blm, *, solver_name,
   run=None)` used identically in Tasks 5–8; `compute_held` / `update_held` /
-  `held=` / `blm=` identical in Tasks 4, 8, 12; `contribution_lookup()` keyed
-  `(feature, zone)` everywhere; `zone_index()` / `feature_index()` used by objective (2, 3),
-  cache (3), MIP (3), writers (10); `_feature_groups` defined in Task 3 and used in Task 6.
-- **Review Focus.** All five lines have a pinned test in their owning task (1 → Task 1
+  `held=` / `blm=` identical in Tasks 4, 8, 12 (Task 3's four positional calls are swept in
+  Task 4 Step 1); the kw-only `achieved: dict[int, float] | None` /
+  `zone_achieved: dict[tuple[int, int], float] | None` defined in Task 2 and passed through
+  by Task 5's builder; `contribution_lookup()` keyed `(feature, zone)` everywhere;
+  `contribution_matrix()` / `zone_index()` / `feature_index()` used by objective (2, 3),
+  cache (3), MIP (3, 6), writers (10); `contribution_gaps()` defined in Task 1, consumed by
+  Task 11's loader; `_feature_arrays` defined in Task 2 and reused by cache and MIP (3);
+  `_feature_groups` defined in Task 3 and used in Task 6; `_copy_zone_project(problem, dest)`
+  is the only writer sequence in Task 11.
+- **Review Focus.** All seven lines have a pinned test in their owning task (1 → Task 1
   `test_zone_target_contrib_rejects_out_of_domain` + Task 3 `test_cache_rejects_out_of_domain_flag`;
   2 → Task 11 `test_resolution_is_idempotent_across_write_and_read`; 3 → Task 6
   `test_feature_with_target_but_no_amounts_is_infeasible` + Task 7
   `test_feature_without_amounts_is_penalised_not_fatal`; 4 → Task 1
-  `test_validate_reports_unknown_contribution_pair`; 5 → Task 2
-  `test_spf_column_absent_defaults_to_one` + Task 4 same name in the cache tests).
+  `test_validate_reports_unknown_contribution_pair` (both bad rows named); 5 → Task 2
+  `test_spf_column_absent_defaults_to_one` + Task 4 same name in the cache tests; 6 → Task 11
+  `test_validate_flags_unresolved_targettype`; 7 → Task 11
+  `test_all_species_wildcard_is_rejected`).
+- **Header imports.** Every test file the plan touches has a definitive header instruction
+  (Tasks 1, 3, 4, 10, 11) followed by a `ruff check` before the red run; no code block starts
+  with an import that would land mid-file.
+- **Review absorbed:** plan-review synthesis 2026-09-28 (H1–H6, M1–M9, L1–L16), see
+  `docs/plans/2026-09-28-marzone-overall-targets-plan-review.md`. Not applied verbatim:
+  M1's `contribution_gaps` re-export (it is a method on `ZonalProblem`, which is already
+  exported; there is no module-level symbol to re-export) and M4's Task 3 keyword rewrite
+  (Task 3's cache still takes `held_per_zone` positionally, so the four calls are listed in
+  Task 4's sweep table instead, as the review itself resolves).
