@@ -203,22 +203,18 @@ class MinShortfallObjective(ZonalObjective):
         effective_amounts: np.ndarray,
         pu_index: dict[int, int],
     ) -> dict[int, float]:
-        feat_ids = list(problem.features["id"])
-        achieved: dict[int, float] = {int(f): 0.0 for f in feat_ids}
-        puvspr = problem.pu_vs_features
-        zone_contributions = getattr(problem, "zone_contributions", {})
-        for _, row in puvspr.iterrows():
-            pid = int(row["pu"])
-            fid = int(row["species"])
-            idx = pu_index.get(pid)
-            if idx is not None:
-                z = int(assignment[idx])
-                if z > 0:
-                    fidx = feat_ids.index(fid)
-                    contrib = float(
-                        zone_contributions.get((z, fid), 1.0),
-                    )
-                    achieved[fid] += (
-                        float(effective_amounts[idx, fidx]) * contrib
-                    )
-        return achieved
+        """Contribution-weighted achieved amount per feature (MarZone reserve.hpp:158-171).
+
+        Delegates to ``pymarxan.zones.objective.compute_overall_achieved`` with the caller's
+        (possibly probability-adjusted) ``effective_amounts``; ``pu_index`` is kept for
+        interface symmetry with ``_compute_achieved``. A plain ``ConservationProblem``
+        (no zones) falls back to the selected-PU accumulator.
+        """
+        from pymarxan.zones.model import ZonalProblem
+        from pymarxan.zones.objective import compute_overall_achieved
+
+        if not isinstance(problem, ZonalProblem):
+            return MinShortfallObjective._compute_achieved(
+                problem, assignment > 0, effective_amounts, pu_index,
+            )
+        return compute_overall_achieved(problem, assignment, amounts=effective_amounts)

@@ -247,3 +247,45 @@ class TestObjectiveABC:
         obj = MinSetObjective()
         result = obj.init_state(None, np.array([True]), None)  # type: ignore[arg-type]
         assert result is None
+
+
+class TestZoneScoresApplyContributions:
+    """Review M4: the objectives' zone achieved keyed the lookup backwards and used 1.0."""
+
+    def _anchor(self):
+        from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
+        p = make_anchor_problem()
+        amounts = p.build_pu_feature_matrix()
+        pu_index = p.pu_id_to_index
+        return p, amounts, pu_index
+
+    def test_min_shortfall_zone_score_uses_contribution_weighted_amounts(self):
+        from pymarxan.objectives.min_shortfall import MinShortfallObjective
+        p, amounts, pu_index = self._anchor()
+        # (2, 2, 2): A_f = 12 < 15 -> shortfall 3 (was 0: 30 raw)
+        score = MinShortfallObjective().compute_zone_score(
+            p, np.array([2, 2, 2]), amounts, pu_index,
+        )
+        assert score == pytest.approx(3.0)
+
+    def test_max_coverage_zone_score_uses_contribution_weighted_amounts(self):
+        from pymarxan.objectives.max_coverage import MaxCoverageObjective
+        p, amounts, pu_index = self._anchor()
+        # coverage min(A_f, target) = min(12, 15) = 12, negated
+        score = MaxCoverageObjective().compute_zone_score(
+            p, np.array([2, 2, 2]), amounts, pu_index,
+        )
+        assert score == pytest.approx(-12.0)
+
+    def test_effective_amounts_are_honoured(self):
+        from pymarxan.objectives.min_shortfall import MinShortfallObjective
+        p, amounts, pu_index = self._anchor()
+        halved = amounts * 0.5   # e.g. probability-adjusted
+        score = MinShortfallObjective().compute_zone_score(
+            p, np.array([1, 1, 1]), halved, pu_index,
+        )
+        assert score == pytest.approx(0.0)      # 15 >= 15
+        score = MinShortfallObjective().compute_zone_score(
+            p, np.array([1, 1, 0]), halved, pu_index,
+        )
+        assert score == pytest.approx(5.0)      # 10 < 15
