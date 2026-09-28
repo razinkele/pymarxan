@@ -150,3 +150,41 @@ class TestZoneObjectiveIncludesBothTiers:
         p = make_anchor_problem(spf=1.0)
         assert compute_zone_objective(p, np.array([2, 2, 2]), 0.0) == pytest.approx(6.0)
         assert check_overall_targets(p, np.array([2, 2, 2])) == {1: False}
+
+
+class TestBuildZoneSolution:
+    def test_fields_on_anchor(self):
+        from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
+        p = make_anchor_problem(spf=10.0)
+        sol = build_zone_solution(p, np.array([2, 2, 2]), 0.0, solver_name="test", run=3)
+        assert sol.cost == 3.0
+        assert sol.objective == compute_zone_objective(p, np.array([2, 2, 2]), 0.0)
+        assert sol.objective == pytest.approx(33.0)
+        assert sol.targets_met == {1: False}
+        assert sol.all_targets_met is False
+        assert sol.penalty == pytest.approx(30.0)
+        assert sol.shortfall == pytest.approx(3.0)
+        assert sol.metadata["zone_targets_met"] == {"z2_f1": True}
+        assert sol.metadata["overall_penalty"] == pytest.approx(30.0)
+        assert sol.metadata["zone_penalty"] == 0.0
+        assert sol.metadata["solver"] == "test"
+        assert sol.metadata["run"] == 3
+        assert sol.metadata["zone_boundary_cost"] == 0.0
+        np.testing.assert_array_equal(sol.selected, [True, True, True])
+        np.testing.assert_array_equal(sol.zone_assignment, [2, 2, 2])
+
+    def test_run_omitted_when_none(self):
+        from pymarxan.zones.objective import build_zone_solution
+        p = make_anchor_problem()
+        sol = build_zone_solution(p, np.array(OPTIMUM), 0.0, solver_name="test")
+        assert "run" not in sol.metadata
+        assert sol.penalty == 0.0 and sol.shortfall == 0.0
+
+    def test_assignment_is_copied(self):
+        from pymarxan.zones.objective import build_zone_solution
+        p = make_anchor_problem()
+        a = np.array(OPTIMUM)
+        sol = build_zone_solution(p, a, 0.0, solver_name="test")
+        a[0] = 0
+        assert sol.zone_assignment is not None
+        assert int(sol.zone_assignment[0]) == 1

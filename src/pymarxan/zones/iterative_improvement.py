@@ -7,15 +7,7 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
-from pymarxan.zones.objective import (
-    check_zone_targets,
-    compute_standard_boundary,
-    compute_zone_boundary,
-    compute_zone_cost,
-    compute_zone_objective,
-    compute_zone_penalty,
-    compute_zone_shortfall,
-)
+from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
 
 
 class ZoneIISolver(Solver):
@@ -73,7 +65,9 @@ class ZoneIISolver(Solver):
                 problem, assignment, swappable, zone_ids_list, blm, itimptype,
             )
             solutions.append(
-                self._build_zone_solution(problem, assignment, blm, run_idx),
+                build_zone_solution(
+                    problem, assignment, blm, solver_name=self.name(), run=run_idx + 1,
+                ),
             )
         return solutions
 
@@ -101,7 +95,7 @@ class ZoneIISolver(Solver):
         assignment = self._improve(
             problem, assignment, swappable, zone_ids_list, blm, itimptype,
         )
-        return self._build_zone_solution(problem, assignment, blm, 0)
+        return build_zone_solution(problem, assignment, blm, solver_name=self.name(), run=1)
 
     def _improve(
         self,
@@ -244,34 +238,3 @@ class ZoneIISolver(Solver):
                 elif s == 3:
                     locked[idx] = 0
         return locked
-
-    @staticmethod
-    def _build_zone_solution(
-        problem: ZonalProblem,
-        assignment: np.ndarray,
-        blm: float,
-        run_idx: int,
-    ) -> Solution:
-        selected = assignment > 0
-        cost = compute_zone_cost(problem, assignment)
-        std_boundary = compute_standard_boundary(problem, assignment)
-        zone_boundary = compute_zone_boundary(problem, assignment)
-        zone_targets = check_zone_targets(problem, assignment)
-        zone_penalty = compute_zone_penalty(problem, assignment)
-        zone_shortfall = compute_zone_shortfall(problem, assignment)
-        obj = cost + blm * std_boundary + zone_boundary + zone_penalty
-        return Solution(
-            selected=selected,
-            cost=cost,
-            boundary=std_boundary,
-            objective=obj,
-            targets_met=zone_targets,
-            penalty=zone_penalty,
-            shortfall=zone_shortfall,
-            zone_assignment=assignment.copy(),
-            metadata={
-                "solver": "Zone II (Python)",
-                "run": run_idx + 1,
-                "zone_boundary_cost": round(zone_boundary, 4),
-            },
-        )

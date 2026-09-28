@@ -12,15 +12,7 @@ from pymarxan.models.problem import (
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
-from pymarxan.zones.objective import (
-    _feature_arrays,
-    check_zone_targets,
-    compute_standard_boundary,
-    compute_zone_cost,
-    compute_zone_objective,
-    compute_zone_penalty,
-    compute_zone_shortfall,
-)
+from pymarxan.zones.objective import _feature_arrays, build_zone_solution
 
 
 class ZoneMIPSolver(Solver):
@@ -220,12 +212,11 @@ class ZoneMIPSolver(Solver):
                     zone_assignment[k] = zid
                     break
 
-        sol = _build_zone_solution(problem, zone_assignment, blm)
-        # Merge, don't replace: _build_zone_solution already recorded zone_targets_met
+        sol = build_zone_solution(problem, zone_assignment, blm, solver_name=self.name())
+        # Merge, don't replace: build_zone_solution already recorded zone_targets_met
         # (issue #1: the old assignment silently discarded it).
         sol.metadata.update(
             {
-                "solver": self.name(),
                 "status": pulp.LpStatus[model.status],
                 "mip_backend": resolved_backend,
             }
@@ -435,44 +426,3 @@ def _add_zone_target_constraints(
     ):
         zid, fid = int(zid), int(fid)
         model += (exprs[(zid, fid)] >= float(target) * misslevel, f"zone_target_{zid}_{fid}")
-
-
-def _build_zone_solution(
-    problem: ZonalProblem,
-    zone_assignment: np.ndarray,
-    blm: float,
-) -> Solution:
-    """Build a Solution from a zone assignment array."""
-
-    selected = zone_assignment > 0
-    cost = compute_zone_cost(problem, zone_assignment)
-    boundary = compute_standard_boundary(problem, zone_assignment)
-    objective = compute_zone_objective(problem, zone_assignment, blm)
-    penalty = compute_zone_penalty(problem, zone_assignment)
-    shortfall = compute_zone_shortfall(problem, zone_assignment)
-
-    # Feature-level targets (aggregate across zones)
-    pu_ids = problem.planning_units["id"].tolist()
-    pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-    from pymarxan.solvers.utils import check_targets
-    targets_met = check_targets(problem, selected, pu_index)
-
-    zone_targets_met = check_zone_targets(problem, zone_assignment)
-
-    return Solution(
-        selected=selected,
-        cost=cost,
-        boundary=boundary,
-        objective=objective,
-        targets_met=targets_met,
-        penalty=penalty,
-        shortfall=shortfall,
-        zone_assignment=zone_assignment,
-        # Same string-key form as ZoneSASolver ("z{zone}_f{feature}"): JSON-safe and
-        # identical across the zone solvers (issue #1).
-        metadata={
-            "zone_targets_met": {
-                f"z{z}_f{f}": bool(v) for (z, f), v in zone_targets_met.items()
-            }
-        },
-    )

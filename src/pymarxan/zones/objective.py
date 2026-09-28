@@ -1,8 +1,11 @@
 """Objective function components for multi-zone conservation planning."""
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
+from pymarxan.solvers.base import Solution
 from pymarxan.zones.model import ZonalProblem
 
 
@@ -374,4 +377,57 @@ def compute_zone_objective(
     connectivity = compute_zone_connectivity(problem, zone_assignment)
     return (
         cost + blm * std_boundary + zone_boundary + overall_penalty + zone_penalty + connectivity
+    )
+
+
+def build_zone_solution(
+    problem: ZonalProblem,
+    zone_assignment: np.ndarray,
+    blm: float,
+    *,
+    solver_name: str,
+    run: int | None = None,
+) -> Solution:
+    """The one Solution builder for every zone solver.
+
+    ``targets_met`` holds the overall (contribution-weighted) feature targets, feature-keyed,
+    so ``Solution.all_targets_met`` means "overall targets met" for zone runs. Zone targets
+    live in ``metadata["zone_targets_met"]`` as ``"z{zone}_f{feature}" -> bool``.
+    ``objective`` equals ``compute_zone_objective`` by construction.
+    """
+    assignment = np.asarray(zone_assignment, dtype=int)
+    cost = compute_zone_cost(problem, assignment)
+    std_boundary = compute_standard_boundary(problem, assignment)
+    zone_boundary = compute_zone_boundary(problem, assignment)
+    # Each tier's achieved dict is computed once and passed through (plan review M5c);
+    # only the ``objective`` field below recomputes independently (review H3 identity test).
+    overall_achieved = compute_overall_achieved(problem, assignment)
+    zone_achieved = _compute_zone_achieved(problem, assignment)
+    overall_penalty = compute_overall_penalty(problem, assignment, achieved=overall_achieved)
+    zone_penalty = compute_zone_penalty(problem, assignment, zone_achieved=zone_achieved)
+    zone_targets_met = check_zone_targets(problem, assignment, zone_achieved=zone_achieved)
+    metadata: dict[str, Any] = {
+        "solver": solver_name,
+        "zone_boundary_cost": round(zone_boundary, 4),
+        "zone_targets_met": {
+            f"z{z}_f{f}": bool(v) for (z, f), v in zone_targets_met.items()
+        },
+        "overall_penalty": overall_penalty,
+        "zone_penalty": zone_penalty,
+    }
+    if run is not None:
+        metadata["run"] = run
+    return Solution(
+        selected=assignment > 0,
+        cost=cost,
+        boundary=std_boundary,
+        objective=compute_zone_objective(problem, assignment, blm),
+        targets_met=check_overall_targets(problem, assignment, achieved=overall_achieved),
+        penalty=overall_penalty + zone_penalty,
+        shortfall=(
+            compute_overall_shortfall(problem, assignment, achieved=overall_achieved)
+            + compute_zone_shortfall(problem, assignment, zone_achieved=zone_achieved)
+        ),
+        zone_assignment=assignment.copy(),
+        metadata=metadata,
     )

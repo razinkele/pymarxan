@@ -17,7 +17,8 @@ class Solution:
     cost: float
     boundary: float
     objective: float  # cost + BLM * boundary + penalties
-    # Single-zone solvers: feature ID -> met. Zone solvers: (zone, feature) -> met.
+    # Feature ID -> met. Zone solvers report the overall (contribution-weighted) feature
+    # targets here and the per-zone targets in metadata["zone_targets_met"].
     targets_met: dict[int, bool] | dict[tuple[int, int], bool]
     penalty: float = 0.0  # Total SPF-weighted shortfall penalty
     shortfall: float = 0.0  # Total raw feature shortfall (sum of max(0, target - achieved))

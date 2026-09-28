@@ -11,14 +11,7 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem
-from pymarxan.zones.objective import (
-    check_zone_targets,
-    compute_standard_boundary,
-    compute_zone_boundary,
-    compute_zone_cost,
-    compute_zone_penalty,
-    compute_zone_shortfall,
-)
+from pymarxan.zones.objective import build_zone_solution
 
 _COOLING_FACTORIES: dict[str, Callable[..., CoolingSchedule]] = {
     "geometric": CoolingSchedule.geometric,
@@ -103,40 +96,14 @@ class ZoneSASolver(Solver):
 
         if n_swappable == 0:
             # All PUs locked — build forced-assignment solution
-            blm_val = float(problem.parameters.get("BLM", 0.0))
             assignment = np.zeros(n_pu, dtype=int)
             for idx, zid in locked.items():
                 assignment[idx] = zid
             solutions = []
             for run_idx in range(config.num_solutions):
-                selected = assignment > 0
-                cost = compute_zone_cost(problem, assignment)
-                std_boundary = compute_standard_boundary(problem, assignment)
-                zone_boundary = compute_zone_boundary(problem, assignment)
-                zone_targets = check_zone_targets(problem, assignment)
-                zone_penalty = compute_zone_penalty(problem, assignment)
-                zone_shortfall = compute_zone_shortfall(problem, assignment)
-                obj = cost + blm_val * std_boundary + zone_penalty
-                sol = Solution(
-                    selected=selected,
-                    cost=cost,
-                    boundary=std_boundary,
-                    objective=obj,
-                    targets_met={},
-                    penalty=zone_penalty,
-                    shortfall=zone_shortfall,
-                    zone_assignment=assignment.copy(),
-                    metadata={
-                        "solver": self.name(),
-                        "run": run_idx + 1,
-                        "zone_boundary_cost": round(zone_boundary, 4),
-                        "zone_targets_met": {
-                            f"z{z}_f{f}": v
-                            for (z, f), v in zone_targets.items()
-                        },
-                    },
-                )
-                solutions.append(sol)
+                solutions.append(build_zone_solution(
+                    problem, assignment, blm, solver_name=self.name(), run=run_idx + 1,
+                ))
             if progress is not None:
                 progress.status = "done"
             return solutions
@@ -247,34 +214,9 @@ class ZoneSASolver(Solver):
                         best_assignment = assignment.copy()
                         best_obj = current_obj
 
-            selected = best_assignment > 0
-            cost = compute_zone_cost(problem, best_assignment)
-            std_boundary = compute_standard_boundary(problem, best_assignment)
-            zone_boundary = compute_zone_boundary(problem, best_assignment)
-            zone_targets = check_zone_targets(problem, best_assignment)
-            zone_penalty = compute_zone_penalty(problem, best_assignment)
-            zone_shortfall = compute_zone_shortfall(problem, best_assignment)
-
-            sol = Solution(
-                selected=selected,
-                cost=cost,
-                boundary=std_boundary,
-                objective=best_obj,
-                targets_met={},
-                penalty=zone_penalty,
-                shortfall=zone_shortfall,
-                zone_assignment=best_assignment.copy(),
-                metadata={
-                    "solver": self.name(),
-                    "run": run_idx + 1,
-                    "zone_boundary_cost": round(zone_boundary, 4),
-                    "zone_targets_met": {
-                        f"z{z}_f{f}": v
-                        for (z, f), v in zone_targets.items()
-                    },
-                },
-            )
-            solutions.append(sol)
+            solutions.append(build_zone_solution(
+                problem, best_assignment, blm, solver_name=self.name(), run=run_idx + 1,
+            ))
 
         if progress is not None:
             progress.status = "done"
