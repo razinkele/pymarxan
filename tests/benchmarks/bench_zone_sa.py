@@ -1,4 +1,7 @@
-"""Zone SA performance benchmarks."""
+"""Zone SA performance benchmarks.
+
+See bench_zone_overall.py for the comparative overall-target gate.
+"""
 from __future__ import annotations
 
 import time

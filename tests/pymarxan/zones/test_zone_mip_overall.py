@@ -86,30 +86,42 @@ class TestFixtureUnderNewSemantics:
         assert all(check_zone_targets(p, a).values())
 
 
-# Enumerated tests/data/zones (4 PUs x {unassigned, zone1, zone2} = 81 assignments) in a
-# throwaway script (not committed), with problem.parameters["BLM"] = 0.0. Kept only the
-# assignments meeting every zone target (check_zone_targets) AND every overall target
-# (check_overall_targets) and took the minimum compute_zone_objective(p, a, 0.0), separately
-# for ZONETARGETCONTRIB=0 (raw) and =1 (weighted). Both modes turned out to share the same
-# unique argmin/objective on this fixture: raw had 10 feasible assignments (best
-# (1, 1, 2, 2) at 460.0, next 480.0), weighted had 4 feasible assignments -- a strict subset
-# of raw's -- with the same best (1, 1, 2, 2) at 460.0 (next 500.0). Both argmins are unique.
+# Derived by enumerating all 81 assignments on tests/data/zones (4 PUs x {unassigned, zone1,
+# zone2}), with problem.parameters["BLM"] = 0.0. Kept only the assignments meeting every zone
+# target (check_zone_targets) AND every overall target (check_overall_targets) and took the
+# minimum compute_zone_objective(p, a, 0.0), separately for ZONETARGETCONTRIB=0 (raw) and =1
+# (weighted). Both modes turned out to share the same unique argmin/objective on this fixture:
+# raw had 10 feasible assignments (best (1, 1, 2, 2) at 460.0, next 480.0), weighted had 4
+# feasible assignments -- a strict subset of raw's -- with the same best (1, 1, 2, 2) at 460.0
+# (next 500.0). Both argmins are unique.
 RAW_OPTIMUM = (1, 1, 2, 2)
 RAW_OBJECTIVE = 460.0
 WEIGHTED_OPTIMUM = (1, 1, 2, 2)
 WEIGHTED_OBJECTIVE = 460.0
+
+# With every feature's overall target zeroed (BLM = 0.0) the overall tier is inert and only
+# the zone tier binds. Derived the same way: enumerate all 81 assignments, keep those meeting
+# every zone target (check_zone_targets), and take the minimum compute_zone_objective(p, a,
+# 0.0), separately for ZONETARGETCONTRIB=0 (raw) and =1 (weighted). Raw had 22 feasible
+# assignments (best (1, 1, 0, 2) at 310.0, next 350.0); weighted had 5 (best (1, 1, 2, 2) at
+# 460.0, next 500.0). Both argmins are unique, and here -- unlike the overall-target-bound
+# case above -- the two modes disagree.
+ZERO_TARGET_RAW_OPTIMUM = (1, 1, 0, 2)
+ZERO_TARGET_RAW_OBJECTIVE = 310.0
+ZERO_TARGET_WEIGHTED_OPTIMUM = (1, 1, 2, 2)
+ZERO_TARGET_WEIGHTED_OBJECTIVE = 460.0
 
 
 class TestFixtureModeSwitch:
     """Raw vs. weighted zone-target modes on the fixture, now that overall targets bind.
 
     Empirically the two modes land on the *same* unique optimum here: enforcing the
-    overall targets already excludes the Task-3-era raw optimum (1, 1, 0, 2) @ 310 (its
-    overall f2 = 12 + 4 x 0.3 = 13.2 < 15), which is exactly what pushed raw up to 460 and
-    made it collide with weighted's (already-460) optimum. Raw's feasible set (10
-    assignments) still strictly contains weighted's (4); the two just happen to share an
-    argmin. Kept as two solves so a future fixture change that does separate them is
-    caught by whichever constant drifts.
+    overall targets already excludes the raw optimum (1, 1, 0, 2) @ 310 that held before
+    overall targets were enforced (its overall f2 = 12 + 4 x 0.3 = 13.2 < 15), which is
+    exactly what pushed raw up to 460 and made it collide with weighted's (already-460)
+    optimum. Raw's feasible set (10 assignments) still strictly contains weighted's (4);
+    the two just happen to share an argmin. Kept as two solves so a future fixture change
+    that does separate them is caught by whichever constant drifts.
     """
 
     def _solve(self, flag: int):
@@ -127,3 +139,26 @@ class TestFixtureModeSwitch:
         sol = self._solve(1)
         assert tuple(int(z) for z in sol.zone_assignment) == WEIGHTED_OPTIMUM
         assert sol.objective == pytest.approx(WEIGHTED_OBJECTIVE)
+
+    def _solve_zero_overall_target(self, flag: int):
+        p = load_zone_project(DATA_DIR)
+        p.parameters["BLM"] = 0.0
+        p.parameters["ZONETARGETCONTRIB"] = flag
+        p.features["target"] = 0.0
+        return ZoneMIPSolver().solve(p, CONFIG)[0]
+
+    def test_modes_differ_when_only_zone_targets_bind(self):
+        """Zeroing every feature's overall target isolates the zone tier: raw and weighted
+        zone-target accumulation now select different assignments (ZERO_TARGET_* constants
+        above), unlike the overall-target-bound fixture where the two modes coincide."""
+        raw_sol = self._solve_zero_overall_target(0)
+        weighted_sol = self._solve_zero_overall_target(1)
+
+        raw_assignment = tuple(int(z) for z in raw_sol.zone_assignment)
+        weighted_assignment = tuple(int(z) for z in weighted_sol.zone_assignment)
+
+        assert raw_assignment == ZERO_TARGET_RAW_OPTIMUM
+        assert raw_sol.objective == pytest.approx(ZERO_TARGET_RAW_OBJECTIVE)
+        assert weighted_assignment == ZERO_TARGET_WEIGHTED_OPTIMUM
+        assert weighted_sol.objective == pytest.approx(ZERO_TARGET_WEIGHTED_OBJECTIVE)
+        assert raw_assignment != weighted_assignment

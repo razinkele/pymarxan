@@ -570,3 +570,38 @@ class TestCacheAgainstAnchorOracle:
             arr = np.array(a)
             got = c.compute_full_zone_objective(arr, held=c.compute_held(arr), blm=0.0)
             assert got == pytest.approx(oracle(a, spf=spf, zone_target_contrib=flag)["objective"])
+
+    @pytest.mark.parametrize("contributions", ["table", "none"])
+    @pytest.mark.parametrize("spf", [1.0, 10.0])
+    @pytest.mark.parametrize("flag", [0, 1])
+    def test_delta_equals_full_recomputation_for_all_27_and_every_move(
+        self, spf, flag, contributions,
+    ):
+        """Exhaustive delta == full(after) - full(before), including the "none" contribution
+        arm (default contributions), which pins the contrib_differs gate under a case no
+        other committed test covers."""
+        p = make_anchor_problem(spf=spf, zone_target_contrib=flag)
+        if contributions == "none":
+            p = p.copy_with(zone_contributions=None)
+        c = ZoneProblemCache.from_zone_problem(p)
+        for a in all_assignments():
+            arr = np.array(a)
+            held = c.compute_held(arr)
+            before = c.compute_full_zone_objective(arr, held=held, blm=0.0)
+            for idx in range(len(arr)):
+                old_zone = int(arr[idx])
+                for new_zone in (0, 1, 2):
+                    if new_zone == old_zone:
+                        continue
+                    delta = c.compute_delta_zone_objective(
+                        idx, old_zone, new_zone, arr, held=held, blm=0.0,
+                    )
+                    after_arr = arr.copy()
+                    after_arr[idx] = new_zone
+                    after = c.compute_full_zone_objective(
+                        after_arr, held=c.compute_held(after_arr), blm=0.0,
+                    )
+                    assert delta == pytest.approx(after - before, abs=1e-10), (
+                        f"spf={spf} flag={flag} contributions={contributions} "
+                        f"a={a} idx={idx} {old_zone}->{new_zone}"
+                    )
