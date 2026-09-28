@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.objective import _feature_arrays
 
 
 @dataclass(frozen=True)
@@ -44,10 +45,14 @@ class ZoneProblemCache:
         Column 0 (unassigned) is always 0.
     contribution_matrix : np.ndarray
         (n_zones+1, n_feat) float64 — contribution multiplier per (zone, feature).
-        Row 0 (unassigned) is always 0.
+        Row 0 (unassigned) is always 0; unlisted pairs use
+        ZonalProblem.contribution_default().
     zone_target_matrix : np.ndarray
         (n_zones+1, n_feat) float64 — target per (zone, feature).
         Row 0 (unassigned) is always 0.
+    zone_target_weight : np.ndarray
+        (n_zones+1, n_feat) float64 — weight applied to raw held amounts when scoring zone
+        targets; ones by default, the contribution matrix under ZONETARGETCONTRIB=1.
     zone_boundary_costs : dict[tuple[int, int], float]
         Cross-zone boundary cost keyed by (zone_col1, zone_col2).
     neighbors : list[list[tuple[int, float]]]
@@ -67,6 +72,7 @@ class ZoneProblemCache:
     zone_cost_matrix: np.ndarray
     contribution_matrix: np.ndarray
     zone_target_matrix: np.ndarray
+    zone_target_weight: np.ndarray
     zone_boundary_costs: dict[tuple[int, int], float]
     neighbors: list[list[tuple[int, float]]]
     self_boundary: np.ndarray
@@ -103,18 +109,13 @@ class ZoneProblemCache:
             pu_id_to_idx[int(pid)] = i
 
         # --- Feature index mapping ---
-        feat_ids = feat_df["id"].values
-        feat_id_to_col: dict[int, int] = {}
-        for j, fid in enumerate(feat_ids):
-            feat_id_to_col[int(fid)] = j
+        feat_id_to_col = problem.feature_index()
 
-        feat_spf = np.asarray(feat_df["spf"].values, dtype=np.float64)
+        # spf from the objective module's single rule (absent column -> ones)
+        _, _, feat_spf = _feature_arrays(problem)
 
         # --- Zone index mapping (col 0 = unassigned) ---
-        zone_ids = sorted(problem.zone_ids)
-        zone_id_to_col: dict[int, int] = {}
-        for k, zid in enumerate(zone_ids):
-            zone_id_to_col[zid] = k + 1  # 1-indexed; 0 = unassigned
+        zone_id_to_col = problem.zone_index()
 
         # --- PU-feature matrix (dense) — use shared builder ---
         pu_feat_matrix = problem.build_pu_feature_matrix()
@@ -130,23 +131,9 @@ class ZoneProblemCache:
             if ri is not None and zcol is not None:
                 zone_cost_matrix[ri, zcol] = float(zc_ct[k])
 
-        # --- Contribution matrix: (n_zones+1, n_feat) ---
-        # Default: 1.0 for all zone-feature pairs (standard Marxan behavior)
-        contribution_matrix = np.zeros((n_zones + 1, n_feat), dtype=np.float64)
-        # Row 0 stays zero (unassigned contributes nothing)
-        # Fill defaults for actual zones
-        for zcol in range(1, n_zones + 1):
-            contribution_matrix[zcol, :] = 1.0
-        # Override with explicit contributions if available
-        if problem.zone_contributions is not None:
-            zc_feat = problem.zone_contributions["feature"].values
-            zc_zone = problem.zone_contributions["zone"].values
-            zc_val = problem.zone_contributions["contribution"].values
-            for k in range(len(zc_feat)):
-                fcol = feat_id_to_col.get(int(zc_feat[k]))
-                zcol = zone_id_to_col.get(int(zc_zone[k]))
-                if fcol is not None and zcol is not None:
-                    contribution_matrix[zcol, fcol] = float(zc_val[k])
+        # --- Contribution matrix: (n_zones+1, n_feat); row 0 = unassigned ---
+        contribution_matrix = problem.contribution_matrix()
+        zone_target_weight = problem.zone_target_weight_matrix()
 
         # --- Zone target matrix: (n_zones+1, n_feat) ---
         zone_target_matrix = np.zeros((n_zones + 1, n_feat), dtype=np.float64)
@@ -228,6 +215,7 @@ class ZoneProblemCache:
             zone_cost_matrix=zone_cost_matrix,
             contribution_matrix=contribution_matrix,
             zone_target_matrix=zone_target_matrix,
+            zone_target_weight=zone_target_weight,
             zone_boundary_costs=zbc,
             neighbors=neighbors,
             self_boundary=self_boundary,
@@ -243,8 +231,8 @@ class ZoneProblemCache:
         """Compute held amounts per (zone, feature).
 
         For each zone z and feature f:
-            held[z_col, f] = sum over PUs i where assignment[i] maps to z_col
-                             of pu_feat_matrix[i, f] * contribution_matrix[z_col, f]
+            held[z_col, f] = Σ raw amount (no contribution; MarZone reserve.hpp:164)
+                             over PUs i where assignment[i] maps to z_col
 
         Parameters
         ----------
@@ -266,8 +254,7 @@ class ZoneProblemCache:
                 zcol = self.zone_id_to_col.get(zid, 0)
             if zcol == 0:
                 continue  # unassigned contributes nothing
-            # Add contribution: amount * contribution factor
-            held[zcol] += self.pu_feat_matrix[i] * self.contribution_matrix[zcol]
+            held[zcol] += self.pu_feat_matrix[i]
         return held
 
     def update_held_per_zone(
@@ -296,13 +283,13 @@ class ZoneProblemCache:
         if old_zone != 0:
             old_col = self.zone_id_to_col.get(old_zone, 0)
             if old_col != 0:
-                held[old_col] -= amounts * self.contribution_matrix[old_col]
+                held[old_col] -= amounts
 
         # Add to new zone
         if new_zone != 0:
             new_col = self.zone_id_to_col.get(new_zone, 0)
             if new_col != 0:
-                held[new_col] += amounts * self.contribution_matrix[new_col]
+                held[new_col] += amounts
 
     # ------------------------------------------------------------------
     # Full objective computation
@@ -485,9 +472,11 @@ class ZoneProblemCache:
     def _compute_zone_penalty(self, held_per_zone: np.ndarray) -> float:
         """Compute penalty for unmet zone-specific targets.
 
-        penalty = sum over (zone, feature) of spf[f] * max(0, target[z,f] - held[z,f])
+        penalty = sum over (zone, feature) of spf[f] * max(0, target[z,f] - held[z,f] * w[z,f])
         """
-        shortfalls = np.maximum(0.0, self.zone_target_matrix - held_per_zone)
+        shortfalls = np.maximum(
+            0.0, self.zone_target_matrix - held_per_zone * self.zone_target_weight,
+        )
         # shortfalls shape: (n_zones+1, n_feat)
         # Multiply each feature's shortfall by its SPF and sum
         total = float(np.sum(shortfalls * self.feat_spf[np.newaxis, :]))
@@ -561,22 +550,22 @@ class ZoneProblemCache:
 
         # Old zone: decrease held => possibly increase shortfall
         if old_col != 0:
-            old_contrib = amounts * self.contribution_matrix[old_col]
-            old_held = held_per_zone[old_col]
+            old_w = amounts * self.zone_target_weight[old_col]
+            old_held = held_per_zone[old_col] * self.zone_target_weight[old_col]
             old_targets = self.zone_target_matrix[old_col]
 
             old_shortfall = np.maximum(0.0, old_targets - old_held)
-            new_shortfall = np.maximum(0.0, old_targets - (old_held - old_contrib))
+            new_shortfall = np.maximum(0.0, old_targets - (old_held - old_w))
             delta += float(np.dot(self.feat_spf, new_shortfall - old_shortfall))
 
         # New zone: increase held => possibly decrease shortfall
         if new_col != 0:
-            new_contrib = amounts * self.contribution_matrix[new_col]
-            new_held = held_per_zone[new_col]
+            new_w = amounts * self.zone_target_weight[new_col]
+            new_held = held_per_zone[new_col] * self.zone_target_weight[new_col]
             new_targets = self.zone_target_matrix[new_col]
 
             old_shortfall = np.maximum(0.0, new_targets - new_held)
-            new_shortfall = np.maximum(0.0, new_targets - (new_held + new_contrib))
+            new_shortfall = np.maximum(0.0, new_targets - (new_held + new_w))
             delta += float(np.dot(self.feat_spf, new_shortfall - old_shortfall))
 
         return delta

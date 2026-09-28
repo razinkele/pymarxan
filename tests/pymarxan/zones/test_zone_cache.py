@@ -160,11 +160,10 @@ class TestHeldPerZone:
         # held[col1, f1] = (5+9)*1.0 = 14
         assert held[col1, f0] == pytest.approx(16.0)
         assert held[col1, f1] == pytest.approx(14.0)
-        # Zone2: PU1(8,7) contrib=[0.5, 0.3]
-        # held[col2, f0] = 8*0.5 = 4
-        # held[col2, f1] = 7*0.3 = 2.1
-        assert held[col2, f0] == pytest.approx(4.0)
-        assert held[col2, f1] == pytest.approx(2.1)
+        # Zone2: PU1(8,7) — raw amounts (MarZone reserve.hpp:164); contributions no longer apply
+        # to zone targets. Old pins were 4.0 / 2.1 (8×0.5, 7×0.3).
+        assert held[col2, f0] == pytest.approx(8.0)
+        assert held[col2, f1] == pytest.approx(7.0)
 
     def test_update_held_per_zone(self, cache):
         """Incremental update matches full recomputation."""
@@ -408,3 +407,50 @@ class TestMissLevel:
         from pymarxan.zones.objective import compute_zone_objective
         ref_obj = compute_zone_objective(problem, assignment, 0.0)
         assert cached_obj == pytest.approx(ref_obj, abs=1e-10)
+
+
+class TestZoneTargetWeight:
+    def test_weight_is_ones_by_default(self, cache):
+        np.testing.assert_array_equal(cache.zone_target_weight[1:], np.ones((2, 2)))
+        np.testing.assert_array_equal(cache.zone_target_weight[0], np.zeros(2))
+
+    def test_weight_is_contribution_matrix_when_flag_set(self, zone_problem):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = 1
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        np.testing.assert_array_equal(c.zone_target_weight, c.contribution_matrix)
+        np.testing.assert_array_equal(c.contribution_matrix, zone_problem.contribution_matrix())
+
+    def test_cache_rejects_out_of_domain_flag(self, zone_problem):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = 2
+        with pytest.raises(ValueError, match="ZONETARGETCONTRIB"):
+            ZoneProblemCache.from_zone_problem(zone_problem)
+
+    def test_full_objective_matches_reference_in_weighted_mode(self, zone_problem):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = 1
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        rng = np.random.default_rng(7)
+        for _ in range(10):
+            assignment = rng.integers(0, 3, size=4)
+            held = c.compute_held_per_zone(assignment)
+            assert c.compute_full_zone_objective(assignment, held, 1.0) == pytest.approx(
+                compute_zone_objective(zone_problem, assignment, 1.0), abs=1e-10,
+            )
+
+    def test_delta_matches_reference_in_weighted_mode(self, zone_problem):
+        zone_problem.parameters["ZONETARGETCONTRIB"] = 1
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        rng = np.random.default_rng(11)
+        for _ in range(20):
+            assignment = rng.integers(0, 3, size=4)
+            idx = int(rng.integers(4))
+            old_zone = int(assignment[idx])
+            new_zone = int(rng.choice([z for z in (0, 1, 2) if z != old_zone]))
+            held = c.compute_held_per_zone(assignment)
+            before = c.compute_full_zone_objective(assignment, held, 1.0)
+            delta = c.compute_delta_zone_objective(idx, old_zone, new_zone, assignment, held, 1.0)
+            after_assignment = assignment.copy()
+            after_assignment[idx] = new_zone
+            after = c.compute_full_zone_objective(
+                after_assignment, c.compute_held_per_zone(after_assignment), 1.0,
+            )
+            assert delta == pytest.approx(after - before, abs=1e-10)

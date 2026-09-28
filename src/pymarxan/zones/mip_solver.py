@@ -13,6 +13,7 @@ from pymarxan.models.problem import (
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.model import ZonalProblem
 from pymarxan.zones.objective import (
+    _feature_arrays,
     check_zone_targets,
     compute_standard_boundary,
     compute_zone_cost,
@@ -166,10 +167,9 @@ class ZoneMIPSolver(Solver):
             problem, x, pu_ids, zone_ids, model
         )
 
-        # 4. Zone-target penalty (big-M for unmet targets)
-        penalty_expr, penalty_vars = _build_penalty_expr(
-            problem, x, pu_ids, zone_ids, model
-        )
+        # 4. Zone-target penalty (slack) and hard constraints share one achieved expression
+        zone_exprs = _zone_achieved_exprs(problem, x)
+        penalty_expr, penalty_vars = _build_penalty_expr(problem, zone_exprs, model)
 
         model += (
             cost_expr
@@ -180,7 +180,7 @@ class ZoneMIPSolver(Solver):
         )
 
         # --- Feature target constraints ---
-        _add_zone_target_constraints(problem, x, pu_ids, zone_ids, model)
+        _add_zone_target_constraints(problem, zone_exprs, model)
 
         # Solve via the Phase 21 backend factory.
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
@@ -348,134 +348,93 @@ def _build_zone_boundary_expr(
     return expr
 
 
-def _build_penalty_expr(
+def _feature_groups(problem: ZonalProblem) -> dict[int, list[tuple[int, float]]]:
+    """feature id -> [(pu id, amount), ...] from pu_vs_features."""
+    puvspr = problem.pu_vs_features
+    groups: dict[int, list[tuple[int, float]]] = {}
+    for pid, fid, amt in zip(
+        puvspr["pu"].values, puvspr["species"].values, puvspr["amount"].values, strict=True,
+    ):
+        groups.setdefault(int(fid), []).append((int(pid), float(amt)))
+    return groups
+
+
+def _spf_lookup(problem: ZonalProblem) -> dict[int, float]:
+    """feature id -> spf (1.0 when the column is absent; one rule, ``_feature_arrays``)."""
+    ids, _, spf = _feature_arrays(problem)
+    return dict(zip(ids.tolist(), spf.tolist(), strict=True))
+
+
+def _zone_achieved_exprs(
     problem: ZonalProblem,
     x: dict[tuple[int, int], pulp.LpVariable],
-    pu_ids: list[int],
-    zone_ids: list[int],
+) -> dict[tuple[int, int], pulp.LpAffineExpression]:
+    """Σ_i amount[i, f] × w[z, f] × x[i, z] for every listed (zone, feature) target.
+
+    Built once and shared by the penalty (slack) and the hard constraint. ``w`` is
+    ``problem.zone_target_weight_matrix()`` (raw by default, MarZone ``reserve.hpp:164``).
+    """
+    if problem.zone_targets is None:
+        return {}
+    weight = problem.zone_target_weight_matrix()
+    zidx = problem.zone_index()
+    fidx = problem.feature_index()
+    groups = _feature_groups(problem)
+    exprs: dict[tuple[int, int], pulp.LpAffineExpression] = {}
+    zt = problem.zone_targets
+    for zid, fid in zip(zt["zone"].values, zt["feature"].values, strict=True):
+        zid, fid = int(zid), int(fid)
+        w = float(weight[zidx[zid], fidx[fid]]) if zid in zidx and fid in fidx else 0.0
+        exprs[(zid, fid)] = pulp.lpSum(
+            amt * w * x[(pid, zid)]
+            for pid, amt in groups.get(fid, [])
+            if (pid, zid) in x
+        )
+    return exprs
+
+
+def _build_penalty_expr(
+    problem: ZonalProblem,
+    exprs: dict[tuple[int, int], pulp.LpAffineExpression],
     model: pulp.LpProblem,
 ) -> tuple[pulp.LpAffineExpression, dict]:
-    """Build penalty expression for unmet zone targets (SPF * shortfall)."""
+    """Build penalty expression for unmet zone targets (SPF * slack)."""
     if problem.zone_targets is None:
         return pulp.lpSum([]), {}
-
-    # Build contribution lookup
-    contrib_lookup: dict[tuple[int, int], float] = {}
-    if problem.zone_contributions is not None:
-        zc = problem.zone_contributions
-        for k in range(len(zc)):
-            fid = int(zc["feature"].values[k])
-            zid = int(zc["zone"].values[k])
-            contrib_lookup[(fid, zid)] = float(zc["contribution"].values[k])
-
-    # Build SPF lookup
-    spf_lookup: dict[int, float] = {}
-    feat_ids = problem.features["id"].values
-    feat_spf = (
-        problem.features["spf"].values
-        if "spf" in problem.features.columns
-        else np.ones(len(feat_ids))
-    )
-    for i in range(len(feat_ids)):
-        spf_lookup[int(feat_ids[i])] = float(feat_spf[i])
-
-    # Pre-group pu_vs_features
-    puvspr = problem.pu_vs_features
-    feat_groups: dict[int, list[tuple[int, float]]] = {}
-    pu_col = puvspr["pu"].values
-    sp_col = puvspr["species"].values
-    amt_col = puvspr["amount"].values
-    for k in range(len(pu_col)):
-        fid = int(sp_col[k])
-        feat_groups.setdefault(fid, []).append((int(pu_col[k]), float(amt_col[k])))
-
+    spf_lookup = _spf_lookup(problem)
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     zt = problem.zone_targets
-    zone_col = zt["zone"].values
-    feat_col = zt["feature"].values
-    target_col = zt["target"].values
-
     expr = pulp.lpSum([])
     slack_vars = {}
-
-    for k in range(len(zone_col)):
-        zid = int(zone_col[k])
-        fid = int(feat_col[k])
-        target = float(target_col[k]) * misslevel
-        spf = spf_lookup.get(fid, 1.0)
-
-        # Achieved for this (zone, feature): Σ_i amount[i,f] * contrib[f,z] * x[i,z]
-        achieved_expr = pulp.lpSum([])
-        for pid, amt in feat_groups.get(fid, []):
-            contribution = contrib_lookup.get((fid, zid), 1.0)
-            if (pid, zid) in x:
-                achieved_expr += amt * contribution * x[(pid, zid)]
-
-        # slack >= target - achieved (shortfall), slack >= 0
-        slack = pulp.LpVariable(
-            f"slack_{zid}_{fid}", lowBound=0, cat="Continuous"
-        )
+    for zid, fid, target in zip(
+        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
+    ):
+        zid, fid = int(zid), int(fid)
+        slack = pulp.LpVariable(f"slack_{zid}_{fid}", lowBound=0, cat="Continuous")
         model += (
-            slack >= target - achieved_expr,
+            slack >= float(target) * misslevel - exprs[(zid, fid)],
             f"shortfall_{zid}_{fid}",
         )
         slack_vars[(zid, fid)] = slack
-        expr += spf * slack
-
+        expr += spf_lookup.get(fid, 1.0) * slack
     return expr, slack_vars
 
 
 def _add_zone_target_constraints(
     problem: ZonalProblem,
-    x: dict[tuple[int, int], pulp.LpVariable],
-    pu_ids: list[int],
-    zone_ids: list[int],
+    exprs: dict[tuple[int, int], pulp.LpAffineExpression],
     model: pulp.LpProblem,
 ) -> None:
     """Add hard zone-specific feature target constraints."""
     if problem.zone_targets is None:
         return
-
-    # Build contribution lookup
-    contrib_lookup: dict[tuple[int, int], float] = {}
-    if problem.zone_contributions is not None:
-        zc = problem.zone_contributions
-        for k in range(len(zc)):
-            fid = int(zc["feature"].values[k])
-            zid = int(zc["zone"].values[k])
-            contrib_lookup[(fid, zid)] = float(zc["contribution"].values[k])
-
-    # Pre-group pu_vs_features
-    puvspr = problem.pu_vs_features
-    feat_groups: dict[int, list[tuple[int, float]]] = {}
-    pu_col = puvspr["pu"].values
-    sp_col = puvspr["species"].values
-    amt_col = puvspr["amount"].values
-    for k in range(len(pu_col)):
-        fid = int(sp_col[k])
-        feat_groups.setdefault(fid, []).append((int(pu_col[k]), float(amt_col[k])))
-
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     zt = problem.zone_targets
-    zone_col = zt["zone"].values
-    feat_col = zt["feature"].values
-    target_col = zt["target"].values
-
-    for k in range(len(zone_col)):
-        zid = int(zone_col[k])
-        fid = int(feat_col[k])
-        target = float(target_col[k]) * misslevel
-
-        achieved_expr = pulp.lpSum([])
-        for pid, amt in feat_groups.get(fid, []):
-            contribution = contrib_lookup.get((fid, zid), 1.0)
-            if (pid, zid) in x:
-                achieved_expr += amt * contribution * x[(pid, zid)]
-
-        model += (
-            achieved_expr >= target,
-            f"zone_target_{zid}_{fid}",
-        )
+    for zid, fid, target in zip(
+        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
+    ):
+        zid, fid = int(zid), int(fid)
+        model += (exprs[(zid, fid)] >= float(target) * misslevel, f"zone_target_{zid}_{fid}")
 
 
 def _build_zone_solution(

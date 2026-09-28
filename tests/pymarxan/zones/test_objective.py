@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from pymarxan.zones.objective import (
     check_zone_targets,
@@ -105,8 +106,9 @@ class TestComputeZonePenalty:
     def test_zone_penalty_zero_when_all_met(self):
         """Mixed assignment meeting all zone targets => penalty should be zero.
 
+        Zone targets accumulate raw amounts (MarZone reserve.hpp:164).
         PU1,PU2 in zone 1 meets Z1 targets (F1: 18>=10, F2: 12>=8).
-        PU3,PU4 in zone 2 meets Z2 targets (F1: 5.5>=5, F2: 3.9>=3).
+        PU3,PU4 in zone 2 meets Z2 targets (F1: 11>=5, F2: 13>=3).
         """
         assignment = np.array([1, 1, 2, 2])
         penalty = compute_zone_penalty(self.problem, assignment)
@@ -135,3 +137,33 @@ class TestZonePenaltyMisslevel:
         problem.parameters["MISSLEVEL"] = 0.01
         relaxed = check_zone_targets(problem, assignment)
         assert sum(relaxed.values()) >= sum(strict.values())
+
+
+class TestZoneAchievedWeighting:
+    """Spec §3.3: raw by default, contribution-weighted under ZONETARGETCONTRIB=1."""
+
+    def test_raw_by_default(self):
+        from pymarxan.zones.objective import _compute_zone_achieved
+        problem = load_zone_project(DATA_DIR)
+        achieved = _compute_zone_achieved(problem, np.array([1, 2, 1, 0]))
+        assert achieved[(2, 1)] == 8.0   # PU2 feature 1, raw (was 4.0 = 8 × 0.5)
+        assert achieved[(2, 2)] == 7.0   # PU2 feature 2, raw (was 2.1 = 7 × 0.3)
+
+    def test_weighted_when_flag_set(self):
+        from pymarxan.zones.objective import _compute_zone_achieved
+        problem = load_zone_project(DATA_DIR)
+        problem.parameters["ZONETARGETCONTRIB"] = 1
+        achieved = _compute_zone_achieved(problem, np.array([1, 2, 1, 0]))
+        assert achieved[(2, 1)] == 4.0
+        assert achieved[(2, 2)] == pytest.approx(2.1)
+
+    def test_partial_table_zero_weight_only_in_weighted_mode(self):
+        from pymarxan.zones.objective import _compute_zone_achieved
+        problem = load_zone_project(DATA_DIR)
+        partial = problem.zone_contributions[problem.zone_contributions["zone"] == 1]
+        problem = problem.copy_with(zone_contributions=partial)
+        raw = _compute_zone_achieved(problem, np.array([2, 2, 2, 2]))
+        assert raw[(2, 1)] == 29.0
+        problem.parameters["ZONETARGETCONTRIB"] = 1
+        weighted = _compute_zone_achieved(problem, np.array([2, 2, 2, 2]))
+        assert weighted.get((2, 1), 0.0) == 0.0

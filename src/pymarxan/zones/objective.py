@@ -220,41 +220,25 @@ def _compute_zone_achieved(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
 ) -> dict[tuple[int, int], float]:
-    """Precompute achieved amounts per (zone, feature) pair.
+    """Achieved amount per (zone id, feature id): Σ_{i: z_i = k} amount[i, f] × w[k, f].
 
-    Returns dict mapping (zone_id, feature_id) -> achieved amount.
+    ``w`` is ``problem.zone_target_weight_matrix()`` — all ones by default (MarZone
+    ``reserve.hpp:164`` accumulates raw amounts for zone targets) or the contribution
+    matrix under ``ZONETARGETCONTRIB = 1``.
     """
-    pu_ids = problem.planning_units["id"].values
-    pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
-
-    # Pre-build contribution lookup
-    contrib_lookup: dict[tuple[int, int], float] = {}
-    if problem.zone_contributions is not None:
-        zc = problem.zone_contributions
-        for k in range(len(zc)):
-            fid = int(zc["feature"].values[k])
-            zid = int(zc["zone"].values[k])
-            contrib_lookup[(fid, zid)] = float(zc["contribution"].values[k])
-
-    puvspr = problem.pu_vs_features
-    pu_col = puvspr["pu"].values
-    sp_col = puvspr["species"].values
-    amt_col = puvspr["amount"].values
-
+    weight = problem.zone_target_weight_matrix()
+    zidx = problem.zone_index()
+    fidx = problem.feature_index()
+    amounts = problem.build_pu_feature_matrix()
     achieved: dict[tuple[int, int], float] = {}
-    for k in range(len(pu_col)):
-        pid = int(pu_col[k])
-        idx = pu_index.get(pid)
-        if idx is None:
+    for zid, row in zidx.items():
+        in_zone = zone_assignment == zid
+        if not in_zone.any():
             continue
-        zid = int(zone_assignment[idx])
-        if zid == 0:
-            continue
-        fid = int(sp_col[k])
-        contribution = contrib_lookup.get((fid, zid), 1.0)
-        key = (zid, fid)
-        achieved[key] = achieved.get(key, 0.0) + float(amt_col[k]) * contribution
-
+        totals = amounts[in_zone].sum(axis=0) * weight[row]
+        for fid, col in fidx.items():
+            if totals[col] != 0.0:
+                achieved[(zid, fid)] = float(totals[col])
     return achieved
 
 

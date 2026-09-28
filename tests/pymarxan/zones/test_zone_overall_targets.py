@@ -118,3 +118,18 @@ class TestZoneShortfalls:
     def test_empty_without_zone_targets(self):
         p = make_anchor_problem().copy_with(zone_targets=None)
         assert compute_zone_shortfalls(p, np.array([1, 1, 1])) == {}
+
+
+class TestZoneTargetsRawOnAnchor:
+    def test_zone_target_met_on_raw_amounts(self):
+        from pymarxan.zones.objective import check_zone_targets
+        p = make_anchor_problem()
+        assert check_zone_targets(p, np.array([2, 0, 0])) == {(2, 1): True}     # 10 raw >= 10
+        # 10 raw in zone 2 (was 4.0 weighted before this task's flip)
+        assert compute_zone_shortfalls(p, np.array([2, 0, 0])) == {(2, 1): 0.0}
+
+    def test_zone_target_weighted_under_flag(self):
+        from pymarxan.zones.objective import check_zone_targets
+        p = make_anchor_problem(zone_target_contrib=1)
+        assert check_zone_targets(p, np.array([2, 2, 0])) == {(2, 1): False}    # 8 < 10
+        assert check_zone_targets(p, np.array([2, 2, 2])) == {(2, 1): True}     # 12 >= 10
