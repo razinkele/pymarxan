@@ -1,9 +1,9 @@
-"""Per-flip cost of the overall-target term (spec §6; review M1).
+"""Per-flip cost of the overall-target term (spec §6).
 
 Comparative, not absolute: under default contributions the contrib_differs gate must make
 every zone-to-zone move skip the overall term, so populated overall targets may cost at most
 5 % more per flip than zeroed ones. Absolute budgets are machine-relative and live in
-bench_zone_sa.py. The zone-target weight multiply (Task 3's ``zone_target_weight`` in
+bench_zone_sa.py. The zone-target weight multiply (``zone_target_weight`` in
 ``_penalty_delta``) is unmeasured by design: n_feat-length, paid in both arms.
 """
 from __future__ import annotations

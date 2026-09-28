@@ -267,5 +267,5 @@ MarZone contribution default, summary writer rewritten); eleven MEDIUM accepted.
   conditions)
 - MarZone C++: https://github.com/Marxan-source-code/marzone — `reserve.hpp` 148–190
   (accumulation), 193–275 (`CountMissing`, MISSLEVEL), 393 (contribution gate in the delta),
-  751–775 (`GreedyPen`), 816–872 (objective penalty); `zones.hpp` 96–160 (`BuildZoneTarget`,
+  750–777 (`GreedyPen`), 816–872 (objective penalty); `zones.hpp` 96–160 (`BuildZoneTarget`,
   target types), 619–627 and 651–668 (contribution defaults), 878–920 (`LoadZoneTarget`).

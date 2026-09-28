@@ -81,7 +81,9 @@ feasible optimum **(1, 2, 2) at cost 7** (runner-up 8). `ZoneMIPSolver` must
 return it; the SA, greedy and iterative-improvement zone solvers must meet both
 tiers at cost ≥ 7 (the heuristic tier of the anchor uses SPF 10, because at SPF 1
 the penalised minimum is the infeasible (2, 2, 2) at 6.0). Before v0.36 every
-solver returned (2, 2, 2) at cost 3 with the overall target reported as met.
+solver returned (2, 2, 2) at cost 3, and none reported the overall target as unmet.
+The met test uses a relative tolerance of 1e-9 to absorb float summation of
+contribution products; shortfalls and penalties are exact.
 
 The semantics follow the MarZone C++ source
 (https://github.com/Marxan-source-code/marzone, branch `master`, commit `85082e3`;
@@ -92,7 +94,7 @@ contribution pairs default to 0 when a contribution file is supplied and to 1
 without one (`zones.hpp:619-627`, `:651-668`). Only the `zonecontrib.dat` dialect
 (species × zone, `zones.hpp:621-627`) is mirrored; `zonecontrib2.dat` (per zone,
 all species, `:629-638`) and `zonecontrib3.dat` (per planning unit, `:639-647`,
-`GetZoneContrib` at `:169-176`) are not read. A reimplementation of the
+`GetZoneContrib` at `:169-177`) are not read. A reimplementation of the
 accumulation loop is cross-checked against pymarxan on the zones fixture
 (`tests/pymarxan/zones/test_marzone_accumulation.py`).
 

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: every zone project with `features.target > 0` changes behaviour.** The
+  overall (contribution-weighted) feature target is now enforced by all four zone
+  solvers: `ZoneMIPSolver` enforces it as a hard constraint, so a project the v0.35 MIP
+  solved may now be infeasible and return `[]`; `ZoneSASolver`, `ZoneHeuristicSolver` and
+  `ZoneIISolver` add the overall penalty (`SPF × shortfall`) to their objective. (#2)
 - **BREAKING (zone targets only): zone targets now accumulate raw amounts; unlisted
   contribution pairs default to 0 when a contribution table is supplied; set
   `ZONETARGETCONTRIB 1` to restore v0.35 zone-target behaviour.** Both follow the
@@ -19,22 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified unaffected: full contribution tables, contribution 1.0 on every
   zone-targeted pair, `features.target = 0`; its `evaluation.py:119` disagreement
   guard is the canary. (#2)
-- All four zone solvers (`ZoneMIPSolver`, `ZoneSASolver`, `ZoneHeuristicSolver`,
-  `ZoneIISolver`) build their `Solution` through one shared
+- **BREAKING:** all four zone solvers (`ZoneMIPSolver`, `ZoneSASolver`,
+  `ZoneHeuristicSolver`, `ZoneIISolver`) build their `Solution` through one shared
   `pymarxan.zones.build_zone_solution`: `targets_met` is feature-keyed and reports
   the overall targets (so `Solution.all_targets_met` means "overall targets met"
   for zone runs), per-zone targets live in `metadata["zone_targets_met"]` as
   `"z{zone}_f{feature}"`, `penalty`/`shortfall` sum both tiers, and
-  `metadata["overall_penalty"]` / `metadata["zone_penalty"]` split them. The
-  heuristic and II solvers previously put tuple-keyed zone results in
-  `targets_met` and no metadata.
-- `ZoneProblemCache`: `compute_held_per_zone` / `update_held_per_zone` are replaced by
+  `metadata["overall_penalty"]` / `metadata["zone_penalty"]` split them. The met
+  flags of both tiers tolerate a relative 1e-9 (float summation of contribution
+  products); shortfalls and penalties are exact. In v0.35 the heuristic and II solvers
+  put tuple-keyed zone results in `targets_met` and their metadata had `run` and
+  `zone_boundary_cost` but no `zone_targets_met`; `ZoneSASolver` reported `{}`.
+- **BREAKING:** `ZoneProblemCache`: `compute_held_per_zone` / `update_held_per_zone` are replaced by
   `compute_held` / `update_held` returning and mutating a `ZoneHeld` (raw per-zone
   and contribution-weighted overall accumulators); `compute_full_zone_objective` and
   `compute_delta_zone_objective` take `held=` and `blm=` as keyword arguments.
-- `write_zone_summary` now writes two row groups computed by the objective module
-  (`tier` = `overall` per feature, `zone` per listed zone target; columns `tier, zone,
-  feature, target, mean_achieved, times_met, total_runs`). The previous writer scored
+- **BREAKING:** `write_zone_summary` now writes two row groups computed by the objective
+  module (`tier` = `overall` per feature, `zone` per listed zone target; columns `tier,
+  zone, feature, target, mean_achieved, times_met, total_runs`), replacing the old
+  columns `zone, feature, target, times_met, total_runs`. The previous writer scored
   per-zone contribution-weighted amounts against the overall target, which matched
   neither tier.
 - `ZoneHeuristicSolver` no longer stops as soon as the zone targets are met (it ended

@@ -215,7 +215,7 @@ class TestWriteZoneSolution:
 
 
 class TestWriteZoneSummary:
-    """Rows equal the objective module's numbers (review H5: old writer matched neither tier)."""
+    """Rows equal the objective module's numbers (the old writer matched neither tier)."""
 
     def _problem_and_solutions(self):
         problem = load_zone_project(DATA_DIR)

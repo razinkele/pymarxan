@@ -77,7 +77,7 @@ class TestHeuristicOnAnchor:
     def test_greedy_meets_both_tiers_and_lands_at_or_above_optimum(self):
         """Hand trace at spf = 10 from (0, 0, 0): PU1->z2 (obj 111), PU2->z1 (17),
         PU3->z2 (8); no further improving move. v0.35 stopped at (2, 0, 0) cost 1 because
-        the zone target was already met (review H2)."""
+        the zone target was already met."""
         p = make_anchor_problem(spf=HEURISTIC_SPF)
         sol = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1))[0]
         assert sol.targets_met == {1: True}
