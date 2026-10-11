@@ -62,3 +62,9 @@ the zone `min_penalties` naming. The new findings, and the user's decisions on t
 | S6 | LOW | architect | `metadata["mip_objective"]` (value) sits next to core `metadata["objective"]` (name). | Rename to `mip_objective_value` in both solvers. |
 | S7 | LOW | grounding | Core P6 ignores status-3 PUs. | Subtract locked-out amounts. |
 | S8 | LOW | arch, grounding, redesign | `write_problem` breaks the `read_*`/`write_*` pairing. | **User: keep `write_problem`** (prioritizr name); docstring notes the deliberate exception. |
+| S9 | MED (new bug, executed) | synthesis | While executing S2, the following turned up. A **zero-cost PU with no features and no boundary** never enters the PuLP model, so its `varValue` is `None`. `MIPSolver`'s `has_values = all(... is not None)` (mip_solver.py:573) then makes `solve()` return `[]` for every objective, `min_set` included. The S2 fixture with PU2 cost 0 gives 0 solutions. `ZoneMIPSolver` is immune: it uses `any(...)` and reads `None` as 0 (zones/mip_solver.py:201, 211). | Fixed in Stage 1, copying the zone rule, with a failing test first. |
+
+S2 counter-example, executed on v0.38. Fixture: PU1 cost 100 holding 0.01 of feature a; PU2 cost
+1; target 0.01; BLM 0. With M = 102, `min_penalties` selects nothing and the target is unmet,
+while `min_set` selects PU1. User decisions: S1 supersede and deprecate; S2 two-pass solve,
+fixing the core solver in Stage 1; S8 keep `write_problem`. Spec rev 3 absorbs S1–S9.
