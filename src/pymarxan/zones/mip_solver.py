@@ -31,6 +31,8 @@ class ZoneMIPSolver(Solver):
         zone-specific feature targets on raw amounts (hard + slack; weighted under
             ZONETARGETCONTRIB=1)
         overall feature targets on contribution-weighted amounts (hard; Watts eq. 6)
+        Infeasible / no incumbent → ``[]`` plus one ``ZoneMIPNoSolutionWarning``
+            (``diagnose_zone_infeasibility``)
 
     Objective (minimize):
         zone costs + BLM * standard boundary + zone boundary costs + penalty
@@ -456,21 +458,21 @@ def _warn_no_solution(problem: ZonalProblem, status: int) -> None:
     if status == pulp.constants.LpStatusInfeasible:
         try:
             unreachable = diagnose_zone_infeasibility(problem)
-            failed = ""
         except Exception as exc:  # a diagnostic must never turn [] into a crash
-            unreachable, failed = [], f" (diagnostic failed: {exc!r})"
-        if unreachable:
-            more = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
-            msg = (
-                "ZoneMIPSolver: infeasible. Unreachable targets: "
-                + "; ".join(unreachable[:5]) + more
-            )
+            msg = f"ZoneMIPSolver: infeasible (diagnostic failed: {exc!r})."
         else:
-            msg = (
-                "ZoneMIPSolver: infeasible, but every target is reachable on its own — "
-                "targets compete for the same planning units. ZoneSASolver treats "
-                f"targets as penalties and will return a best-effort plan.{failed}"
-            )
+            if unreachable:
+                more = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
+                msg = (
+                    "ZoneMIPSolver: infeasible. Unreachable targets: "
+                    + "; ".join(unreachable[:5]) + more
+                )
+            else:
+                msg = (
+                    "ZoneMIPSolver: infeasible, but every target is reachable on its own — "
+                    "targets compete for the same planning units. ZoneSASolver treats "
+                    "targets as penalties and will return a best-effort plan."
+                )
     elif status == pulp.constants.LpStatusNotSolved:
         msg = (
             "ZoneMIPSolver: no feasible solution found within the time limit (status "

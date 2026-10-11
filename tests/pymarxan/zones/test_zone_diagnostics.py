@@ -141,6 +141,7 @@ class TestMIPWarning:
         monkeypatch.setattr(ms, "diagnose_zone_infeasibility", boom)
         msg = _mip_warning(_status(make_anchor_problem(), [3, 3, 0]))
         assert "diagnostic failed" in msg
+        assert "reachable on its own" not in msg
 
     def test_feasible_solve_emits_no_failure_warning(self):
         with warnings.catch_warnings(record=True) as rec:
