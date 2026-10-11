@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] — 2026-10-11
+
 ### Added
 - Zone problems: MarZone `pulock.dat` (lock a planning unit into a named zone) and
   `puzone.dat` (restrict it to a set of zones), as `ZonalProblem.pu_locks` / `pu_zones`,
@@ -1311,7 +1313,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.38.0
 [0.37.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.37.0
 [0.36.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.36.0
 [0.35.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.35.0
