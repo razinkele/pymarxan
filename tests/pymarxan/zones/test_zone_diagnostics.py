@@ -149,3 +149,36 @@ class TestMIPWarning:
             sols = ZoneMIPSolver().solve(make_anchor_problem(), CONFIG)
         assert sols and sols[0].objective == pytest.approx(7.0)
         assert not [w for w in rec if issubclass(w.category, ZoneMIPNoSolutionWarning)]
+
+
+class TestWarnNoSolutionBranches:
+    def test_not_solved_mentions_time_limit(self):
+        import pulp
+
+        from pymarxan.zones.mip_solver import _warn_no_solution
+
+        with pytest.warns(ZoneMIPNoSolutionWarning) as rec:
+            _warn_no_solution(make_anchor_problem(), pulp.constants.LpStatusNotSolved)
+        msg = str(rec[0].message)
+        assert "time limit" in msg and "MIP_TIME_LIMIT" in msg
+
+    def test_other_status_generic(self):
+        import pulp
+
+        from pymarxan.zones.mip_solver import _warn_no_solution
+
+        with pytest.warns(ZoneMIPNoSolutionWarning) as rec:
+            _warn_no_solution(make_anchor_problem(), pulp.constants.LpStatusUndefined)
+        assert str(rec[0].message).startswith("ZoneMIPSolver: no solution (status")
+
+    def test_infeasible_more_than_five_truncated(self, monkeypatch):
+        import pulp
+
+        import pymarxan.zones.mip_solver as ms
+
+        monkeypatch.setattr(
+            ms, "diagnose_zone_infeasibility", lambda p: [f"u{i}" for i in range(7)],
+        )
+        with pytest.warns(ZoneMIPNoSolutionWarning) as rec:
+            ms._warn_no_solution(make_anchor_problem(), pulp.constants.LpStatusInfeasible)
+        assert "(+2 more)" in str(rec[0].message)

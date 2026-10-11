@@ -121,3 +121,17 @@ class TestWarning:
 
     def test_is_user_warning_subclass(self):
         assert issubclass(ZoneTargetWarning, UserWarning)
+
+
+class TestValidateNonFinite:
+    def test_clean_anchor(self):
+        assert make_anchor_problem().validate() == []
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_reported(self, bad):
+        errs = _with_targets([(1, 1, bad), (2, 1, 10.0)]).validate()
+        assert any("non-finite target" in e and "zone 1, feature 1" in e for e in errs)
+
+    def test_non_numeric_never_raises(self):
+        errs = _with_targets([(1, 1, "abc"), (2, 1, 10.0)]).validate()
+        assert any("non-finite target" in e for e in errs)

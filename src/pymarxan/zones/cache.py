@@ -189,11 +189,13 @@ class ZoneProblemCache:
             if zcol is not None and fcol is not None:
                 zone_target_matrix[zcol, fcol] = target
 
-        # Apply MISSLEVEL to zone targets (match objective.py behavior)
-        zone_target_matrix *= misslevel
+        # Active mask comes from the RAW targets (the lookup's inertness rule), before
+        # MISSLEVEL scaling, so MISSLEVEL <= 0 cannot mask pairs the objective still charges.
         zone_target_active = (
             zone_target_matrix > 0 if bool(np.any(zone_target_weight < 0)) else None
         )
+        # Apply MISSLEVEL to zone targets (match objective.py behavior)
+        zone_target_matrix *= misslevel
 
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
         zbc: dict[tuple[int, int], float] = {}

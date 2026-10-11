@@ -134,6 +134,25 @@ def test_cache_delta_matches_full_with_negative_weight():
     assert before + delta == pytest.approx(after)
 
 
+def test_cache_matches_objective_when_misslevel_nonpositive_and_negative_weight():
+    p = make_anchor_problem(zone_target_contrib=1, misslevel=0.0).copy_with(
+        zone_contributions=NEG_CONTRIB,
+        zone_targets=pd.DataFrame({"zone": [1], "feature": [1], "target": [10.0]}),
+    )
+    a = np.array([1, 2, 2])
+    df = compute_zone_objective(p, a, 0.0)
+    assert df == 12.0
+    assert _cache_objective(p, a) == pytest.approx(df)  # was 7.0
+    cache = ZoneProblemCache.from_zone_problem(p)
+    held = cache.compute_held(a)
+    before = cache.compute_full_zone_objective(a, held=held, blm=0.0)
+    delta = cache.compute_delta_zone_objective(0, int(a[0]), 2, a, held=held, blm=0.0)
+    b = a.copy()
+    b[0] = 2
+    after = cache.compute_full_zone_objective(b, held=cache.compute_held(b), blm=0.0)
+    assert before + delta == pytest.approx(after)
+
+
 def test_writer_one_row_per_known_pair(tmp_path):
     p = _variant(VARIANTS["all_three"] + [(1, 1, 0.0)])
     sol = build_zone_solution(p, ASSIGN, 0.0, solver_name="t")

@@ -151,6 +151,7 @@ class ZonalProblem(ConservationProblem):
         unknown: list[tuple[int, object, object]] = []
         seen: set[tuple[int, int]] = set()
         dups: list[tuple[int, int]] = []
+        dup_set: set[tuple[int, int]] = set()
         for pos, (z, f) in enumerate(
             zip(zt["zone"].tolist(), zt["feature"].tolist(), strict=True),
         ):
@@ -159,7 +160,8 @@ class ZonalProblem(ConservationProblem):
                 unknown.append((pos, z, f))
                 continue
             key = (zid, fid)
-            if key in seen and key not in dups:
+            if key in seen and key not in dup_set:
+                dup_set.add(key)
                 dups.append(key)
             seen.add(key)
         return unknown, dups
@@ -297,6 +299,16 @@ class ZonalProblem(ConservationProblem):
                         f"zone_targets has {len(dup_keys)} duplicate (zone, feature) "
                         "pair(s), resolved last-wins by the solvers: "
                         + _first_five([f"zone {z}, feature {f}" for z, f in dup_keys])
+                    )
+                zt = self.zone_targets
+                vals = pd.to_numeric(zt["target"], errors="coerce").to_numpy(dtype=float)
+                bad_pos = np.flatnonzero(~np.isfinite(vals))
+                if len(bad_pos):
+                    zs, fs = zt["zone"].tolist(), zt["feature"].tolist()
+                    errors.append(
+                        f"zone_targets has {len(bad_pos)} row(s) with a non-finite target "
+                        "(treated as inert): "
+                        + _first_five([f"zone {zs[i]}, feature {fs[i]}" for i in bad_pos])
                     )
 
         if self.zone_boundary_costs is not None:
