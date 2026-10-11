@@ -29,6 +29,8 @@ from pymarxan.zones.objective import (
 )
 from pymarxan.zones.readers import (
     load_zone_project,
+    read_pu_lock,
+    read_pu_zone,
     read_zone_boundary_costs,
     read_zone_contributions,
     read_zone_costs,
@@ -38,6 +40,8 @@ from pymarxan.zones.readers import (
 )
 from pymarxan.zones.solver import ZoneSASolver
 from pymarxan.zones.writers import (
+    write_pu_lock,
+    write_pu_zone,
     write_zone_boundary_costs,
     write_zone_contributions,
     write_zone_costs,
@@ -69,12 +73,16 @@ __all__ = [
     "compute_zone_shortfalls",
     "diagnose_zone_infeasibility",
     "load_zone_project",
+    "read_pu_lock",
+    "read_pu_zone",
     "read_zone_boundary_costs",
     "read_zone_contributions",
     "read_zone_costs",
     "read_zone_targets",
     "read_zones",
     "resolve_zone_target_types",
+    "write_pu_lock",
+    "write_pu_zone",
     "write_zone_boundary_costs",
     "write_zone_contributions",
     "write_zone_costs",

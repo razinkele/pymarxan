@@ -30,6 +30,10 @@ ZONES_EXPORTS = {
     "compute_zone_shortfalls": "pymarxan.zones.objective",
     "diagnose_zone_infeasibility": "pymarxan.zones.diagnostics",
     "resolve_zone_target_types": "pymarxan.zones.readers",
+    "read_pu_lock": "pymarxan.zones.readers",
+    "read_pu_zone": "pymarxan.zones.readers",
+    "write_pu_lock": "pymarxan.zones.writers",
+    "write_pu_zone": "pymarxan.zones.writers",
 }
 
 ANALYSIS_EXPORTS = {

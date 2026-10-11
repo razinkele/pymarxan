@@ -192,3 +192,19 @@ def write_zone_summary(
             })
 
     pd.DataFrame(rows, columns=_SUMMARY_COLUMNS).to_csv(path, index=False)
+
+
+def _write_pu_zone_pairs(df: pd.DataFrame, path: str | Path) -> None:
+    df[["pu", "zone"]].rename(columns={"pu": "puid", "zone": "zoneid"}).to_csv(
+        path, index=False,
+    )
+
+
+def write_pu_lock(df: pd.DataFrame, path: str | Path) -> None:
+    """Write ``pu_locks`` as MarZone ``pulock.dat`` (header ``puid,zoneid``)."""
+    _write_pu_zone_pairs(df, path)
+
+
+def write_pu_zone(df: pd.DataFrame, path: str | Path) -> None:
+    """Write ``pu_zones`` as MarZone ``puzone.dat`` (header ``puid,zoneid``)."""
+    _write_pu_zone_pairs(df, path)

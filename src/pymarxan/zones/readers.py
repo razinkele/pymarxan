@@ -1,6 +1,7 @@
 """File readers for MarZone multi-zone projects."""
 from __future__ import annotations
 
+import re
 import warnings
 from pathlib import Path
 
@@ -100,7 +101,58 @@ def read_zone_boundary_costs(path: str | Path) -> pd.DataFrame:
     df["cost"] = df["cost"].astype(float)
     return df
 
+# MarZone util.hpp is_like_numerical_data: a line made only of these is data, not a header.
+_NUMERIC_LINE_CHARS = frozenset(" ,;:^*\"/\t'\\\n\r.+-Ee0123456789")
+_WS = re.compile(r"\s+")
+
+
+def _read_pu_zone_pairs(path: str | Path) -> pd.DataFrame:
+    """Two integer columns read by position (MarZone LoadPuLock / LoadPuZone)."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8-sig")
+    if not text.strip():
+        raise ValueError(f"{path}: file is empty (MarZone: 'cannot be read or is empty')")
+    lines = text.splitlines()
+    start = 0 if set(lines[0]) <= _NUMERIC_LINE_CHARS else 1
+    rows: list[tuple[int, int]] = []
+    data = [ln for ln in lines[start:] if ln.strip()]
+    comma = bool(data) and "," in data[0]
+    for lineno, line in enumerate(lines[start:], start=start + 1):
+        if not line.strip():
+            continue
+        raw = line.strip()
+        cells = [c.strip() for c in raw.split(",")] if comma else _WS.split(raw)
+        if len(cells) < 2:
+            raise ValueError(f"{path}: line {lineno} needs two values (puid, zoneid)")
+        try:
+            a, b = float(cells[0]), float(cells[1])
+        except ValueError as exc:
+            raise ValueError(f"{path}: line {lineno} has a non-numeric id") from exc
+        if not (a.is_integer() and b.is_integer()):
+            raise ValueError(f"{path}: line {lineno} has a non-integral id")
+        rows.append((int(a), int(b)))
+    return pd.DataFrame(rows, columns=["pu", "zone"], dtype=int)
+
+
+def read_pu_lock(path: str | Path) -> pd.DataFrame:
+    """Read ``pulock.dat`` (``puid, zoneid``) into columns ``pu, zone``."""
+    return _read_pu_zone_pairs(path)
+
+
+def read_pu_zone(path: str | Path) -> pd.DataFrame:
+    """Read ``puzone.dat`` (``puid, zoneid``, one row per allowed zone) into ``pu, zone``."""
+    return _read_pu_zone_pairs(path)
+
+
 def load_zone_project(project_dir: str | Path) -> ZonalProblem:
+    """Load a MarZone project directory into a ``ZonalProblem``.
+
+    ``zones.dat``, ``zonecost.dat``, ``zonecontrib.dat``, ``zonetarget.dat`` and
+    ``zoneboundcost.dat`` fall back to those default names when their ``*NAME`` key is
+    absent. ``pulock.dat`` / ``puzone.dat`` do not: as in MarZone they are read only when
+    ``PULOCKNAME`` / ``PUZONENAME`` is set. A named file that does not exist raises
+    ``FileNotFoundError``; a named empty file raises ``ValueError``.
+    """
     project_dir = Path(project_dir)
     base = load_project(project_dir)
 
@@ -132,6 +184,23 @@ def load_zone_project(project_dir: str | Path) -> ZonalProblem:
     if zbc_path.exists():
         zone_boundary_costs = read_zone_boundary_costs(zbc_path)
 
+    pu_locks = None
+    pu_zones = None
+    for key, reader, target in (
+        ("PULOCKNAME", read_pu_lock, "pu_locks"),
+        ("PUZONENAME", read_pu_zone, "pu_zones"),
+    ):
+        name = base.parameters.get(key)
+        if name is None:
+            continue  # MarZone loads these files only when named
+        path = input_dir / str(name)
+        if not path.exists():
+            raise FileNotFoundError(f"{project_dir}: {key} names {path}, which does not exist")
+        if target == "pu_locks":
+            pu_locks = reader(path)
+        else:
+            pu_zones = reader(path)
+
     problem = ZonalProblem(
         planning_units=base.planning_units,
         features=base.features,
@@ -143,6 +212,8 @@ def load_zone_project(project_dir: str | Path) -> ZonalProblem:
         zone_contributions=zone_contributions,
         zone_targets=zone_targets,
         zone_boundary_costs=zone_boundary_costs,
+        pu_locks=pu_locks,
+        pu_zones=pu_zones,
     )
     gaps = problem.contribution_gaps()
     total = len(problem.features) * len(problem.zone_ids)
