@@ -25,9 +25,9 @@ class ZoneMIPSolver(Solver):
         x[i,z] ∈ {0,1}  — PU i assigned to zone z
 
     Constraints:
-        Σ_z x[i,z] <= 1           each PU in at most one zone
-        x[i,z] = 1                locked-in PUs (status=2, first zone)
-        x[i,z] = 0 ∀z             locked-out PUs (status=3)
+        Σ_z x[i,z] == 1           PUs that must be assigned (``pu_zone_rules``)
+        Σ_z x[i,z] <= 1           every other PU
+        x[i,z] = 0                zones outside a PU's rule (status, pu_locks, pu_zones)
         zone-specific feature targets on raw amounts (hard + slack; weighted under
             ZONETARGETCONTRIB=1)
         overall feature targets on contribution-weighted amounts (hard; Watts eq. 6)
@@ -121,23 +121,17 @@ class ZoneMIPSolver(Solver):
         x: dict[tuple[int, int], pulp.LpVariable] = {}
         for k, pid in enumerate(pu_ids):
             pid = int(pid)
-            for zid in zone_ids:
-                x[(pid, zid)] = pulp.LpVariable(f"x_{pid}_{zid}", cat="Binary")
-
-            # Each PU in at most one zone
-            model += (
-                pulp.lpSum(x[(pid, zid)] for zid in zone_ids) <= 1,
-                f"assign_{pid}",
-            )
-
             rule = rules[k]
-            if rule.forced:
-                (forced_zone,) = rule.allowed
-                model += x[(pid, forced_zone)] == 1, f"locked_in_{pid}"
+            for zid in zone_ids:
+                var = pulp.LpVariable(f"x_{pid}_{zid}", cat="Binary")
+                if zid not in rule.allowed:
+                    var.upBound = 0
+                x[(pid, zid)] = var
+            assigned = pulp.lpSum(x[(pid, zid)] for zid in zone_ids)
+            if rule.may_be_unassigned:
+                model += assigned <= 1, f"assign_{pid}"
             else:
-                for zid in zone_ids:
-                    if zid not in rule.allowed:
-                        model += x[(pid, zid)] == 0, f"locked_out_{pid}_{zid}"
+                model += assigned == 1, f"assign_{pid}"
 
         # --- Objective components ---
 
@@ -204,8 +198,7 @@ class ZoneMIPSolver(Solver):
             pulp.constants.LpStatusUnbounded,
             pulp.constants.LpStatusUndefined,
         }
-        first_pid = int(pu_ids[0])
-        has_values = pulp.value(x[(first_pid, zone_ids[0])]) is not None
+        has_values = any(var.varValue is not None for var in x.values())
         if model.status in infeasible_statuses or not has_values:
             _warn_no_solution(problem, model.status)
             return []
@@ -461,16 +454,21 @@ def _warn_no_solution(problem: ZonalProblem, status: int) -> None:
         except Exception as exc:  # a diagnostic must never turn [] into a crash
             msg = f"ZoneMIPSolver: infeasible (diagnostic failed: {exc!r})."
         else:
+            note = (
+                " (given the PU zone restrictions)"
+                if problem.pu_locks is not None or problem.pu_zones is not None
+                else ""
+            )
             if unreachable:
                 more = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
                 msg = (
                     "ZoneMIPSolver: infeasible. Unreachable targets: "
-                    + "; ".join(unreachable[:5]) + more
+                    + "; ".join(unreachable[:5]) + more + note
                 )
             else:
                 msg = (
-                    "ZoneMIPSolver: infeasible, but every target is reachable on its own — "
-                    "targets compete for the same planning units. ZoneSASolver treats "
+                    f"ZoneMIPSolver: infeasible, but every target is reachable on its own{note} "
+                    "— targets compete for the same planning units. ZoneSASolver treats "
                     "targets as penalties and will return a best-effort plan."
                 )
     elif status == pulp.constants.LpStatusNotSolved:
