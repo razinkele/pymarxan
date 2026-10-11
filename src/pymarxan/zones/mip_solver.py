@@ -456,7 +456,7 @@ def _warn_no_solution(problem: ZonalProblem, status: int) -> None:
         else:
             note = (
                 " (given the PU zone restrictions)"
-                if problem.pu_locks is not None or problem.pu_zones is not None
+                if problem.pu_lock_lookup() or problem.pu_zone_lookup()
                 else ""
             )
             if unreachable:

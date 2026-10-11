@@ -119,6 +119,13 @@ def test_loader_named_empty_file_raises(tmp_path):
         _load(proj)
 
 
+def test_leading_blank_line_before_header(tmp_path):
+    f = tmp_path / "pulock.dat"
+    f.write_bytes(b"\npuid,zoneid\n1,2\n")
+    df = read_pu_lock(f)
+    assert df.values.tolist() == [[1, 2]]
+
+
 def test_blank_middle_cell_raises(tmp_path):
     f = tmp_path / "pulock.dat"
     f.write_text("puid,zoneid\n1,,2\n")

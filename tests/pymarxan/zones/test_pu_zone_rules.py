@@ -168,6 +168,12 @@ def _issues(**kw):
     return _three_zone(**kw).pu_lock_issues()
 
 
+def test_float_ids_render_as_ints_in_issue_messages():
+    p = _three_zone(pu_locks=pd.DataFrame({"pu": [9.0], "zone": [1.0]}))
+    text = " | ".join(p.pu_lock_issues())
+    assert "PU 9, zone 1" in text and "9.0" not in text
+
+
 def test_issue_rows_and_validate():
     p = _three_zone(
         (3, 3, 0),

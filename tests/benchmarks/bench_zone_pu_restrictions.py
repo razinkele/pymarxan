@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import statistics
 import time
+from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
@@ -10,7 +11,7 @@ import pytest
 
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.cache import ZoneProblemCache
-from pymarxan.zones.model import fixed_zones
+from pymarxan.zones.model import ZonalProblem, fixed_zones
 from pymarxan.zones.solver import ZoneSASolver, _propose
 from tests.benchmarks.conftest import make_zone_problem
 
@@ -18,7 +19,7 @@ pytestmark = pytest.mark.bench
 N_PU, N_FEAT, N_ZONES, N_MOVES = 1000, 50, 3, 20_000
 
 
-def _opts(problem):
+def _opts(problem: ZonalProblem) -> tuple[list[np.ndarray], np.ndarray, np.ndarray]:
     rules = problem.pu_zone_rules()
     zone_options = np.array(sorted(problem.zone_ids), dtype=int)
     every = frozenset(zone_options.tolist())
@@ -29,7 +30,7 @@ def _opts(problem):
     return opts, swappable, zone_options
 
 
-def _per_evaluated_delta(problem) -> float:
+def _per_evaluated_delta(problem: ZonalProblem) -> float:
     """Seconds per evaluated delta (no-op proposals excluded, so the restricted run's higher
     no-op share cannot hide proposal overhead)."""
     opts, swappable, _ = _opts(problem)
@@ -53,7 +54,7 @@ def _per_evaluated_delta(problem) -> float:
     return statistics.median(samples)
 
 
-def _propose_seconds(draw) -> float:
+def _propose_seconds(draw: Callable[[], object]) -> float:
     samples = []
     for _ in range(5):
         t0 = time.perf_counter()
@@ -63,7 +64,7 @@ def _propose_seconds(draw) -> float:
     return statistics.median(samples)
 
 
-def _restricted(base):
+def _restricted(base: ZonalProblem) -> ZonalProblem:
     ids = base.planning_units["id"].astype(int).tolist()[::2]
     rows = [(pid, z) for pid in ids for z in (1, 2)]
     return base.copy_with(pu_zones=pd.DataFrame(rows, columns=["pu", "zone"]))
@@ -94,7 +95,7 @@ def test_propose_vs_v037_inline_draw() -> None:
     assert ratio <= 1.10, f"_propose / v0.37 inline draw {ratio:.3f}"
 
 
-def _sa_seconds_per_iteration(problem) -> float:
+def _sa_seconds_per_iteration(problem: ZonalProblem) -> float:
     problem.parameters["NUMITNS"] = 50_000
     problem.parameters["NUMTEMP"] = 500
     samples = []
@@ -112,7 +113,7 @@ def test_whole_sa_loop_restricted_vs_unrestricted() -> None:
     overhead (e.g. per-iteration rule rebuilding); the two tests above bound the fine one."""
     base = make_zone_problem(n_pu=N_PU, n_feat=N_FEAT, n_zones=N_ZONES, density=0.3, seed=42)
     restricted = _restricted(base)
-    restricted.parameters = dict(base.parameters)
+    restricted.parameters = dict(base.parameters)  # own copy: the helper mutates NUMITNS/NUMTEMP
     ratio = _sa_seconds_per_iteration(restricted) / _sa_seconds_per_iteration(base)
     print(f"whole-SA restricted/unrestricted per-iteration {ratio:.3f}")
     assert ratio <= 1.10, f"whole-SA restricted/unrestricted per-iteration {ratio:.3f}"

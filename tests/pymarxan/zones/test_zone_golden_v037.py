@@ -85,6 +85,16 @@ def _run(fx: str, kind: str, spf: float | None, itimptype: int | None) -> Golden
     ]
 
 
+def _run_improve(fx: str) -> Golden:
+    """ZoneIISolver.improve() (no pu_locks / pu_zones) on the seeded heuristic's first plan."""
+    p = _fixture(fx, None, 3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        start = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=2, seed=7))[0]
+        out = ZoneIISolver().improve(p, start)
+    return [(tuple(int(z) for z in out.zone_assignment), round(float(out.objective), 6))]
+
+
 GOLDEN: dict[str, Golden] = {
     'small-sa-None-None':
         [((1, 1, 0, 2), 318.8), ((1, 1, 0, 2), 318.8)],
@@ -179,6 +189,21 @@ GOLDEN: dict[str, Golden] = {
 }
 
 
+GOLDEN_IMPROVE: dict[str, Golden] = {  # recorded on v0.37 source (a66459a), see __main__
+    'small':
+        [((0, 1, 0, 0), 184.0)],
+    'large':
+        [((0, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0, 3, 0, 0, 1, 0, 0, 0, 2, 1, 1, 0, 3, 0, 1, 1, 1, 0, 0,
+           0, 0, 2),
+          488.579449)],
+}
+
+
+@pytest.mark.parametrize("fx", ["small", "large"])
+def test_improve_matches_v037(fx):
+    assert _run_improve(fx) == GOLDEN_IMPROVE[fx]
+
+
 @pytest.mark.parametrize("fx,kind,spf,itimptype", CASES)
 def test_matches_v037(fx, kind, spf, itimptype):
     assert _run(fx, kind, spf, itimptype) == GOLDEN[f"{fx}-{kind}-{spf}-{itimptype}"]
@@ -192,4 +217,9 @@ if __name__ == "__main__":
         body = pprint.pformat(_run(fx, kind, spf, itimptype), width=91, compact=True)
         print(f"    {f'{fx}-{kind}-{spf}-{itimptype}'!r}:\n        "
               + body.replace("\n", "\n        ") + ",")
+    print("}")
+    print("GOLDEN_IMPROVE: dict[str, Golden] = {")
+    for fx in ("small", "large"):
+        body = pprint.pformat(_run_improve(fx), width=91, compact=True)
+        print(f"    {fx!r}:\n        " + body.replace("\n", "\n        ") + ",")
     print("}")

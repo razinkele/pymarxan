@@ -113,7 +113,8 @@ def _read_pu_zone_pairs(path: str | Path) -> pd.DataFrame:
     if not text.strip():
         raise ValueError(f"{path}: file is empty (MarZone: 'cannot be read or is empty')")
     lines = text.splitlines()
-    start = 0 if set(lines[0]) <= _NUMERIC_LINE_CHARS else 1
+    first = next(i for i, ln in enumerate(lines) if ln.strip())  # text is non-blank
+    start = first if set(lines[first].strip()) <= _NUMERIC_LINE_CHARS else first + 1
     rows: list[tuple[int, int]] = []
     data = [ln for ln in lines[start:] if ln.strip()]
     comma = bool(data) and "," in data[0]
@@ -142,6 +143,16 @@ def read_pu_lock(path: str | Path) -> pd.DataFrame:
 def read_pu_zone(path: str | Path) -> pd.DataFrame:
     """Read ``puzone.dat`` (``puid, zoneid``, one row per allowed zone) into ``pu, zone``."""
     return _read_pu_zone_pairs(path)
+
+
+def _named_input(
+    project_dir: Path, input_dir: Path, parameters: dict, key: str,
+) -> Path:
+    """Path of the file named by ``key`` (MarZone loads pulock/puzone only when named)."""
+    path = input_dir / str(parameters[key])
+    if not path.exists():
+        raise FileNotFoundError(f"{project_dir}: {key} names {path}, which does not exist")
+    return path
 
 
 def load_zone_project(project_dir: str | Path) -> ZonalProblem:
@@ -184,22 +195,14 @@ def load_zone_project(project_dir: str | Path) -> ZonalProblem:
     if zbc_path.exists():
         zone_boundary_costs = read_zone_boundary_costs(zbc_path)
 
-    pu_locks = None
-    pu_zones = None
-    for key, reader, target in (
-        ("PULOCKNAME", read_pu_lock, "pu_locks"),
-        ("PUZONENAME", read_pu_zone, "pu_zones"),
-    ):
-        name = base.parameters.get(key)
-        if name is None:
-            continue  # MarZone loads these files only when named
-        path = input_dir / str(name)
-        if not path.exists():
-            raise FileNotFoundError(f"{project_dir}: {key} names {path}, which does not exist")
-        if target == "pu_locks":
-            pu_locks = reader(path)
-        else:
-            pu_zones = reader(path)
+    pu_locks = (
+        read_pu_lock(_named_input(project_dir, input_dir, base.parameters, "PULOCKNAME"))
+        if "PULOCKNAME" in base.parameters else None
+    )
+    pu_zones = (
+        read_pu_zone(_named_input(project_dir, input_dir, base.parameters, "PUZONENAME"))
+        if "PUZONENAME" in base.parameters else None
+    )
 
     problem = ZonalProblem(
         planning_units=base.planning_units,

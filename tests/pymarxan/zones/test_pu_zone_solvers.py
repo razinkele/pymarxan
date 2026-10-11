@@ -148,6 +148,12 @@ class TestMIP:
         msg = self._no_solution_message(make_anchor_problem(zone_target_contrib=1))
         assert "targets compete" in msg and "given the PU zone restrictions" not in msg
 
+    def test_empty_tables_carry_no_restriction_note(self):
+        empty = pd.DataFrame({"pu": [], "zone": []}, dtype=int)
+        p = make_anchor_problem(zone_target_contrib=1).copy_with(pu_locks=empty)
+        msg = self._no_solution_message(p)
+        assert "targets compete" in msg and "given the PU zone restrictions" not in msg
+
 
 def _fast(p, n=3000):
     return p.copy_with(parameters={**p.parameters, "NUMITNS": n, "NUMTEMP": 30})

@@ -41,7 +41,10 @@ def compute_replacement_cost(
     increase when ``i`` is locked out and the problem is re-solved.
     PUs not in the baseline get score 0. For zone problems the PU's ``pu_locks`` /
     ``pu_zones`` rows are dropped in the variant; other status-based analyses do not consult
-    them.
+    them. Dropping those rows only matters when a zone solver is passed (e.g.
+    ``solver=ZoneMIPSolver()``); the default core :class:`MIPSolver` ignores zones. With
+    locks a forced PU's score can be negative (locking out a PU that a lock forced in can
+    lower the objective).
 
     Parameters
     ----------

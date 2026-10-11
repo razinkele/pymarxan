@@ -22,6 +22,13 @@ def _first_five(items: list[str]) -> str:
     return "; ".join(items[:5]) + (" …" if len(items) > 5 else "")
 
 
+def _fmt_id(value: object) -> object:
+    """An integral float id (9.0) as an int for messages; anything else as given."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 def _known_id(value: object, known: set[int]) -> int | None:
     """The integer id ``value`` names when it is integral and in ``known``; else ``None``.
 
@@ -313,7 +320,7 @@ class ZonalProblem(ConservationProblem):
                 out.append((
                     f"{name} has {len(bad)} row(s) naming an unknown PU or zone, or a "
                     "non-integral id (skipped): "
-                    + _first_five([f"PU {p}, zone {z}" for p, z in bad]),
+                    + _first_five([f"PU {_fmt_id(p)}, zone {_fmt_id(z)}" for p, z in bad]),
                     True,
                 ))
         locks = self.pu_lock_lookup()
