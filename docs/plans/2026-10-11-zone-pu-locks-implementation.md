@@ -549,7 +549,7 @@ Add the methods after `zone_target_issues`:
 
 (The single `pid in restrict` branch covers both "status 2 and puzone" and "puzone" rows of the table: both give `(puzone set, False, only-zone-or-None)`.)
 
-`src/pymarxan/zones/diagnostics.py`: delete the local `PUZoneRule` class and `_pu_zone_rules` body and the `STATUS_*` import; add `from pymarxan.zones.model import PUZoneRule, ZonalProblem` and
+`src/pymarxan/zones/diagnostics.py`: delete the local `PUZoneRule` class, the `_pu_zone_rules` body, the `STATUS_*` import and the now-unused `from typing import NamedTuple` (ruff F401 otherwise); add `from pymarxan.zones.model import PUZoneRule, ZonalProblem` and
 
 ```python
 def _pu_zone_rules(problem: ZonalProblem) -> list[PUZoneRule]:
@@ -582,7 +582,7 @@ Note: from this task on the MIP already honours pulocks and puzone allowed sets 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones -q`
-Expected: all PASS (incl. the 10 golden tests).
+Expected: all PASS (incl. the 20 golden tests).
 
 - [ ] **Step 5: Lint, type-check, commit**
 
@@ -1445,8 +1445,14 @@ In `_warn_no_solution`, replace the `else:` clause of the `try` (the block that 
 
 (The diagnostic-failure message is unchanged.)
 
-Update the class docstring's constraint list: replace the two status lines with
-"x[i,z] fixed to 0 for zones outside a PU's rule; Σ_z x[i,z] == 1 for PUs that must be assigned, <= 1 otherwise (``ZonalProblem.pu_zone_rules``: status, pu_locks, pu_zones)".
+Update the class docstring's constraint list: replace all three lines under `Constraints:`
+(the `<= 1` line and the two status lines) with:
+
+```text
+        Σ_z x[i,z] == 1           PUs that must be assigned (``pu_zone_rules``)
+        Σ_z x[i,z] <= 1           every other PU
+        x[i,z] = 0                zones outside a PU's rule (status, pu_locks, pu_zones)
+```
 
 - [ ] **Step 4: Run tests** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones -q` → all PASS (incl. existing locked-in/out MIP tests and `tests/data/simple` paths untouched).
 
@@ -1828,7 +1834,7 @@ import pandas as pd
 import pytest
 
 from pymarxan.analysis.replacement_cost import compute_replacement_cost
-from pymarxan.zones import ZoneMIPSolver
+from pymarxan.zones import ZoneLockWarning, ZoneMIPSolver
 from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
 
 
@@ -1864,9 +1870,21 @@ def test_variant_keeps_other_pus_locks():
     # Base (2, 1, 2, 1) = 8 + 3. PU 4's variant keeps PU 1's lock: (2, 1, 2, 0) = 8 -> -3.
     # Dropping every lock row instead gives (1, 2, 2, 0) = 7 -> -4.
     assert scores[4] == pytest.approx(-3.0)
+
+
+def test_variant_drops_pu_zones_rows():
+    p = _with_pu4().copy_with(pu_zones=pd.DataFrame({"pu": [4, 4], "zone": [1, 2]}))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        scores = compute_replacement_cost(p, solver=ZoneMIPSolver())  # type: ignore[arg-type]
+    # Base (1, 2, 2, 2) = 9; variant (1, 2, 2, 0) = 7 -> -2 either way (status 3 beats
+    # puzone). Keeping PU 4's puzone rows in its own variant is the "status 3 with puzone
+    # rows" conflict, so the solver would warn; dropping them keeps the variant clean.
+    assert scores[4] == pytest.approx(-2.0)
+    assert not [w for w in caught if issubclass(w.category, ZoneLockWarning)]
 ```
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_replacement_cost_zone_locks.py -q` → FAIL (2 tests: `0.0 != inf`, and `0.0 != -3.0`: the lock wins over status 3).
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_replacement_cost_zone_locks.py -q` → FAIL (3 tests: `0.0 != inf`; `0.0 != -3.0`, the lock wins over status 3; and a `ZoneLockWarning` for status 3 with puzone rows in PU 4's variant).
 
 - [ ] **Step 2: Implement** — in `compute_replacement_cost`, replace the variant construction with:
 
