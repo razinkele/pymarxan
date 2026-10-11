@@ -1,7 +1,7 @@
 # Zone-target normalization, validation and MIP infeasibility diagnostic — design
 
 Issue: razinkele/pymarxan#7 (follow-on from #2 / v0.36.0).
-Status: **rev 2** — rev 1 (`d31ff72`) approved in chat 2026-10-11 (option "MarZone semantics");
+Status: **rev 3** (2026-10-11, after the plan review `…-plan-review.md`; see "Rev 3 decisions" at the end). Rev 2 — rev 1 (`d31ff72`) approved in chat 2026-10-11 (option "MarZone semantics");
 patched after the 4-lens review (`2026-10-11-zone-target-normalization-review.md`, findings
 1–12 accepted, 13–14 deferred).
 
@@ -53,7 +53,7 @@ Finally, `zones/writers.py` imports the private `objective._compute_zone_achieve
 New method in `zones/model.py`, next to `contribution_lookup()` and following its pattern:
 
 ```python
-def zone_target_lookup(self) -> dict[tuple[int, int], float]:
+def zone_target_lookup(self, *, include_inert: bool = False) -> dict[tuple[int, int], float]:
     """Effective zone targets keyed ``(zone_id, feature_id)``, MarZone load semantics.
 
     Rows naming a zone not in ``zone_ids`` or a feature not in ``features["id"]`` are
@@ -147,11 +147,11 @@ status 2 into the first sorted zone), not a MarZone rule — the docstring says 
 Overall target `f`: `v_i(z) = amount[i,f] × contribution[z,f]`; `UB_f = Σ_i best_i`.
 Zone target `(k, f)`: `v_i(z) = amount[i,f] × w[k,f]` if `z = k`, else `0`; `UB_kf = Σ_i best_i`.
 
-Amounts come from `mip_solver._feature_groups` (the MIP constraints' own source: summed
+Amounts come from `diagnostics._feature_groups` (moved from `mip_solver`) (the MIP constraints' own source: summed
 duplicate `pu_vs_features` rows, unknown PUs dropped; no PROBMODE adjustment), so the bound
 is the MIP's by construction. Targets: overall `features.target`, zone targets from
 `zone_target_lookup()`; both scaled by MISSLEVEL; **only `t > 0` checked** (matches
-`mip_solver.py:457`). A target is reported when `UB < t × MISSLEVEL` beyond the shared 1e-9
+`mip_solver.py:458`). A target is reported when `UB < t × MISSLEVEL` beyond the shared 1e-9
 relative tolerance (`_meets`). Messages, e.g.
 `"overall target for feature 3 is 120.0 but at most 85.5 is reachable"` /
 `"zone target (zone 2, feature 1) is 40.0 but at most 12.0 is reachable"`.
@@ -186,6 +186,9 @@ internal callers; update the docstrings that name the private function (`objecti
 ## Testing
 
 All under `tests/pymarxan/zones/`, TDD, on the MarZone anchor unless noted.
+
+> Rev 3: Testing #9 is implemented as a lookup/objective cost ratio (≤ 0.15; no in-tree
+> "before" baseline exists) plus the existing per-flip benches.
 
 1. **Agreement:** variants with duplicate rows **25→10 and 10→25** (so last-wins is
    discriminated), unknown zone 9, unknown feature 99 (target 1), and all three combined, at
@@ -233,3 +236,18 @@ All under `tests/pymarxan/zones/`, TDD, on the MarZone anchor unless noted.
   (review #13) — file a separate issue.
 - Joint-infeasibility explanation (IIS / elastic re-solve, review #14).
 - #6 part 2 (lock into a named zone) — `_pu_zone_rules` is its single extension point.
+
+## Rev 3 decisions (plan review, 2026-10-11)
+
+- **Inert pairs in met-flags.** `zone_target_lookup(include_inert=True)` also returns known pairs
+  whose surviving target is <= 0. `check_zone_targets` (hence `metadata["zone_targets_met"]`)
+  and `write_zone_summary` use it and report those pairs as **met** — the
+  `check_overall_targets` convention (every feature; inert = True). Shortfalls, penalty, cache
+  and MIP use effective (> 0) pairs only, so MarZone's `target > 0` gate is unchanged. Reason:
+  ROWER's `evaluate()` indexes met-flags by raw rows and deliberately emits target-0 rows.
+- **Warnings.** `ZoneTargetWarning` is emitted once per zone-solver call (`solve`,
+  `ZoneIISolver.improve`); `RunModePipeline` RUNMODEs 2–5 therefore emit 2–3 per run. The MIP
+  failure warning is `ZoneMIPNoSolutionWarning(UserWarning)` (exported, filterable); a crash in
+  the diagnostic degrades to the generic message — `[]` is always returned.
+- **Ids.** Ids are accepted when `float(id).is_integer()` and known; NaN, inf, fractional and
+  non-numeric ids are unknown (reported by `validate()`, which never raises).
