@@ -153,7 +153,7 @@ def _small():
 
 def _large():
     """30 PUs + one tie PU, 3 zones, statuses cycling 0/1/2/3/0/0, UNconverged SA
-    (NUMITNS 400) so the output depends on the RNG stream; PU 31 (no features, zone costs
+    (NUMITNS 100) so the output depends on the RNG stream; PU 31 (no features, zone costs
     5 / 0 / 7) gives II's swap pass a tie between zone 0 and zone 2 from its zone-1 seed,
     so candidate order matters."""
     from tests.benchmarks.conftest import make_zone_problem
@@ -171,7 +171,7 @@ def _large():
     )
     return p.copy_with(
         planning_units=pu, zone_costs=zc,
-        parameters={**p.parameters, "NUMITNS": 400, "NUMTEMP": 10, "BLM": 0.5},
+        parameters={**p.parameters, "NUMITNS": 100, "NUMTEMP": 10, "BLM": 0.5},
     )
 
 
@@ -206,15 +206,23 @@ def test_matches_v037(fx, kind, spf, itimptype):
 
 
 if __name__ == "__main__":
-    print("GOLDEN = {")
+    import pprint
+
+    print("GOLDEN: dict[str, Golden] = {")
     for fx, kind, spf, itimptype in CASES:
-        print(f"    {f'{fx}-{kind}-{spf}-{itimptype}'!r}: {_run(fx, kind, spf, itimptype)!r},")
+        body = pprint.pformat(_run(fx, kind, spf, itimptype), width=91, compact=True)
+        print(f"    {f'{fx}-{kind}-{spf}-{itimptype}'!r}:\n        "
+              + body.replace("\n", "\n        ") + ",")
     print("}")
 ```
 
-Run on the **unmodified** code: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python tests/pymarxan/zones/test_zone_golden_v037.py`, paste the printed dict over the `GOLDEN` placeholder, then run `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_golden_v037.py -q` → 20 passed.
+Run on the **unmodified** code: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python tests/pymarxan/zones/test_zone_golden_v037.py`, replace the whole `GOLDEN: dict[str, Golden] = {...}` placeholder statement with the printed statement (it is already ruff-clean: pprint at width 91 under an 8-space indent keeps every line under 99 chars, so no `noqa` is needed; confirm with `ruff check tests/pymarxan/zones/test_zone_golden_v037.py`), then run `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_golden_v037.py -q` → 20 passed.
 
-**Mutation check (do it, then revert; record the outcome in the commit message):** (a) in `src/pymarxan/zones/solver.py`'s annealing loop add `rng.integers(2)` immediately before the `new_zone` draw → at least one `large-sa-*` case must FAIL; (b) in `src/pymarxan/zones/iterative_improvement.py` change `all_options = [0, *zone_ids]` to `[*zone_ids, 0]` → at least one `large-ii-*` case must FAIL. Revert both (`git diff src` empty). If either mutation passes, the fixture does not discriminate — stop and report (BLOCKED) rather than continuing. Commit the test file alone:
+**Mutation check (do it, then revert; record the outcome in the commit message):** (a) in `src/pymarxan/zones/solver.py`'s annealing loop add `rng.integers(2)` immediately before the `new_zone` draw → at least one `large-sa-*` case must FAIL; (b) in `src/pymarxan/zones/iterative_improvement.py` change `all_options = [0, *zone_ids]` to `[*zone_ids, 0]` → at least one `large-ii-*` case must FAIL. Revert both (`git diff src` empty). If either mutation passes, the fixture does not discriminate — stop and report (BLOCKED) rather than continuing.
+
+Convergence sanity (done in the plan dry run): at NUMITNS 100, ZoneSASolver on `_large()` gives 15 distinct outputs over seeds 0..14 for both spf None and spf 10 (at NUMITNS 400 spf None gave 1, i.e. the SA had converged and mutation (a) passed). With NUMITNS 100, mutation (a) fails `large-sa-None-None` and `large-sa-10.0-None`; mutation (b) fails `large-ii-None-3` and `large-ii-10.0-3`.
+
+Commit the test file alone:
 
 ```bash
 git add tests/pymarxan/zones/test_zone_golden_v037.py
@@ -649,6 +657,25 @@ def test_status_3_with_puzone_reported():
                for m in _issues(statuses=(3, 0, 0), pu_zones=_table([(1, 2), (1, 3)])))
 
 
+def test_all_unknown_puzone_not_reported_for_locked_or_status_3_pu():
+    issues = _issues(statuses=(3, 0, 0), pu_locks=_table([(2, 1)]),
+                     pu_zones=_table([(1, 99), (2, 99)]))
+    assert not any("name only unknown zones" in m for m in issues)
+
+
+def test_single_zone_puzone_not_reported_for_locked_pu():
+    issues = _issues(pu_locks=_table([(1, 3)]), pu_zones=_table([(1, 2)]))
+    assert not any("single zone" in m for m in issues)
+    assert any("outside the PU's pu_zones list" in m for m in issues)
+
+
+def test_status_3_with_lock_and_puzone_reports_lock_only():
+    issues = _issues(statuses=(3, 0, 0), pu_locks=_table([(1, 2)]),
+                     pu_zones=_table([(1, 2), (1, 3)]))
+    assert any("status 3 and a pu_locks row" in m for m in issues)
+    assert not any("status 3 and pu_zones rows" in m for m in issues)
+
+
 def test_missing_columns_reported():
     assert any("pu_locks missing columns ['zone'] (table ignored)" in m
                for m in _issues(pu_locks=pd.DataFrame({"pu": [1]})))
@@ -1012,9 +1039,12 @@ def test_bom_and_crlf(tmp_path):
     pd.testing.assert_frame_equal(read_pu_zone(f), _frame([(1, 1), (1, 2)]))
 
 
-def test_headerless_tab_and_space(tmp_path):
+@pytest.mark.parametrize(
+    "text", ["1\t2\n3\t1\n", "1 2\n3  1\n", "1\t2\n3 1\n"], ids=["tab", "space", "mixed"]
+)
+def test_headerless_tab_and_space(tmp_path, text):
     f = tmp_path / "pulock.dat"
-    f.write_text("1\t2\n3 1\n")
+    f.write_text(text)
     pd.testing.assert_frame_equal(read_pu_lock(f), _frame([(1, 2), (3, 1)]))
 
 
@@ -1130,12 +1160,12 @@ def _read_pu_zone_pairs(path: str | Path) -> pd.DataFrame:
     start = 0 if set(lines[0]) <= _NUMERIC_LINE_CHARS else 1
     rows: list[tuple[int, int]] = []
     data = [ln for ln in lines[start:] if ln.strip()]
-    sep = "," if data and "," in data[0] else ("\t" if data and "\t" in data[0] else None)
+    comma = bool(data) and "," in data[0]
     for lineno, line in enumerate(lines[start:], start=start + 1):
         if not line.strip():
             continue
         raw = line.strip()
-        cells = [c.strip() for c in raw.split(sep)] if sep else _WS.split(raw)
+        cells = [c.strip() for c in raw.split(",")] if comma else _WS.split(raw)
         if len(cells) < 2:
             raise ValueError(f"{path}: line {lineno} needs two values (puid, zoneid)")
         try:
@@ -1158,7 +1188,7 @@ def read_pu_zone(path: str | Path) -> pd.DataFrame:
     return _read_pu_zone_pairs(path)
 ```
 
-One delimiter per file, detected from the first data line (`,`, else tab, else whitespace), so a blank cell (`1,,2`, `1,`) fails the numeric parse. Note: `"1,"` gives cells `["1", ""]` → "non-numeric id" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
+Delimiter detected once per file from the first data line, as `io.readers._read_dat` does: `,` if that line has a comma, else any whitespace run (tab and space may mix, e.g. `1\t2` then `3 1`; `1\t\t2` is one separator). A file whose first data line uses commas and a later line does not is rejected ("needs two values"). With commas a blank cell (`1,,2`, `1,`) fails the numeric parse. Note: `"1,"` gives cells `["1", ""]` → "non-numeric id" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
 
 In `load_zone_project`, before `problem = ZonalProblem(...)`:
 
@@ -1281,6 +1311,26 @@ def _strict_subset():
     return p.copy_with(
         zones=zones, zone_costs=zc, zone_contributions=contrib,
         pu_zones=_table([(i, z) for i in (1, 2, 3) for z in (1, 2)]),
+    )
+
+
+def _excludes_first():
+    """_strict_subset + PU 4 (no features; zone costs 0 / 4 / 5) restricted to {2, 3}:
+    its set excludes min(zone_ids) = 1, where it would be cheapest, so a solver that seeds
+    it at zone 1 and only takes improving moves leaves it out of its rule."""
+    p = _strict_subset()
+    pu = pd.concat(
+        [p.planning_units, pd.DataFrame({"id": [4], "cost": [0.0], "status": [0]})],
+        ignore_index=True,
+    )
+    zc = pd.concat(
+        [p.zone_costs,
+         pd.DataFrame({"pu": [4, 4, 4], "zone": [1, 2, 3], "cost": [0.0, 4.0, 5.0]})],
+        ignore_index=True,
+    )
+    return p.copy_with(
+        planning_units=pu, zone_costs=zc,
+        pu_zones=pd.concat([p.pu_zones, _table([(4, 2), (4, 3)])], ignore_index=True),
     )
 
 
@@ -1434,6 +1484,7 @@ RESTRICTED = [
     ("lock", lambda: make_anchor_problem(spf=10.0).copy_with(pu_locks=_table([(1, 2)]))),
     ("must_assign", lambda: _with_pu4(spf=10.0).copy_with(pu_zones=_table([(4, 1), (4, 2)]))),
     ("strict_subset", _strict_subset),
+    ("excludes_first", _excludes_first),
 ]
 
 
@@ -1445,7 +1496,7 @@ class TestSA:
             assert rule_violations(p.pu_zone_rules(), s.zone_assignment) == []
 ```
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestSA -q` → FAIL: `test_rules_hold[lock]` (PU1 leaves zone 2) and `test_rules_hold[strict_subset]` (PUs drift to zone 3). `test_rules_hold[must_assign]` already passes (zone SA never proposes zone 0) — kept as a pin.
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestSA -q` → FAIL: `test_rules_hold[lock]` (PU1 leaves zone 2), `test_rules_hold[strict_subset]` (PUs drift to zone 3) and `test_rules_hold[excludes_first]` (PUs drift to zone 3 / PU 4 left at zone 1). `test_rules_hold[must_assign]` already passes (zone SA never proposes zone 0) — kept as a pin.
 
 - [ ] **Step 3: Implement** in `solver.py`. Import `from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues`. Replace the status-parsing block (`locked: dict[int, int] = {}` … through `swappable = np.array(...)`) with:
 
@@ -1609,7 +1660,7 @@ class TestHeuristicAndII:
 
 (If `Solution.zone_assignment` is read-only on the dataclass, build `bad` with `dataclasses.replace(seed_sol, zone_assignment=np.array([1, 2, 2, 0]))` instead of assignment.)
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
 
 - [ ] **Step 3: Implement**
 
