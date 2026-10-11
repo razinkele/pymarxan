@@ -45,8 +45,8 @@ a PU to a subset of zones. MarZone provides both through two input files.
   with columns `pu, zone`. `copy_with` carries them.
 - `zones/readers.py`: `read_pu_lock(path)`, `read_pu_zone(path)` — a dedicated parser (not
   `io.readers._read_dat`, which drops the first row of a headerless file):
-  - encoding `utf-8-sig`; CRLF accepted; separators `,`, tab, or whitespace (same detection as
-    the other zone readers);
+  - encoding `utf-8-sig`; CRLF accepted; separators `,`, tab, or whitespace (detected once from the first data line;
+    the other zone readers look at the first line);
   - the first line is a header unless it passes MarZone's `is_like_numerical_data` character
     test; the first two columns are taken **by position** into `pu, zone`;
   - a 0-byte file → `ValueError` naming the file; a header-only file → empty DataFrame;
@@ -110,10 +110,10 @@ the solvers do:
 | rows naming an unknown PU, zone, or a non-integral id | row skipped | yes | yes |
 | a PU repeated in `pu_locks` | last row (and, if its zone is unknown, "PU not locked") | yes | yes |
 | duplicate `(pu, zone)` rows in `pu_zones` | collapsed | yes | yes |
-| a PU whose puzone rows name only unknown zones | PU unrestricted | yes | yes |
-| a PU (not pulocked) restricted to one distinct known zone | treated as a lock ("MarZone rejects single-zone puzone") | yes | yes |
+| a PU (not pulocked, not status 3) whose puzone rows name only unknown zones | PU unrestricted | yes | yes |
+| a PU (not pulocked, not status 3) restricted to one distinct known zone | treated as a lock ("MarZone rejects single-zone puzone") | yes | yes |
 | status 3 with a pulock | the lock wins | yes | yes |
-| status 3 with puzone rows | status 3 wins | yes | yes |
+| status 3 (not pulocked) with puzone rows | status 3 wins | yes | yes |
 | a pulock zone outside the same PU's puzone list | the lock wins (MarZone accepts) | no | yes |
 
 Status 2 with a pulock (they agree) and status 2 with puzone rows (combined in the table) are

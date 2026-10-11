@@ -802,6 +802,26 @@ def test_partly_unknown_puzone_reported_as_single_zone():
     issues = _issues(pu_zones=_table([(1, 1), (1, 99)]))
     assert any("single zone (treated as a lock" in m and "PU 1 → zone 1" in m for m in issues)
     assert any("unknown PU or zone" in m and "PU 1, zone 99" in m for m in issues)
+
+
+@pytest.mark.parametrize("bad", [np.nan, "x"], ids=["nan", "text"])
+def test_validate_never_raises_on_bad_status_with_locks(bad):
+    # the status scan parses per row: a NaN / non-numeric status must not raise via astype(int)
+    p = _three_zone((0, bad, 0), pu_locks=_table([(1, 2)]))
+    assert isinstance(p.validate(), list)
+    assert isinstance(p.pu_lock_issues(), list)
+
+
+def test_dispatcher_emits_one_of_each_kind_in_one_call():
+    # spec §3: at most one warning of EACH kind; Testing 5: ZoneInputWarning catches both
+    p = _three_zone(pu_locks=_table([(9, 1)])).copy_with(
+        zone_targets=pd.DataFrame({"zone": [9], "feature": [1], "target": [1.0]}),
+    )
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    kinds = sorted(w.category.__name__ for w in rec if issubclass(w.category, ZoneInputWarning))
+    assert kinds == ["ZoneLockWarning", "ZoneTargetWarning"]
 ```
 
 Add to `ZONES_EXPORTS` in `tests/pymarxan/zones/test_package_exports.py` (keep the dict's ordering style):
@@ -1194,7 +1214,7 @@ Expected: collection ERROR — `ImportError: cannot import name 'read_pu_lock'`.
 
 - [ ] **Step 3: Implement**
 
-`readers.py` — add `import re` and:
+`readers.py` — add `import re` (after `from __future__ import annotations`, before `import warnings`) and put this block directly above `def load_zone_project`:
 
 ```python
 # MarZone util.hpp is_like_numerical_data: a line made only of these is data, not a header.
@@ -1240,7 +1260,7 @@ def read_pu_zone(path: str | Path) -> pd.DataFrame:
     return _read_pu_zone_pairs(path)
 ```
 
-Delimiter detected once per file from the first data line, as `io.readers._read_dat` does: `,` if that line has a comma, else any whitespace run (tab and space may mix, e.g. `1\t2` then `3 1`; `1\t\t2` is one separator). A file whose first data line uses commas and a later line does not is rejected ("needs two values"). With commas a blank cell (`1,,2`, `1,`) fails the numeric parse. Note: `"1,"` gives cells `["1", ""]` → "non-numeric id" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
+Delimiter detected once per file from the first data line (`io.readers._read_dat` looks at the first line, header included; using the first data line lets a `puid,zoneid` header sit above whitespace data): `,` if that line has a comma, else any whitespace run (tab and space may mix, e.g. `1\t2` then `3 1`; `1\t\t2` is one separator). A file whose first data line uses commas and a later line does not is rejected ("needs two values"). With commas a blank cell (`1,,2`, `1,`) fails the numeric parse. Note: `"1,"` gives cells `["1", ""]` → "non-numeric id" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
 
 Give `load_zone_project` (no docstring today) this docstring, directly under `def load_zone_project(project_dir: str | Path) -> ZonalProblem:`:
 
@@ -1643,7 +1663,7 @@ with
                 old_zone = int(assignment[idx])
 ```
 
-(keep the following `if new_zone == old_zone: continue`). Do the same in the annealing loop (solver.py:197-199). Remove the now-unused `initial_include`, `pu_id_to_idx` and `n_zone_options` locals and the old status loop (keep `n_swappable`: the all-locked branch still uses it). Put `_propose` two blank lines after the imports, before `_COOLING_FACTORIES`.
+(keep the following `if new_zone == old_zone: continue`). Do the same in the annealing loop (the second occurrence of those three lines; v0.37 solver.py:197-199 before this step's edits). Remove the now-unused `initial_include`, `pu_id_to_idx` and `n_zone_options` locals and the old status loop (keep `n_swappable`: the all-locked branch still uses it). Put `_propose` two blank lines after the imports, before `_COOLING_FACTORIES`.
 
 Note on byte-identity: v0.37 drew `rng.integers(n_swappable)` then `rng.integers(n_zone_options)`; `_propose` makes the same two draws with the same bounds for free PUs, and status-1 PUs start at `rules[idx].start == min(zone_ids)` exactly as `initial_include` did. The golden tests verify this.
 
@@ -1923,7 +1943,7 @@ In `solve` and `improve`, delete the now-unused `pu_id_to_idx` and `zone_ids_lis
         return assignment
 ```
 
-Update the docstrings: `_addition_pass` → `"""Give each unassigned PU its best allowed zone.` + newline + `Move a must-assign PU with several allowed zones to a better one."""` (two lines, under 99 chars); `_removal_pass` → `"""Try unassigning each PU that may be unassigned."""`; `_swap_pass` → `"""For each PU, try every zone its rule allows (incl. 0 when it may be unassigned)."""`; in the class docstring, mode 1 → `1: Removal pass (try unassigning each PU that may be unassigned)` and mode 3 → `3: Swap (for each PU, try every zone its rule allows, incl. 0 when it may be unassigned)` (mode 2 stays).
+Update the docstrings: `_addition_pass` → `"""Give each unassigned PU its best allowed zone.` + newline + `Move a must-assign PU with several allowed zones to a better one."""` (two lines, under 99 chars); `_removal_pass` → `"""Try unassigning each PU that may be unassigned."""`; `_swap_pass` → `"""For each PU, try every zone its rule allows (incl. 0 when it may be unassigned)."""`; in the class docstring, mode 1 → `1: Removal pass (try unassigning each PU that may be unassigned)` and mode 3 → `3: Swap (for each PU, try every zone its rule allows, incl. 0 when it may be unassigned)` (mode 2 stays); mode 0 → `0: No improvement (solve() returns the start assignment unchanged)`; `improve` → `"""Improve an existing solution (RUNMODE pipeline).` + newline + `First repairs it to the PU zone rules: forced / locked-out PUs reset, a zone outside` + newline + `a PU's rule (or 0 for a must-assign PU) → its smallest allowed zone."""`; in the class docstring replace `mode 0 returns the start assignment unchanged` with `mode 0 returns the start assignment unchanged (improve() returns it after the rule repair)`.
 
 `_two_step(self, problem, assignment, swappable, rules, blm)`: pass `rules` to both passes.
 
@@ -2035,7 +2055,7 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_replace
         variant = problem.copy_with(**overrides)
 ```
 
-(keep the following `.loc[...] = STATUS_LOCKED_OUT` and the parameters deepcopy). Add one docstring sentence: "For zone problems the PU's ``pu_locks`` / ``pu_zones`` rows are dropped in the variant; other status-based analyses do not consult them." Re-run the test → PASS.
+(keep the following `.loc[...] = STATUS_LOCKED_OUT` and the parameters deepcopy). Append this sentence to the `compute_replacement_cost` docstring's summary paragraph, directly after `PUs not in the baseline get score 0.` (re-wrap to 99 chars): "For zone problems the PU's ``pu_locks`` / ``pu_zones`` rows are dropped in the variant; other status-based analyses do not consult them." Re-run the test → PASS.
 
 - [ ] **Step 3: Bench** — `tests/benchmarks/bench_zone_pu_restrictions.py`:
 
