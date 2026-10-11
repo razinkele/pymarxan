@@ -1,219 +1,296 @@
 # Stage 1 (v0.39.0): Zone-MIP parity and solver tooling — design
 
-**Status:** rev 1, approved section by section in chat 2026-10-11. **Roadmap:**
+**Status:** rev 2. Rev 1 was approved section by section in chat on 2026-10-11 and then patched
+after the 4-lens design review (`2026-10-11-stage1-zone-mip-parity-review.md`). **Roadmap:**
 `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` Stage 1. **Baseline:** v0.38.0 (`e5a066c`).
 
 ## Goal
 
-Zone problems get the same exact objectives as single-zone problems, under the same names as
-prioritizr. Users can force every planning unit into a zone. Both MIP solvers can export their
-model, and a pre-solve check warns about problems before solving.
+Zone problems get the budgeted objectives that single-zone problems have, plus `min_shortfall`,
+with prioritizr semantics (shortfall relative to target, one term per target) and prioritizr ≥ 9
+names accepted as aliases. Users can force every planning unit into a zone. Both MIP solvers can
+export their model, and a pre-solve check warns about data problems before solving.
 
-## Decisions (made in chat)
+## Decisions
 
 | # | Question | Decision |
 |---|---|---|
-| D1 | What counts as one "target met" for zone objectives | **Each target separately**: every `(zone, feature)` target and every overall feature target is its own term (prioritizr zones semantics) |
-| D2 | Budget | **One total budget**: `COSTBUDGET` caps Σ zone cost, the same parameter as `MIPSolver` |
+| D1 | What counts as one "target met" for zone objectives | **Each target separately**: every `(zone, feature)` target and every overall feature target is its own term (prioritizr zones; confirmed against prioritizr `rcpp_add_rij_data.cpp:35-40`). SPF counts once per term |
+| D2 | Budget | **One total budget**: `COSTBUDGET` caps Σ zone cost (prioritizr's scalar budget; a missing `zone_costs` pair costs 0, which is MarZone's convention, not prioritizr's NA = unavailable) |
 | D3 | Mandatory allocation switch | **Problem parameter** `MANDATORYALLOCATION`, applied in `pu_zone_rules()`, so all four zone solvers honour it |
 | D4 | Presolve check delivery | **Function + opt-in solver flag**: `presolve_check(problem)`; `presolve_check=True / "strict"` on both MIP solvers; default off |
-| D5 | Objective-builder structure | **One builder function per objective** in `zones/mip_solver.py`, chosen by dict lookup. This tries the pattern Stage 3 will apply to `MIPSolver` |
-| D6 | Objective set | Same names in both MIPs: `min_set`, `max_features`, `max_weighted_features`, `min_shortfall` (new in both), `min_largest_shortfall`, `min_penalties` |
-| D7 | Shortfall units | **Relative** (shortfall / target, prioritizr) for `min_shortfall` and `min_largest_shortfall` in both solvers. `MIPSolver` gains `shortfall="relative" \| "absolute"`; `"absolute"` restores v0.38 `min_largest_shortfall` |
+| D5 | Objective-builder structure | **Builders in a solver-agnostic module** `src/pymarxan/solvers/_mip_objectives.py` (imports only pulp/stdlib). `ZoneMIPSolver` uses them now; `MIPSolver` moves onto them in Stage 3. Builders return an expression plus its sense, and never add the budget or hard targets themselves (review: composable for Stage 3) |
+| D6 | Objective set | Zone MIP: `min_set`, `max_features`, `max_weighted_features`, `min_shortfall`, `min_largest_shortfall`. Core MIP gains `min_shortfall`. Both accept the prioritizr ≥ 9 alias `max_n_targets_met` (→ `max_features`). **Zone `min_penalties` dropped from Stage 1** (review HIGH: pymarxan's `min_penalties` is not prioritizr's objective of the same name; Stage 3 settles the naming). The core `min_penalties` is unchanged, and its docstring now states the difference |
+| D7 | Shortfall units | **Relative** (shortfall / *R*, prioritizr) for `min_shortfall` and `min_largest_shortfall` in both solvers. Both solvers take `shortfall="relative" \| "absolute"`; `"absolute"` on `MIPSolver` restores v0.38 `min_largest_shortfall` exactly |
 
-## 1. Zone-MIP objectives
+## 1. Objectives
 
 ### Target terms (D1)
 
-The zone MIP has two kinds of target. Both become terms *t* with an achieved expression
-*A_t(x)*, a requirement *R_t*, and a weight *w_t*:
-
-- **Zone targets:** one term per `(z, f)` in `zone_target_lookup()`.
-  - *A_t* is today's `_zone_achieved_exprs[(z, f)]`: raw amounts, contribution-weighted under
-    `ZONETARGETCONTRIB=1`.
-  - *R_t* = target × `MISSLEVEL`.
-- **Overall targets:** one term per feature with `target > 0`.
-  - *A_t* = Σ_i Σ_z amount(i, f) · contribution(f, z) · x(i, z), as in today's
-    `_add_overall_target_constraints` (Watts et al. 2009 eq. 6).
-  - *R_t* = target × `MISSLEVEL`.
-- **Weights:** *w_t* is the feature's SPF (`_spf_lookup`, default 1.0).
-- **Skipped terms:** terms with *R_t* ≤ 0 are skipped. This matches today's `t <= 0: continue`
-  and the `zone_target_lookup` target > 0 filter.
-
-One helper, `_zone_target_terms(problem, x) -> list[TargetTerm]`, builds this list. It replaces
-the separate expression-building in today's `_add_zone_target_constraints` and
-`_add_overall_target_constraints`. The constraint names stay `zone_target_{z}_{f}` and
-`overall_target_{f}`.
-
-### Builders (D5, D6)
-
-Each objective has a builder:
+A shared frozen dataclass in `_mip_objectives.py`:
 
 ```python
-_ZoneObjective = Callable[[_ZoneModelContext], pulp.LpAffineExpression]
+@dataclass(frozen=True)
+class TargetTerm:
+    key: str        # unique name stem: "z2_f5" (zone), "o_f5" (overall), "f5" (core feature)
+    kind: str       # "zone" | "overall" | "feature"
+    achieved: pulp.LpAffineExpression   # A_t(x); lpSum([]) when the feature has no rows
+    required: float # R_t = target × MISSLEVEL
+    weight: float   # SPF of the feature (default 1.0 when the column is absent)
 ```
 
-`_ZoneModelContext` (a small dataclass) carries:
-- `model`, `x`, `pu_ids`, `zone_ids`;
-- `cost_expr`, `boundary_expr`, `zone_boundary_expr`;
-- `terms`, `problem`.
+- **Zone problems.** `_zone_target_terms(problem, x)` returns one term per `(z, f)` in
+  `zone_target_lookup()`, using today's `_zone_achieved_exprs`, and one term per feature with
+  target > 0, using today's overall-target expression (Watts et al. 2009 eq. 6). The skip rule
+  for building terms is today's: raw target ≤ 0 is skipped.
+- **Core problems.** Only the new shortfall code in `MIPSolver` builds terms: one per feature
+  with target > 0.
+- **Features with no `pu_vs_features` rows** ("ghost features") still produce a term, with
+  `achieved = lpSum([])`. Under every budgeted objective they are therefore never met and have
+  full shortfall (prioritizr semantics; review MEDIUM, parity). `presolve_check` P5 reports them.
+- **Relative objectives.** Terms with *R_t* ≤ 0 (for example MISSLEVEL = 0) are skipped by both
+  relative objectives in both solvers, so there is no division by zero.
 
-Each builder adds its own variables and constraints and returns the expression to minimise.
-`ZoneMIPSolver(objective="min_set")` validates its name with the same
-`_validate_mip_strategy` as `MIPSolver`.
+### Builder contract (D5)
 
-| Objective | Variables / constraints | Minimised expression | Budget |
-|---|---|---|---|
-| `min_set` (default) | hard *A_t* ≥ *R_t* for every term | cost + BLM·boundary + zone boundary | — |
-| `max_features` | binary *y_t*; *A_t* ≥ *R_t*·*y_t* | −Σ *y_t* | required |
-| `max_weighted_features` | the same | −Σ *w_t*·*y_t* | required |
-| `min_shortfall` | *s_t* ≥ 0; *s_t* ≥ *R_t* − *A_t* | Σ *w_t*·*s_t* / *R_t* | required |
-| `min_largest_shortfall` | *s_t* as above; *m* ≥ *s_t* / *R_t* | *m* | required |
-| `min_penalties` | *s_t* as above | M·Σ *w_t*·*s_t* + cost, with M = Σ_i max_z cost(i, z) + 1 | — |
+```python
+@dataclass
+class ObjectiveContext:
+    model: pulp.LpProblem
+    cost_expr: pulp.LpAffineExpression
+    terms: list[TargetTerm]
+    prefix: str = ""     # prepended to every variable/constraint name a builder creates
+    def slack(self, term) -> pulp.LpVariable   # create-once: s ≥ 0, s ≥ R − A (constraint "{prefix}short_{key}")
+    def met(self, term) -> pulp.LpVariable     # create-once: binary y, A ≥ R·y (constraint "{prefix}met_{key}")
 
-- **`min_set`:** byte-identical to v0.38. Today's always-zero penalty slack
-  (`_build_penalty_expr`) stays in `min_set` only, so nothing about v0.38 changes.
-- **Budget:** cost ≤ `COSTBUDGET`, where cost is the zone-cost expression Σ cost(i,z)·x(i,z).
-  Pairs missing from `zone_costs` cost 0, as today. A missing budget raises `ValueError`, with
-  the same message as `MIPSolver` but naming the objective.
-- **Dropped terms:** non-`min_set` objectives omit the hard target constraints and the BLM /
-  zone-boundary terms, as `MIPSolver` does. Adding penalties to budgeted objectives (as
-  prioritizr does) is a follow-up, not in this stage.
-- **Infeasibility:** with no hard targets, the budgeted objectives are infeasible only when
-  locks cost more than the budget. `_warn_no_solution` adds "the locked planning units cost more
-  than COSTBUDGET" in that case. This is the only new message.
-- **Reported objective:** `Solution.objective` is recomputed by `build_zone_solution`, as today.
-  Builders report their own objective value in `Solution.metadata["mip_objective"]`.
+@dataclass(frozen=True)
+class ObjectiveTerm:
+    expr: pulp.LpAffineExpression
+    sense: int           # pulp.LpMinimize | pulp.LpMaximize, in the objective's natural units
+```
 
-### `MIPSolver` changes (D6, D7)
+| Builder | Uses | Returns |
+|---|---|---|
+| `max_features` | `met(t)` for all terms | Σ *y_t*, maximise |
+| `max_weighted_features` | `met(t)` | Σ *w_t*·*y_t*, maximise |
+| `min_shortfall(shortfall)` | `slack(t)` | relative: Σ *w_t*·*s_t* / *R_t*; absolute: Σ *w_t*·*s_t*; minimise |
+| `min_largest_shortfall(shortfall)` | `slack(t)`, plus one `m` with *m* ≥ *s_t* / *R_t* (or *s_t*) | *m*, minimise. Unweighted, as in prioritizr |
 
-- **New `min_shortfall` objective**, with the same terms as the per-feature slacks of
-  `min_largest_shortfall`. It minimises Σ spf_j · slack_j / target_j and needs `COSTBUDGET`.
-  Features with target ≤ 0 are skipped.
-- **New keyword `shortfall: str = "relative"`**, validated against `("relative", "absolute")`.
-  - Under `"relative"`, `min_largest_shortfall` constrains `t ≥ slack_j / target_j`.
-  - `"absolute"` keeps v0.38's `t ≥ slack_j` exactly.
-  - The keyword applies to `min_shortfall` too. Absolute there means Σ spf·slack.
-- **CHANGELOG "Changed":** `MIPSolver(objective="min_largest_shortfall")` now minimises the
-  largest *relative* shortfall. Pass `shortfall="absolute"` for the v0.38 behaviour.
+- The solver sets the model objective: `+expr` for minimise, `−expr` for maximise.
+- The solver adds `cost_expr <= COSTBUDGET` once (`"cost_budget"`).
+- `min_set` is not a builder in Stage 1: it keeps today's code path byte-identical.
+- One test composes `min_shortfall` and `max_features` in one model, to show names cannot collide.
+
+### `ZoneMIPSolver`
+
+- **Constructor:** `ZoneMIPSolver(objective="min_set", shortfall="relative", presolve_check=False, …)`.
+  Names are validated with `_validate_mip_strategy`, and `max_n_targets_met` is an alias.
+- **`min_set`:** byte-identical to v0.38, including the always-zero penalty slack. This is pinned
+  by a canonical-model golden (Testing 4).
+- **Budgeted objectives:**
+  - They require `COSTBUDGET`; without it they raise `ValueError` naming the objective.
+  - They omit the hard targets and the BLM / zone-boundary terms. When BLM > 0 or any
+    `zone_boundary_cost` is nonzero, the solver emits one `UserWarning`: "ZoneMIPSolver: objective
+    '<name>' ignores boundary penalties (BLM / zone boundary costs); prioritizr applies them —
+    planned follow-up".
+  - Budget infeasibility gets a message from the shared helper `min_forced_cost(problem)` (§2):
+    "the planning units that must be assigned cost at least X > COSTBUDGET Y". This replaces the
+    target diagnostic for budgeted objectives.
+- **Metadata:** `Solution.objective` is recomputed by `build_zone_solution`, as today. The
+  builder's own objective value goes in `Solution.metadata["mip_objective"]`, and the units in
+  `metadata["shortfall"]`.
+
+### `MIPSolver`
+
+- **New `min_shortfall`**, built from `TargetTerm`s and the shared builder. Unlike v0.38, ghost
+  features are included and spf defaults to 1.0. It requires `COSTBUDGET`.
+- **New `shortfall="relative"` keyword**, which applies to `min_shortfall` and
+  `min_largest_shortfall`.
+  - Relative `min_largest_shortfall` uses the shared builder, so ghost features count and terms
+    with *R* ≤ 0 are skipped.
+  - `shortfall="absolute"` keeps v0.38's code path exactly, ghost-feature behaviour included.
+- **`max_n_targets_met`** is accepted as an alias for `max_features`.
+- **Fixed:** in `max_features` and `max_weighted_features`, a ghost feature with target > 0 no
+  longer counts as met for free (v0.38 left its `feat_met` unconstrained). Its `feat_met` is
+  fixed to 0.
+- **Unchanged:** the core `min_penalties`. Its docstring now says it is "min Σ SPF·shortfall,
+  then cost (big-M; approximately lexicographic) — not prioritizr's `add_min_penalties_objective`".
+- **CHANGELOG:**
+  - "Changed": `min_largest_shortfall` is relative by default.
+  - "Fixed": ghost features in `max_features` and `max_weighted_features`.
+  - TUTORIAL §5 gets the new objective row and the relative note.
 
 ## 2. Mandatory allocation (D3)
 
-- **Parameter:** `MANDATORYALLOCATION` (input.dat or `problem.parameters`).
-  - `0` is the default and leaves v0.38 behaviour unchanged.
-  - `1` forces every eligible PU into a zone.
-  - Any other value is a `validate()` error. `pu_zone_rules()` then treats it as `0`, so a
-    solver never crashes on it.
-  - `read_input_dat` already keeps unknown keys; verify this in the grounding review.
-- **Rules:** in `ZonalProblem.pu_zone_rules()`, the last ("free") precedence row changes when
-  the parameter is 1. Status 0 and 1 PUs with no lock or puzone get
-  `PUZoneRule(allowed=all zones, may_be_unassigned=False, start=<unchanged>)`: status 1 starts
-  at `min(zone_ids)`, status 0 has no start. Pulock, puzone and status-2 PUs are already
-  must-assign.
-- **Status 3 wins:** a status-3 PU stays unassigned. `pu_lock_issues()` adds one warning-only
-  issue: "N planning units are locked out (status 3) while MANDATORYALLOCATION is 1; they stay
-  unassigned". It is not a `validate()` error.
-- **Solvers:** no solver code changes. MIP uses `assign == 1`. SA already never proposes 0. The
-  heuristic seeds must-assign PUs. In II, the removal pass skips them and the swap pass drops
-  0 for them. All of this comes from the v0.38 rule machinery.
-- **MarZone note** (`docs/VALIDATION.md`): MarZone assigns every PU to a zone, so `1` is MarZone
-  behaviour. pymarxan keeps `0` as the default for compatibility.
+- **Accessor:** `ZonalProblem.mandatory_allocation() -> bool` reads `MANDATORYALLOCATION` from the
+  parameters.
+  - Values 0, 1, 0.0 and 1.0 are accepted, as `read_input_dat` gives int or float.
+  - Anything else is a `validate()` error, and the accessor returns False. That includes bool,
+    str and 2.
+  - `validate()` and `pu_zone_rules()` both use the accessor.
+- **Rules:** when the parameter is on, the final ("free") row of `pu_zone_rules()` gives status
+  0/1 PUs `PUZoneRule(allowed=all, may_be_unassigned=False, start=<unchanged>)`.
+- **Status 3 wins.** This is a deliberate pymarxan choice, the same as prioritizr dropping
+  all-NA PUs. The issue "N planning units are locked out (status 3) while MANDATORYALLOCATION is
+  1; they stay unassigned" is computed outside `_pu_lock_issue_list`'s no-tables early return, so
+  it fires without lock tables. It is a warning only (a `ZoneLockWarning` through
+  `warn_zone_input_issues`).
+- **Shared helper:** `min_forced_cost(problem) -> float`, in `zones/diagnostics.py`, returns
+  Σ over must-assign rules of the cheapest allowed zone cost, plus min(0, cheapest cost) for
+  optional PUs. Core problems use Σ locked-in costs. The MIP budget message and presolve P9a
+  both use it.
+- **Solvers:** no solver code changes.
+  - `ZoneSASolver` already never leaves a non-locked-out PU unassigned.
+  - With the parameter on, the MIP, heuristic and II agree with SA.
+  - II at ITIMPTYPE 0/1 only reproduces its seed for must-assign PUs. This is documented, and
+    the tests use ITIMPTYPE 2/3 for II.
+- **MarZone note (VALIDATION.md):** MarZone keeps every PU in one of its zones, and its zone
+  index 0 (first zone, usually "available") is the do-nothing state. `MANDATORYALLOCATION 1`
+  reproduces MarZone only when the project's zones include that available zone. When
+  pymarxan's zone 0 stands in for it, leave the parameter at 0. There is no AVAILABLEZONE input
+  key at 85082e3.
 
 ## 3. `write_problem`
 
-- **Build/solve split:** both MIP solvers get `build_model(problem, config=None) ->
-  pulp.LpProblem`, which holds everything from variable creation to the last constraint.
-  `solve()` = `build_model` → solve → extract. This is a pure refactor: every existing test and
-  the 35.0 anchor must pass unchanged. Any state `solve()` needs after the solve (variable dicts,
-  backend) comes back through a small private result or attributes. The implementation plan
-  pins the exact shape.
-- **API:** `pymarxan.solvers.write_problem(problem, path, *, solver=None, config=None) -> Path`.
-  - **Format:** `.lp` uses `model.writeLP(path)` and `.mps` uses `model.writeMPS(path)`. Any
-    other suffix raises `ValueError`.
+- **Build/solve split.** Each MIP solver gets a private `_build(problem, config) -> _BuiltModel`
+  that emits no warnings, and two public entry points:
+  - `build_model(problem, config=None) -> pulp.LpProblem`
+  - `solve(problem, config=None) -> list[Solution]`
+
+  Each public method runs the preamble once: the type check, `raise_if_separation_active`,
+  `warn_zone_input_issues`, `_warn_if_large_mip`, the presolve check and the budget-penalty
+  warning. It then calls `_build`, so warnings fire once with unchanged stacklevels.
+
+  `_BuiltModel` carries `model`, `x`, `pu_ids` (zone: plus `zone_ids`) and `blm`. Everything
+  else (`probmode`, the TARGET2/sep flags) is recomputed in `solve()`. Strategy gating raises
+  live in `_build`, so `build_model` refuses the same configurations `solve` does. This is a pure
+  refactor: every existing test passes, and MIP 35.0 holds.
+- **API.** `pymarxan.solvers.write_problem(problem, path, *, solver=None, config=None) -> Path`
+  lives in `src/pymarxan/solvers/export.py`, with `ZoneMIPSolver` / `ZonalProblem` imported
+  inside the function.
+  - **Format:** `.lp` uses `writeLP` and `.mps` uses `writeMPS`. Any other suffix raises
+    `ValueError`.
   - **Default solver:** `ZoneMIPSolver()` for a `ZonalProblem`, `MIPSolver()` otherwise.
-  - **Errors:** a solver without `build_model` raises `TypeError` ("write_problem supports MIP
-    solvers only").
-  - **Not exported:** the time limit and gap. No-good cuts from `config.metadata` are included
-    only when that `config` is passed.
+  - **Errors:** a solver without `build_model` raises `TypeError`. So does a solver whose
+    `supports_zones()` does not match the problem type.
+  - **Objective constant:** a nonzero `model.objective.constant` triggers a `UserWarning`,
+    because LP/MPS writers drop it.
+  - **Not exported:** time limit and gap. No-good cuts are included only when that `config` is
+    passed.
 
 ## 4. `presolve_check` (D4)
 
-- **API:** `pymarxan.presolve_check(problem) -> list[str]`, in a new module
-  `src/pymarxan/models/presolve.py`, exported from `pymarxan`. It never raises; any internal
-  error becomes a message. Each message names the entity and the numbers involved.
-- **Checks** (for a `ZonalProblem`, PU cost means zone costs and targets mean zone and overall
-  targets):
+- **Location.** `src/pymarxan/solvers/presolve.py`, which imports no zone code at module level
+  (zone imports are inside functions). This avoids the circular imports the review reproduced.
+  - `presolve_check(problem) -> list[str]` and `class PresolveWarning(UserWarning)`.
+  - Exported from `pymarxan.solvers` and, through a lazy module `__getattr__`, from `pymarxan`.
+  - A subprocess import test covers `pymarxan`, `pymarxan.solvers`, `pymarxan.zones` and
+    `pymarxan.solvers.presolve`, each imported first in a fresh interpreter.
+- **Behaviour.** It never raises. It runs `problem.validate()` first. If there are validation
+  errors, it returns the single message "problem fails validate(): <n> error(s); fix those first"
+  and skips the numeric checks. Each message names the entity and the numbers involved.
 
 | # | Condition | Example message |
 |---|---|---|
-| P1 | non-finite or negative cost | "PU 7 has cost -3.0 (negative)" |
-| P2 | max/min nonzero cost ratio above 1e6 | "costs span 1.2e+07× (min 0.01, max 1.2e+05): solvers may lose precision" |
-| P3 | same for nonzero `pu_vs_features` amounts | "amounts span …" |
-| P4 | same for nonzero boundary values | "boundary lengths span …" |
-| P5 | a feature with zero total amount | "feature 4 occurs in no planning unit" |
-| P6 | target above the total amount. Core: target × MISSLEVEL > Σ amount. Zones: reuse `diagnose_zone_infeasibility` | "feature 2 target 50 exceeds its total amount 30" |
-| P7 | every PU locked in or out (core status 2/3; zones: every rule `forced` or empty) | "every planning unit is locked: nothing to optimise" |
-| P8 | BLM > 0 and BLM × max boundary vs median nonzero cost ratio above 1e6 or below 1e-6 | "BLM × boundary is 3.1e+07× the median cost: boundary will dominate" |
-| P9 | `COSTBUDGET` set and below the cheapest selectable PU (core: min cost of non-locked-out PUs; zones: min over allowed nonzero zone costs) | "COSTBUDGET 5 is below the cheapest planning unit (8)" |
+| P1 | non-finite value in any numeric input (cost, zone cost, amount, target, boundary, contribution, BLM, COSTBUDGET), or a negative cost | "PU 7 has cost -3.0 (negative)" |
+| P2 | max/min nonzero cost ratio > 1e6 | "costs span 1.2e+07× (min 0.01, max 1.2e+05): solvers may lose precision" |
+| P3 | the same for nonzero amounts | "amounts span …" |
+| P4 | the same for nonzero boundary values | "boundary lengths span …" |
+| P5 | feature with zero total amount and target > 0 | "feature 4 occurs in no planning unit but has target 10" |
+| P6 | target × MISSLEVEL above the total amount (zones: reuse `diagnose_zone_infeasibility`) | "feature 2 target 50 exceeds its total amount 30" |
+| P7 | every PU locked (core status 2/3; zones: every rule forced or empty) | "every planning unit is locked: nothing to optimise" |
+| P8 | BLM > 0 and BLM × max boundary vs median nonzero cost ratio > 1e6 or < 1e-6 | "BLM × boundary is 3.1e+07× the median cost: boundary will dominate" |
+| P9a | `COSTBUDGET` < `min_forced_cost(problem)` | "COSTBUDGET 5 is below the cost that locked / must-assign units force (12): infeasible" |
+| P9b | `COSTBUDGET` below the cheapest selectable PU or zone option | "COSTBUDGET 5 is below the cheapest planning unit (8): nothing can be selected" |
 
-- **Solver flag:** `MIPSolver` / `ZoneMIPSolver(presolve_check: bool | str = False)`.
-  - `True` runs the check at the start of `solve()` and of `build_model()`. If there are
-    messages, it emits one `PresolveWarning(UserWarning)` that joins them, with `stacklevel`
-    pointing at the caller.
-  - `"strict"` raises `ValueError` with the joined messages.
-  - Any other value is a `ValueError` at construction.
-  - `PresolveWarning` is exported from `pymarxan`.
+- **Solver flag.** `presolve_check` accepts only `True`, `False` or `"strict"`, checked by
+  identity (so 0 and 1 are rejected); anything else is a `ValueError` at construction.
+  - `True` emits one `PresolveWarning` joining the messages, at the caller's frame.
+  - `"strict"` raises `ValueError`.
 
-## Out of scope
+## Out of scope (with destination)
 
-- Per-zone budgets.
-- Penalties (BLM / zone boundary) in budgeted objectives.
-- Objective builders for `MIPSolver`: that is Stage 3. Only `min_shortfall` and the `shortfall`
-  keyword are added here, in the existing `if/elif` style.
-- Zone SA / heuristic / II objectives other than the MarZone penalty objective.
-- Writing models for non-MIP solvers.
-- MarZone `AVAILABLEZONE` semantics, beyond the doc note.
+- Per-zone budgets: later, if asked.
+- Penalties in budgeted objectives: follow-up, with a warning until then.
+- Zone `min_penalties` and prioritizr-semantics `min_penalties`: Stage 3.
+- `MIPSolver` fully on builders: Stage 3.
+- Per-(zone, feature) weights: later.
+- An exact lexicographic replacement for the big-M in `min_penalties`: Stage 3 hierarchical.
+- Non-MIP model export.
 
 ## Testing
 
-1. **Zone objective anchors.** On the MarZone anchor (`tests/pymarxan/zones/marzone_anchor.py`)
-   and the PU4 variant, enumerate every assignment by brute force for each objective and budget.
-   The MIP optimum must equal the enumerated optimum. Use at least two budgets per budgeted
-   objective, one of which forces a trade-off.
-2. **Target unit (D1).** A fixture where one feature has an overall target and a zone target,
-   and the budget pays for only one of them. `max_features` = 1, not 0 and not 2.
-3. **Relative vs absolute (D7).** A fixture where the relative and absolute
-   `min_largest_shortfall` optima differ. Both solvers agree with enumeration, and
-   `shortfall="absolute"` reproduces v0.38's choice. Record that value on v0.38 code before the
-   change, as in v0.38's golden practice.
-4. **`min_set` unchanged.**
-   - Every existing zone MIP test passes.
-   - A golden check: a constraint/objective dump of `build_model()` on the anchor equals a v0.38
-     export recorded before the refactor. v0.38 has no `build_model`, so capture the `LpProblem`
-     at its `model.solve(...)` call, for example by patching `pulp.LpProblem.solve`.
-   - `tests/data/simple` = 35.0.
-5. **Mandatory allocation.**
-   - With the parameter on, every solver's output has `rule_violations == []`, and only status-3
-     PUs are in zone 0.
-   - The MIP optimum with it on is ≥ the optimum with it off, and equals the enumerated
-     optimum on the anchor.
-   - With it off, the v0.37 / v0.38 golden tests pass unchanged.
-   - A value of `2` is a `validate()` error, and solvers treat it as off.
-6. **write_problem.**
-   - `tests/data/simple` exported to `.lp` and `.mps`, read back with PuLP and solved with CBC,
-     gives 35.0.
-   - The zone anchor round-trip gives the solver's objective.
-   - Error cases: a bad suffix and a non-MIP solver.
-7. **presolve_check.**
-   - Each of P1–P9 has a test that triggers it.
-   - `tests/data/simple` and the zone fixtures give `[]`.
-   - Flag tests cover: warn once, `"strict"` raising, off staying silent, and a bad flag value.
-8. **Gate.** `make check` green, parity MIP 35.0, every golden test green.
+Fixture numbers below come from the review's executed prototypes (154/154 checks agreed with
+enumeration).
+
+1. **Zone objective oracle.** On `make_anchor_problem()`, the PU4 variant, and spf ∈ {1, 3},
+   brute-force enumeration over {0,1,2}^n must equal the MIP optimum for every budgeted
+   objective and budget in {0, 1, 2, 3, 5, 6, 7, 8, 9, 11, 13}. Compare objective values; compare
+   assignments only where the argmin is unique:
+   - B = 3: (2,2,2) for `min_shortfall` (0.2 at spf 1, 0.6 at spf 3) and for
+     `min_largest_shortfall` (0.2);
+   - B = 7: (1,2,2) for every objective;
+   - B = 6: value only ((1,0,2) and (1,2,0) tie at 0.0667).
+2. **Target unit (D1).** The anchor with B ∈ [1, 6] gives `max_features` = 1. Per-feature
+   semantics would give 0.
+3. **Weighted.** Add feature 2 to the anchor: target 10, spf 5, amount 10 in PU3 only,
+   contribution {z1: 1.0, z2: 0.0}. At B = 7, `max_features` gives unique (1,2,2) with value 2,
+   and `max_weighted_features` gives unique (0,0,1) with value 5.
+4. **`min_set` unchanged.** A canonical-model golden (per constraint name: sense, rhs, sorted
+   (var, coef); sorted objective coefficients; variable bounds/categories) of the zone anchor and
+   `tests/data/zones`. It is captured on v0.38 (`e5a066c`) by patching `pulp.LpProblem.solve`,
+   before any change, and must stay equal. All existing zone/MIP tests pass and
+   `tests/data/simple` = 35.0.
+5. **Relative vs absolute (core).** 3 PUs at cost 1, `COSTBUDGET` 1. Feature a: target 100,
+   PU1 = 60, PU3 = 30. Feature b: target 10, PU2 = 8, PU3 = 5.
+   - Relative `min_largest_shortfall` selects PU3 (0.7).
+   - `shortfall="absolute"` selects PU1 (40), equal to v0.38's [1,0,0], recorded before the
+     change.
+   - For `min_shortfall`, assert values: the fixture ties.
+6. **Cross-solver oracle.** A 1-zone `ZonalProblem` built from a core problem (zone cost = PU
+   cost, contribution 1, no zone targets) gives the same `metadata["mip_objective"]` as
+   `MIPSolver` for `max_features`, `min_shortfall` and `min_largest_shortfall` (relative). Run it
+   with and without a ghost feature, and at MISSLEVEL 1 and 0.9.
+7. **Edge cases.**
+   - A target-0 feature and MISSLEVEL = 0 under relative shortfall: no crash, term ignored.
+   - No spf column: weights are 1.0.
+   - A ghost feature in core `max_features` is not counted.
+   - `min_shortfall` and `max_features` composed in one model: no name collision.
+   - A budget objective with BLM > 0 emits one boundary-ignored warning.
+8. **Mandatory allocation.** Use a 6-PU fixture: the anchor plus PU4 (status 0), PU5 (status 3)
+   and PU6 (status 1).
+   - With the parameter on, every solver (II at ITIMPTYPE 2 and 3) gives
+     `rule_violations == []`, and only PU5 is in zone 0. The MIP optimum = enumerated 10.5 at
+     (1,2,2,2,0,2).
+   - Detection tests:
+     - heuristic on `tests/data/zones`: today's all-zero seed becomes all non-zero;
+     - II ITIMPTYPE 1: the removal pass must not unassign;
+     - MIP on a zero-target fixture: all zone 0 becomes the cheapest zones.
+   - SA is a regression guard only.
+   - The status-3 warning fires with no lock tables, exactly once per solve.
+   - Accessor values: 1, 1.0 accepted; "1", True, 2 rejected.
+   - The golden tests pass with the parameter off.
+   - Budget infeasibility with the parameter on gives the `min_forced_cost` message.
+9. **write_problem.**
+   - `tests/data/simple` with BLM = 0 → `.mps` (`LpProblem.fromMPS` + CBC) and `.lp` (the CBC
+     binary on the file; PuLP 3.3 has no `fromLP`) both give 35.0.
+   - With BLM = 1, the round-trip equals the in-process objective (43.0).
+   - The zone anchor round-trip gives 7.0, and a `pu_zones` bound survives.
+   - Error cases: bad suffix, non-MIP solver, solver/problem mismatch.
+   - Stacklevel tests: `w.filename == __file__` for `PresolveWarning`, the large-MIP warning and
+     `ZoneLockWarning`, raised from both `solve()` and `build_model()`.
+10. **presolve_check.**
+    - One triggering test per check, P1–P9b.
+    - `tests/data/simple`, `tests/data/zones` and the anchor give `[]`.
+    - A `validate()` short-circuit test.
+    - Flag tests: one warning, `"strict"` raises, off stays silent, values 0/1 rejected.
+    - The subprocess import test.
+11. **Gate.** `make check` green, parity MIP 35.0, every v0.37/v0.38 golden test green, benches
+    non-regressing.
 
 ## Performance
 
-- `min_set` builds the same model as v0.38.
-- The other objectives add *O(#terms)* variables, which is small next to *n_pu × n_zones*.
-- `presolve_check` is *O(n_pu + n_rows)*, using numpy reductions over the existing tables, and
-  only runs when asked.
-- No bench changes are needed. The existing zone and MIP benches must stay non-regressing.
+- `min_set` is unchanged.
+- The budgeted objectives add *O(#terms)* variables.
+- `presolve_check` is *O(n_pu + rows)* and runs only on request.
+- `_build` adds no work.
