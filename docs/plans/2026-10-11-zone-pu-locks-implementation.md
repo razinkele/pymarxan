@@ -559,7 +559,7 @@ Add the methods after `zone_target_issues`:
 
 (The single `pid in restrict` branch covers both "status 2 and puzone" and "puzone" rows of the table: both give `(puzone set, False, only-zone-or-None)`.)
 
-`src/pymarxan/zones/diagnostics.py`: delete the local `PUZoneRule` class, the `_pu_zone_rules` body, the `STATUS_*` import and the now-unused `from typing import NamedTuple` (ruff F401 otherwise); add `from pymarxan.zones.model import PUZoneRule, ZonalProblem` and
+`src/pymarxan/zones/diagnostics.py`: delete the local `PUZoneRule` class, the `_pu_zone_rules` **and `_best` functions**, the `STATUS_*` import and the now-unused `from typing import NamedTuple` (ruff F401 otherwise); **replace** `from pymarxan.zones.model import ZonalProblem` **with** `from pymarxan.zones.model import PUZoneRule, ZonalProblem`, and put these two functions where `_pu_zone_rules` and `_best` were:
 
 ```python
 def _pu_zone_rules(problem: ZonalProblem) -> list[PUZoneRule]:
@@ -787,6 +787,21 @@ def test_target_wrapper_emits_only_target_warning():
         warnings.simplefilter("always")
         warn_zone_target_issues(p, "ZoneSASolver")
     assert [w.category for w in rec] == [ZoneTargetWarning]
+
+
+def test_lock_warning_points_at_the_solve_caller():
+    p = _three_zone(pu_locks=_table([(9, 1)]))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    (w,) = [w for w in rec if issubclass(w.category, ZoneLockWarning)]
+    assert w.filename == __file__
+
+
+def test_partly_unknown_puzone_reported_as_single_zone():
+    issues = _issues(pu_zones=_table([(1, 1), (1, 99)]))
+    assert any("single zone (treated as a lock" in m and "PU 1 → zone 1" in m for m in issues)
+    assert any("unknown PU or zone" in m and "PU 1, zone 99" in m for m in issues)
 ```
 
 Add to `ZONES_EXPORTS` in `tests/pymarxan/zones/test_package_exports.py` (keep the dict's ordering style):
@@ -812,11 +827,12 @@ In `ZonalProblem` (after `pu_zone_rules`):
         if self.pu_locks is None and self.pu_zones is None:
             return out  # v0.37 problems: no scan, no status cast
         pu = self.planning_units
-        status_of = (
-            dict(zip((int(p) for p in pu["id"].values), pu["status"].values.astype(int),
-                     strict=True))
-            if "status" in pu.columns else {}
-        )
+        status_of: dict[int, int] = {}
+        if "status" in pu.columns:  # per-row parse: validate() never raises on a bad status
+            for p, s in zip(pu["id"].values, pu["status"].values, strict=True):
+                sid = _known_id(s, {0, 1, 2, 3})
+                if sid is not None:
+                    status_of[int(p)] = sid
         pus = {int(p) for p in self.planning_units["id"].values}
         zones = {int(z) for z in self.zone_ids}
         usable: dict[str, list[tuple[object, object]]] = {}
@@ -1433,12 +1449,30 @@ class TestMIP:
         assert len(msgs) == 1
         assert "feature 1 is 15 but at most 12" in msgs[0]
         assert "given the PU zone restrictions" in msgs[0]
+
+    def _no_solution_message(self, p):
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert ZoneMIPSolver().solve(p, CONFIG) == []
+        msgs = [str(w.message) for w in rec if issubclass(w.category, ZoneMIPNoSolutionWarning)]
+        assert len(msgs) == 1
+        return msgs[0]
+
+    def test_compete_message_carries_restriction_note(self):
+        # the "targets compete" branch gets the note too, not only "Unreachable targets"
+        p = make_anchor_problem(zone_target_contrib=1).copy_with(pu_zones=_table([(1, 1), (1, 2)]))
+        msg = self._no_solution_message(p)
+        assert "targets compete" in msg and "given the PU zone restrictions" in msg
+
+    def test_no_restriction_note_without_rules(self):
+        msg = self._no_solution_message(make_anchor_problem(zone_target_contrib=1))
+        assert "targets compete" in msg and "given the PU zone restrictions" not in msg
 ```
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py -q`
-Expected: 3 FAIL — (`test_strict_subset` already passes: since Task 1 the MIP bounds disallowed zones) `test_puzone_forbids_unassigned` returns `(1, 2, 2, 0)`; `test_rules_hold_on_output` reports violation `[3]` (PU4 unassigned); `test_lock_induced_infeasibility_message` lacks the restriction phrase. Pins that already pass (since Task 1 the MIP reads locks/puzone through `rule.forced` / `rule.allowed`): `test_lock_moves_anchor_optimum`, `test_unrestricted_pu4_variant`, `test_status_semantics_unchanged`. The only new MIP behaviour in this task is `== 1` for must-assign PUs plus the message.
+Expected: 4 FAIL — (`test_strict_subset` already passes: since Task 1 the MIP bounds disallowed zones) `test_puzone_forbids_unassigned` returns `(1, 2, 2, 0)`; `test_rules_hold_on_output` reports violation `[3]` (PU4 unassigned); `test_lock_induced_infeasibility_message` lacks the restriction phrase; `test_compete_message_carries_restriction_note` lacks the restriction phrase in the targets-compete message. Pins that already pass (since Task 1 the MIP reads locks/puzone through `rule.forced` / `rule.allowed`): `test_lock_moves_anchor_optimum`, `test_unrestricted_pu4_variant`, `test_status_semantics_unchanged`, `test_no_restriction_note_without_rules`. The only new MIP behaviour in this task is `== 1` for must-assign PUs plus the message.
 
 - [ ] **Step 3: Implement** in `mip_solver.py`. Replace the whole `for k, pid in enumerate(pu_ids):` loop (mip_solver.py:122-140, from the `for` line through the `locked_out_{pid}_{zid}` constraint; keep the `x: dict[...] = {}` line above it) with:
 
@@ -1594,7 +1628,22 @@ Initial assignment — replace the `for idx in swappable:` block with:
                     assignment[idx] = options[rng.integers(len(options))]
 ```
 
-Temperature loop — replace the two lines drawing `idx` and `new_zone` with `idx, new_zone = _propose(rng, swappable, opts)` followed by `old_zone = int(assignment[idx])` (keep the `if new_zone == old_zone: continue`). Do the same in the annealing loop. Remove the now-unused `initial_include`, `pu_id_to_idx` and `n_zone_options` locals and the old status loop (keep `n_swappable`: the all-locked branch still uses it). Put `_propose` two blank lines after the imports, before `_COOLING_FACTORIES`.
+Temperature loop — replace the three lines
+
+```python
+                idx = int(swappable[rng.integers(n_swappable)])
+                old_zone = int(assignment[idx])
+                new_zone = int(zone_options[rng.integers(n_zone_options)])
+```
+
+with
+
+```python
+                idx, new_zone = _propose(rng, swappable, opts)
+                old_zone = int(assignment[idx])
+```
+
+(keep the following `if new_zone == old_zone: continue`). Do the same in the annealing loop (solver.py:197-199). Remove the now-unused `initial_include`, `pu_id_to_idx` and `n_zone_options` locals and the old status loop (keep `n_swappable`: the all-locked branch still uses it). Put `_propose` two blank lines after the imports, before `_COOLING_FACTORIES`.
 
 Note on byte-identity: v0.37 drew `rng.integers(n_swappable)` then `rng.integers(n_zone_options)`; `_propose` makes the same two draws with the same bounds for free PUs, and status-1 PUs start at `rules[idx].start == min(zone_ids)` exactly as `initial_include` did. The golden tests verify this.
 
@@ -1631,7 +1680,36 @@ def _ii(p, itimptype):
     return p.copy_with(parameters={**p.parameters, "ITIMPTYPE": itimptype})
 
 
+def _tie_pu4():
+    """_strict_subset plus PU 4 (no features) restricted to {1, 2, 3} with zone costs
+    5 / 1 / 1: zones 2 and 3 tie, both better than the min(allowed) seed 1."""
+    p = _strict_subset()
+    pu = pd.concat(
+        [p.planning_units, pd.DataFrame({"id": [4], "cost": [0.0], "status": [0]})],
+        ignore_index=True,
+    )
+    zc = pd.concat(
+        [p.zone_costs,
+         pd.DataFrame({"pu": [4, 4, 4], "zone": [1, 2, 3], "cost": [5.0, 1.0, 1.0]})],
+        ignore_index=True,
+    )
+    pz = pd.concat([p.pu_zones, _table([(4, 1), (4, 2), (4, 3)])], ignore_index=True)
+    return p.copy_with(planning_units=pu, zone_costs=zc, pu_zones=pz)
+
+
 class TestHeuristicAndII:
+    def test_heuristic_must_assign_seed_is_min_allowed(self):
+        # seed min(allowed) = 1; greedy moves to the first strictly better zone (2), and the
+        # 2/3 tie keeps it there. Seeding at max(allowed) = 3 would stay at 3.
+        (s,) = _solve(ZoneHeuristicSolver, _tie_pu4(), n_sol=1)
+        assert int(s.zone_assignment[3]) == 2
+
+    @pytest.mark.parametrize("itimptype", [2, 3])
+    def test_ii_must_assign_move_takes_lowest_tied_zone(self, itimptype):
+        # addition pass (2) / swap pass (3) try other allowed zones in ascending order
+        (s,) = _solve(ZoneIISolver, _ii(_tie_pu4(), itimptype), n_sol=1)
+        assert int(s.zone_assignment[3]) == 2
+
     @pytest.mark.parametrize("name,make", RESTRICTED, ids=[r[0] for r in RESTRICTED])
     def test_heuristic_rules_hold(self, name, make):
         p = make()
@@ -1762,7 +1840,7 @@ class TestHeuristicAndII:
 
 (If `Solution.zone_assignment` is read-only on the dataclass, build `bad` (and the other hand-set seeds) with `dataclasses.replace(seed_sol, zone_assignment=np.array([1, 2, 2, 0]))` instead of assignment.)
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: the `strict_subset` cases for the heuristic, II 1 and II 3 (`test_ii_rules_hold[strict_subset-2]` already passes on v0.37: its removal→addition passes happen to land PU 1 in zone 2, inside {1, 2}, so it is a pin; `excludes_first-2` and `test_ii_addition_moves_must_assign_pu_to_better_zone` carry the II-2 proof), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), the `must_assign` cases for the heuristic and II 1/2/3 (`test_heuristic_rules_hold[must_assign]`, `test_ii_rules_hold[must_assign-1/2/3]` — v0.37 leaves PU 4 unassigned), `test_ii_rules_hold[lock-1]`, `test_pipeline_respects_rules[1/3/4/5/6]`, `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, `test_improve_repairs_into_allowed_set_not_first_zone`, `test_improve_repair_target_is_min_allowed`, `test_improve_repairs_status_3_pu_in_a_zone` (v0.37 `improve()` never resets fixed PUs), and the `test_all_forced_every_solver` cases for the heuristic and II. `test_ii_rules_hold[lock-1]` fails on v0.37; the other `lock` cases pass by coincidence — the strict-subset and all-forced tests carry the proof. `test_non_contiguous_zone_ids_solvers[ZoneHeuristicSolver]` most likely already passes on v0.37 (it puts PU 3 in zone 9 by its own choice) — a regression pin, not red-first proof. Dry run (before `test_improve_repair_target_is_min_allowed`, `test_improve_repairs_status_3_pu_in_a_zone` and the heuristic non-contiguous case were added): 23 failed, 11 passed; a pass-2 re-run with `test_improve_repair_target_is_min_allowed` gave 24 failed, 11 passed — expect 37 tests now, 25 failed and 12 passed (26 failed if the new heuristic case leaves PU 3 at 0 on v0.37); record the exact count.
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: the `strict_subset` cases for the heuristic, II 1 and II 3 (`test_ii_rules_hold[strict_subset-2]` already passes on v0.37: its removal→addition passes happen to land PU 1 in zone 2, inside {1, 2}, so it is a pin; `excludes_first-2` and `test_ii_addition_moves_must_assign_pu_to_better_zone` carry the II-2 proof), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), the `must_assign` cases for the heuristic and II 1/2/3 (`test_heuristic_rules_hold[must_assign]`, `test_ii_rules_hold[must_assign-1/2/3]` — v0.37 leaves PU 4 unassigned), `test_ii_rules_hold[lock-1]`, `test_pipeline_respects_rules[1/3/4/5/6]`, `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, `test_improve_repairs_into_allowed_set_not_first_zone`, `test_improve_repair_target_is_min_allowed`, `test_improve_repairs_status_3_pu_in_a_zone` (v0.37 `improve()` never resets fixed PUs), `test_heuristic_must_assign_seed_is_min_allowed` and `test_ii_must_assign_move_takes_lowest_tied_zone[2/3]` (v0.37 leaves PU 4 at 0), and the `test_all_forced_every_solver` cases for the heuristic and II. `test_ii_rules_hold[lock-1]` fails on v0.37; the other `lock` cases pass by coincidence — the strict-subset and all-forced tests carry the proof. `test_non_contiguous_zone_ids_solvers[ZoneHeuristicSolver]` most likely already passes on v0.37 (it puts PU 3 in zone 9 by its own choice) — a regression pin, not red-first proof. Dry run (before `test_improve_repair_target_is_min_allowed`, `test_improve_repairs_status_3_pu_in_a_zone` and the heuristic non-contiguous case were added): 23 failed, 11 passed; a pass-2 re-run with `test_improve_repair_target_is_min_allowed` gave 24 failed, 11 passed — expect 40 tests now, 28 failed and 12 passed (measured in the pass-2 round-2 review); record the exact count.
 
 - [ ] **Step 3: Implement**
 
@@ -1796,7 +1874,7 @@ def _seed(rule: PUZoneRule) -> int:
     return rule.start if rule.start is not None else min(rule.allowed)
 ```
 
-`solve`: replace `locked = self._parse_locked(...)` with `rules = problem.pu_zone_rules()`, `locked = fixed_zones(rules)`; seeding of swappable PUs: `assignment[idx] = _seed(rules[idx])` (v0.37 used `zone_ids_list[0]`, which equals `_seed` for every free PU); call `self._improve(problem, assignment, swappable, rules, blm, itimptype)`.
+`solve`: replace `locked = self._parse_locked(...)` with `rules = problem.pu_zone_rules()`, `locked = fixed_zones(rules)`; seeding of swappable PUs: `assignment[idx] = _seed(rules[idx])` (v0.37 used `zone_ids_list[0]`, which equals `_seed` for every free PU), and replace the comment `# Start from all-in-first-zone for non-locked PUs` with `# Seed each swappable PU at its rule's start zone, else its smallest allowed zone`; call `self._improve(problem, assignment, swappable, rules, blm, itimptype)`.
 
 In `solve` and `improve`, delete the now-unused `pu_id_to_idx` and `zone_ids_list` locals (ruff F841).
 
@@ -2079,7 +2157,7 @@ def test_whole_sa_loop_restricted_vs_unrestricted() -> None:
     assert ratio <= 1.10, f"whole-SA restricted/unrestricted per-iteration {ratio:.3f}"
 ```
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (dry run: per-delta ratio ≈ 1.0, `_propose` vs v0.37 ≈ 1.02–1.08; whole-SA ratio expected ≈ 0.9–1.0). Report all three ratios in the commit message.
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (dry run: per-delta ratio ≈ 1.02–1.05, `_propose` vs v0.37 ≈ 1.02–1.08, whole-SA ratio ≈ 0.88–0.92). Report all three ratios in the commit message.
 
 - [ ] **Step 4: Docs** — `CHANGELOG.md` under `## [Unreleased]`:
 
@@ -2101,9 +2179,10 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restr
 - `ZoneIISolver.improve()` first repairs an incoming assignment that breaks a PU's rule
   (e.g. a status-2 PU outside its zone) before improving it.
 - `compute_replacement_cost` drops a PU's `pu_locks` / `pu_zones` rows in its lock-out variant.
-  Other status edits (e.g. WDPA lock-in) do not override a `pu_locks` row.
 
 ### Notes
+- A `pu_locks` row beats every pu.dat status (2 and 3); status edits made by other tools
+  (e.g. `apply_wdpa_status` lock-in) do not override it.
 - The status-based analyses (gap analysis, representation, irreplaceability, Ferrier
   importance) read only the pu.dat `status` column and do not see `pu_locks` / `pu_zones`.
 - `ZoneLockWarning` is emitted once per zone-solver call; `RunModePipeline` RUNMODEs 2–5 call
