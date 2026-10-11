@@ -1,27 +1,17 @@
-"""Single-target infeasibility diagnostics for ZoneMIPSolver, and the rules it shares with it.
+"""Single-target infeasibility diagnostics for ZoneMIPSolver.
 
-``_feature_groups`` (the MIP constraints' amount source) and ``_pu_zone_rules`` (which zones
-a PU may take) live here so the MIP and the diagnostic read one definition each; #6 part 2
-(lock into a named zone) extends ``_pu_zone_rules`` only.
+``_feature_groups`` (the MIP constraints' amount source) lives here; which zones a PU may
+take is ``ZonalProblem.pu_zone_rules`` (``_pu_zone_rules`` is a thin alias kept for the MIP
+and older imports).
 """
 from __future__ import annotations
 
-from typing import NamedTuple
-
-from pymarxan.models.problem import STATUS_LOCKED_IN, STATUS_LOCKED_OUT
-from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.model import PUZoneRule, ZonalProblem
 from pymarxan.zones.objective import _meets
 
 
 class ZoneMIPNoSolutionWarning(UserWarning):
     """ZoneMIPSolver returned ``[]``; the message says why (diagnostic, compete, time limit)."""
-
-
-class PUZoneRule(NamedTuple):
-    """Zones a PU may take; ``forced`` means it must take the single allowed zone."""
-
-    allowed: frozenset[int]
-    forced: bool
 
 
 def _feature_groups(problem: ZonalProblem) -> dict[int, list[tuple[int, float]]]:
@@ -36,37 +26,17 @@ def _feature_groups(problem: ZonalProblem) -> dict[int, list[tuple[int, float]]]
 
 
 def _pu_zone_rules(problem: ZonalProblem) -> list[PUZoneRule]:
-    """Per PU in ``planning_units`` order: status 3 -> no zone; status 2 -> forced into
-    ``min(zone_ids)``; otherwise free over every zone. No ``status`` column means free.
-
-    This is pymarxan's status convention (ZoneMIPSolver / SA / heuristic / II), not a
-    MarZone rule — MarZone locks PUs into named zones via its pulock file (#6 part 2).
-    """
-    every = frozenset(int(z) for z in problem.zone_ids)
-    first = frozenset({min(every)}) if every else frozenset()
-    pu = problem.planning_units
-    if "status" not in pu.columns:
-        return [PUZoneRule(every, False)] * len(pu)
-    rules: list[PUZoneRule] = []
-    for s in pu["status"].values.astype(int):
-        if s == STATUS_LOCKED_OUT:
-            rules.append(PUZoneRule(frozenset(), False))
-        elif s == STATUS_LOCKED_IN:
-            rules.append(PUZoneRule(first, True))
-        else:
-            rules.append(PUZoneRule(every, False))
-    return rules
+    """Alias of ``ZonalProblem.pu_zone_rules`` (kept for the MIP and older imports)."""
+    return problem.pu_zone_rules()
 
 
 def _best(rule: PUZoneRule, value_in: dict[int, float]) -> float:
-    """A PU's largest possible contribution: 0 if it can take no zone; its forced zone's
-    value as-is (possibly negative); else max(0, best allowed) — it may stay unassigned."""
-    if not rule.allowed:
-        return 0.0
-    if rule.forced:
-        (zid,) = rule.allowed
-        return value_in.get(zid, 0.0)
-    return max(0.0, max((value_in.get(z, 0.0) for z in rule.allowed), default=0.0))
+    """A PU's largest possible contribution: the best allowed zone's value, or 0 when the
+    PU may stay unassigned and that is better; a forced PU's value as-is."""
+    values = [value_in.get(z, 0.0) for z in rule.allowed]
+    if rule.may_be_unassigned:
+        values.append(0.0)
+    return max(values) if values else 0.0
 
 
 def _fmt(x: float) -> str:

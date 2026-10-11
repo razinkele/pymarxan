@@ -4,11 +4,17 @@ from __future__ import annotations
 import warnings
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import (
+    STATUS_INITIAL_INCLUDE,
+    STATUS_LOCKED_IN,
+    STATUS_LOCKED_OUT,
+    ConservationProblem,
+)
 
 
 def _first_five(items: list[str]) -> str:
@@ -31,6 +37,44 @@ def _known_id(value: object, known: set[int]) -> int | None:
     return ident if ident in known else None
 
 
+class PUZoneRule(NamedTuple):
+    """Zones a planning unit may take (``ZonalProblem.pu_zone_rules``)."""
+
+    allowed: frozenset[int]
+    may_be_unassigned: bool
+    start: int | None
+
+    @property
+    def forced(self) -> bool:
+        """Exactly one allowed zone and the PU must be assigned."""
+        return len(self.allowed) == 1 and not self.may_be_unassigned
+
+
+def rule_violations(rules: list[PUZoneRule], assignment: np.ndarray) -> list[int]:
+    """Indices of PUs whose zone in ``assignment`` breaks their rule."""
+    bad: list[int] = []
+    for i, (rule, zone) in enumerate(zip(rules, assignment, strict=True)):
+        z = int(zone)
+        if (z == 0 and not rule.may_be_unassigned) or (z != 0 and z not in rule.allowed):
+            bad.append(i)
+    return bad
+
+
+def fixed_zones(rules: list[PUZoneRule]) -> dict[int, int]:
+    """PU index -> the zone it must take (forced) or 0 (no allowed zone); the rest move."""
+    fixed: dict[int, int] = {}
+    for i, rule in enumerate(rules):
+        if rule.forced:
+            (fixed[i],) = rule.allowed
+        elif not rule.allowed:
+            fixed[i] = 0
+    return fixed
+
+
+def _only(zones: frozenset[int]) -> int | None:
+    return next(iter(zones)) if len(zones) == 1 else None
+
+
 @dataclass
 class ZonalProblem(ConservationProblem):
     zones: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
@@ -38,6 +82,8 @@ class ZonalProblem(ConservationProblem):
     zone_contributions: pd.DataFrame | None = None
     zone_targets: pd.DataFrame | None = None
     zone_boundary_costs: pd.DataFrame | None = None
+    pu_locks: pd.DataFrame | None = field(default=None, kw_only=True)
+    pu_zones: pd.DataFrame | None = field(default=None, kw_only=True)
 
     @property
     def n_zones(self) -> int:
@@ -165,6 +211,77 @@ class ZonalProblem(ConservationProblem):
                 dups.append(key)
             seen.add(key)
         return unknown, dups
+
+    # ------------------------------------------------------------------
+    # PU locks / zone restrictions (MarZone pu.hpp LoadPuLock / PersistPuLock / PersistPuZone)
+    # ------------------------------------------------------------------
+
+    def _pu_table_rows(self, table: pd.DataFrame | None) -> list[tuple[object, object]]:
+        if table is None or not {"pu", "zone"}.issubset(table.columns):
+            return []
+        return list(zip(table["pu"].tolist(), table["zone"].tolist(), strict=True))
+
+    def pu_lock_lookup(self) -> dict[int, int]:
+        """PU id -> locked zone. Last row per known PU wins, THEN a lock naming an unknown
+        zone is dropped and the PU falls through to lower rules (MarZone pu.hpp:483-496)."""
+        pus = {int(p) for p in self.planning_units["id"].values}
+        zones = {int(z) for z in self.zone_ids}
+        last: dict[int, object] = {}
+        for p, z in self._pu_table_rows(self.pu_locks):
+            pid = _known_id(p, pus)
+            if pid is not None:
+                last[pid] = z
+        out: dict[int, int] = {}
+        for pid, z in last.items():
+            zid = _known_id(z, zones)
+            if zid is not None:
+                out[pid] = zid
+        return out
+
+    def pu_zone_lookup(self) -> dict[int, frozenset[int]]:
+        """PU id -> distinct known zones it is restricted to. A PU whose rows name only
+        unknown zones is omitted (unrestricted, MarZone numZones == 0)."""
+        pus = {int(p) for p in self.planning_units["id"].values}
+        zones = {int(z) for z in self.zone_ids}
+        acc: dict[int, set[int]] = {}
+        for p, z in self._pu_table_rows(self.pu_zones):
+            pid, zid = _known_id(p, pus), _known_id(z, zones)
+            if pid is not None and zid is not None:
+                acc.setdefault(pid, set()).add(zid)
+        return {pid: frozenset(zs) for pid, zs in acc.items()}
+
+    def pu_zone_rules(self) -> list[PUZoneRule]:
+        """One rule per PU in ``planning_units`` order; within pymarxan.zones the only place
+        that interprets status, pu_locks and pu_zones (spec §2 table, first match wins)."""
+        every = frozenset(int(z) for z in self.zone_ids)
+        first = min(every) if every else None
+        locks = self.pu_lock_lookup()
+        restrict = self.pu_zone_lookup()
+        pu = self.planning_units
+        statuses = (
+            pu["status"].values.astype(int) if "status" in pu.columns
+            else np.zeros(len(pu), dtype=int)
+        )
+        rules: list[PUZoneRule] = []
+        for pid_raw, status in zip(pu["id"].values, statuses, strict=True):
+            pid, s = int(pid_raw), int(status)
+            if pid in locks:
+                z = locks[pid]
+                rule = PUZoneRule(allowed=frozenset({z}), may_be_unassigned=False, start=z)
+            elif s == STATUS_LOCKED_OUT:
+                rule = PUZoneRule(allowed=frozenset(), may_be_unassigned=True, start=0)
+            elif pid in restrict:  # status 2 within puzone, or plain puzone
+                zs = restrict[pid]
+                rule = PUZoneRule(allowed=zs, may_be_unassigned=False, start=_only(zs))
+            elif s == STATUS_LOCKED_IN and first is not None:
+                rule = PUZoneRule(allowed=frozenset({first}), may_be_unassigned=False, start=first)
+            else:
+                start = first if s == STATUS_INITIAL_INCLUDE else None
+                rule = PUZoneRule(allowed=every, may_be_unassigned=True, start=start)
+            rules.append(rule)
+        if any(not r.allowed and not r.may_be_unassigned for r in rules):
+            raise AssertionError("pu_zone_rules: a PU with no zone that must be assigned")
+        return rules
 
     def contribution_matrix(self) -> np.ndarray:
         """(n_zones + 1, n_feat) contribution per (zone row, feature column); row 0 is zero."""

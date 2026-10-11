@@ -37,15 +37,21 @@ class TestRules:
     def test_status_convention(self):
         p = _status(make_anchor_problem(), [0, 2, 3])
         assert _pu_zone_rules(p) == [
-            PUZoneRule(frozenset({1, 2}), False),
-            PUZoneRule(frozenset({1}), True),
-            PUZoneRule(frozenset(), False),
+            PUZoneRule(allowed=frozenset({1, 2}), may_be_unassigned=True, start=None),
+            PUZoneRule(allowed=frozenset({1}), may_be_unassigned=False, start=1),
+            PUZoneRule(allowed=frozenset(), may_be_unassigned=True, start=0),
         ]
 
     def test_missing_status_column_means_free(self):
         p = make_anchor_problem()
         p = p.copy_with(planning_units=p.planning_units.drop(columns="status"))
-        assert all(r == PUZoneRule(frozenset({1, 2}), False) for r in _pu_zone_rules(p))
+        free = PUZoneRule(allowed=frozenset({1, 2}), may_be_unassigned=True, start=None)
+        assert all(r == free for r in _pu_zone_rules(p))
+
+    def test_best_for_must_assign_negative_values(self):
+        from pymarxan.zones.diagnostics import _best
+        rule = PUZoneRule(allowed=frozenset({1, 2}), may_be_unassigned=False, start=None)
+        assert _best(rule, {1: -1.0, 2: -2.0}) == -1.0
 
 
 class TestDiagnose:
