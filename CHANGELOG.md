@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Zone problems: `zone_targets` rows with unknown zone/feature ids or a repeated (zone, feature)
+  pair are now handled identically by `ZoneMIPSolver`, `compute_zone_objective`, the zone SA
+  cache and `write_zone_summary`, following MarZone (`zones.hpp` BuildZoneTarget): unknown ids
+  are skipped, the last duplicate row wins, and a pair whose surviving target is <= 0 adds no
+  penalty and no MIP constraint (#7).
+- Zone SA cache: under `ZONETARGETCONTRIB = 1` with a negative contribution, untargeted
+  (zone, feature) pairs no longer accrue a phantom zone-target penalty (#7).
+
+### Added
+- `ZonalProblem.zone_target_lookup()` / `zone_target_issues()`; `validate()` reports unknown
+  or non-integral ids and duplicate pairs in `zone_targets`, and duplicate rows in
+  `zone_contributions`.
+- `ZoneTargetWarning`, emitted once per zone-solver call (`solve`, `ZoneIISolver.improve`)
+  when such rows exist; `RunModePipeline` RUNMODEs 2–5 call two or three zone solvers per run.
+- `pymarxan.zones.diagnose_zone_infeasibility` and `ZoneMIPNoSolutionWarning`: when
+  `ZoneMIPSolver` returns `[]` it now warns with the unreachable targets, the "targets
+  compete" explanation, or the time-limit hint. Filter the category in loops that expect
+  infeasibility.
+- `pymarxan.zones.compute_zone_achieved` (public name for `_compute_zone_achieved`, kept as
+  an alias).
+
+### Changed (breaking for hand-built zone problems)
+- Duplicate zone-target rows no longer raise `PulpError` in `ZoneMIPSolver`; unknown-id rows
+  no longer make it return `[]` or add a phantom penalty to `compute_zone_objective`.
+- `check_zone_targets`, `metadata["zone_targets_met"]` and `write_zone_summary` cover the known
+  pairs only (unknown ids absent; duplicates collapsed last-wins); inert pairs (target <= 0)
+  are reported as met. `compute_zone_shortfalls` covers effective pairs (target > 0) only.
+  Callers that index these results by raw `zone_targets` rows should iterate
+  `zone_target_lookup(include_inert=True)` instead.
+
 ## [0.36.0] — 2026-09-28
 
 ### Changed

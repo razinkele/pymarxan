@@ -123,6 +123,16 @@ Three named deviations, all deliberate:
   such an available zone reproduces; one **without** a contribution file (available
   zone contributing 1, `zones.hpp:658-662`) does not.
 
+**Zone-target input semantics (since v0.37).** `zone_targets` rows are read the way MarZone's
+`BuildZoneTarget` reads `zonetarget.dat`: a row naming an unknown feature or zone is skipped
+(`zones.hpp:131`, `:142`), and a repeated (zone, feature) pair is resolved by plain overwrite,
+so the last row wins (`zones.hpp:148`). A pair whose surviving target is not positive is
+inert — MarZone applies zone targets only when `target > 0` (`reserve.hpp:241`, `:472`,
+`:846`). The MIP, the DataFrame objective, the SA cache and the summary writer all read one
+accessor (`ZonalProblem.zone_target_lookup`); `tests/pymarxan/zones/test_zone_target_agreement.py`
+pins their agreement. `validate()` reports such rows, and each zone solver warns once
+(`ZoneTargetWarning`).
+
 ## Comparing against the Marxan C++ binary
 
 The strongest possible check is a numerical comparison against the
