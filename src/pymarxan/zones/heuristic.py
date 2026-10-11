@@ -6,7 +6,12 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
+from pymarxan.zones.model import (
+    PUZoneRule,
+    ZonalProblem,
+    fixed_zones,
+    warn_zone_input_issues,
+)
 from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
 
 
@@ -45,22 +50,20 @@ class ZoneHeuristicSolver(Solver):
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
         n_pu = len(pu_ids)
-        pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
-        zone_ids_list = sorted(problem.zone_ids)
-
-        locked, initial_include = self._parse_status(
-            problem, pu_id_to_idx, zone_ids_list,
-        )
+        rules = problem.pu_zone_rules()
+        locked = fixed_zones(rules)
 
         solutions: list[Solution] = []
         for run_idx in range(config.num_solutions):
             assignment = np.zeros(n_pu, dtype=int)
             for idx, zid in locked.items():
                 assignment[idx] = zid
+            for idx, rule in enumerate(rules):
+                if idx in locked or rule.may_be_unassigned:
+                    continue  # free PUs start at 0 as in v0.37 (status 1 has no effect here)
+                assignment[idx] = rule.start if rule.start is not None else min(rule.allowed)
 
-            assignment = self._greedy_assign(
-                problem, assignment, locked, zone_ids_list, blm,
-            )
+            assignment = self._greedy_assign(problem, assignment, locked, rules, blm)
 
             solutions.append(
                 build_zone_solution(
@@ -74,7 +77,7 @@ class ZoneHeuristicSolver(Solver):
         problem: ZonalProblem,
         assignment: np.ndarray,
         locked: dict[int, int],
-        zone_ids: list[int],
+        rules: list[PUZoneRule],
         blm: float,
     ) -> np.ndarray:
         """Greedily assign PUs to zones to minimize objective."""
@@ -92,7 +95,7 @@ class ZoneHeuristicSolver(Solver):
 
             for idx in swappable:
                 old_zone = int(assignment[idx])
-                for zid in zone_ids:
+                for zid in sorted(rules[idx].allowed):
                     if zid == old_zone:
                         continue
                     assignment[idx] = zid
@@ -110,25 +113,3 @@ class ZoneHeuristicSolver(Solver):
                 improved = True
 
         return assignment
-
-    @staticmethod
-    def _parse_status(
-        problem: ZonalProblem,
-        pu_id_to_idx: dict[int, int],
-        zone_ids_list: list[int],
-    ) -> tuple[dict[int, int], set[int]]:
-        locked: dict[int, int] = {}
-        initial_include: set[int] = set()
-        if "status" in problem.planning_units.columns:
-            pu_ids = problem.planning_units["id"].values
-            statuses = problem.planning_units["status"].values.astype(int)
-            for k in range(len(pu_ids)):
-                s = int(statuses[k])
-                idx = pu_id_to_idx[int(pu_ids[k])]
-                if s == 2:
-                    locked[idx] = zone_ids_list[0]
-                elif s == 3:
-                    locked[idx] = 0
-                elif s == 1:
-                    initial_include.add(idx)
-        return locked, initial_include
