@@ -10,8 +10,19 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.zones.cache import ZoneProblemCache
-from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
+from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues
 from pymarxan.zones.objective import build_zone_solution
+
+
+def _propose(
+    rng: np.random.Generator, swappable: np.ndarray, opts: list[np.ndarray],
+) -> tuple[int, int]:
+    """A random swappable PU and a random zone from its options. Same two RNG draws as
+    v0.37 for unrestricted PUs (whose options are the shared ``zone_options`` array)."""
+    idx = int(swappable[rng.integers(len(swappable))])
+    options = opts[idx]
+    return idx, int(options[rng.integers(len(options))])
+
 
 _COOLING_FACTORIES: dict[str, Callable[..., CoolingSchedule]] = {
     "geometric": CoolingSchedule.geometric,
@@ -70,26 +81,17 @@ class ZoneSASolver(Solver):
 
         pu_ids = problem.planning_units["id"].tolist()
         n_pu = len(pu_ids)
-        pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
         zone_ids_list = sorted(problem.zone_ids)
         zone_options = np.array(zone_ids_list, dtype=int)
-        n_zone_options = len(zone_options)
 
-        locked: dict[int, int] = {}
-        initial_include: set[int] = set()
-        if "status" in problem.planning_units.columns:
-            pu_id_vals = problem.planning_units["id"].values
-            pu_st_vals = problem.planning_units["status"].values.astype(int)
-            for k in range(len(pu_id_vals)):
-                s = int(pu_st_vals[k])
-                idx = pu_id_to_idx[int(pu_id_vals[k])]
-                if s == 2:
-                    locked[idx] = zone_ids_list[0]
-                elif s == 3:
-                    locked[idx] = 0
-                elif s == 1:
-                    initial_include.add(idx)
-
+        rules = problem.pu_zone_rules()
+        locked = fixed_zones(rules)
+        every = frozenset(zone_ids_list)
+        opts: list[np.ndarray] = [
+            zone_options if rule.allowed == every
+            else np.array(sorted(rule.allowed), dtype=int)
+            for rule in rules
+        ]
         swappable = np.array(
             [i for i in range(n_pu) if i not in locked], dtype=int
         )
@@ -129,10 +131,12 @@ class ZoneSASolver(Solver):
             for idx, zid in locked.items():
                 assignment[idx] = zid
             for idx in swappable:
-                if idx in initial_include:
-                    assignment[idx] = zone_ids_list[0]
+                start = rules[idx].start
+                if start is not None:
+                    assignment[idx] = start
                 else:
-                    assignment[idx] = zone_options[rng.integers(n_zone_options)]
+                    options = opts[idx]
+                    assignment[idx] = options[rng.integers(len(options))]
 
             # Both accumulators (raw per zone, contribution-weighted overall) from the cache
             held = cache.compute_held(assignment)
@@ -141,9 +145,8 @@ class ZoneSASolver(Solver):
             # Estimate initial temperature using delta approach
             deltas = []
             for _ in range(min(1000, num_iterations // 10)):
-                idx = int(swappable[rng.integers(n_swappable)])
+                idx, new_zone = _propose(rng, swappable, opts)
                 old_zone = int(assignment[idx])
-                new_zone = int(zone_options[rng.integers(n_zone_options)])
                 if new_zone == old_zone:
                     continue
                 delta = cache.compute_delta_zone_objective(
@@ -194,9 +197,8 @@ class ZoneSASolver(Solver):
                     progress.iteration = iter_count
                     progress.best_objective = best_obj
 
-                idx = int(swappable[rng.integers(n_swappable)])
+                idx, new_zone = _propose(rng, swappable, opts)
                 old_zone = int(assignment[idx])
-                new_zone = int(zone_options[rng.integers(n_zone_options)])
                 if new_zone == old_zone:
                     continue
 

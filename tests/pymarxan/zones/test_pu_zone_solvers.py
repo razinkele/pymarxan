@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from pymarxan.solvers.base import SolverConfig
-from pymarxan.zones import ZoneMIPNoSolutionWarning, ZoneMIPSolver
+from pymarxan.zones import ZoneMIPNoSolutionWarning, ZoneMIPSolver, ZoneSASolver
 from pymarxan.zones.model import rule_violations
 from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
 
@@ -139,3 +139,29 @@ class TestMIP:
     def test_no_restriction_note_without_rules(self):
         msg = self._no_solution_message(make_anchor_problem(zone_target_contrib=1))
         assert "targets compete" in msg and "given the PU zone restrictions" not in msg
+
+
+def _fast(p, n=3000):
+    return p.copy_with(parameters={**p.parameters, "NUMITNS": n, "NUMTEMP": 30})
+
+
+def _solve(cls, p, n_sol=3, seed=3):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return cls().solve(p, SolverConfig(num_solutions=n_sol, seed=seed))
+
+
+RESTRICTED = [
+    ("lock", lambda: make_anchor_problem(spf=10.0).copy_with(pu_locks=_table([(1, 2)]))),
+    ("must_assign", lambda: _with_pu4(spf=10.0).copy_with(pu_zones=_table([(4, 1), (4, 2)]))),
+    ("strict_subset", _strict_subset),
+    ("excludes_first", _excludes_first),
+]
+
+
+class TestSA:
+    @pytest.mark.parametrize("name,make", RESTRICTED, ids=[r[0] for r in RESTRICTED])
+    def test_rules_hold(self, name, make):
+        p = _fast(make())
+        for s in _solve(ZoneSASolver, p):
+            assert rule_violations(p.pu_zone_rules(), s.zone_assignment) == []
