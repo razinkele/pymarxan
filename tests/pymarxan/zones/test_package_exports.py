@@ -8,6 +8,7 @@ import pytest
 ZONES_EXPORTS = {
     "ZonalProblem": "pymarxan.zones.model",
     "ZoneMIPSolver": "pymarxan.zones.mip_solver",
+    "ZoneMIPNoSolutionWarning": "pymarxan.zones.diagnostics",
     "ZoneSASolver": "pymarxan.zones.solver",
     "ZoneTargetWarning": "pymarxan.zones.model",
     "ZoneHeuristicSolver": "pymarxan.zones.heuristic",
@@ -25,6 +26,7 @@ ZONES_EXPORTS = {
     "compute_overall_shortfalls": "pymarxan.zones.objective",
     "compute_zone_achieved": "pymarxan.zones.objective",
     "compute_zone_shortfalls": "pymarxan.zones.objective",
+    "diagnose_zone_infeasibility": "pymarxan.zones.diagnostics",
     "resolve_zone_target_types": "pymarxan.zones.readers",
 }
 

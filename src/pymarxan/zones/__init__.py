@@ -6,6 +6,7 @@ Names are re-exported from their submodules; no re-export shares a submodule's n
 from __future__ import annotations
 
 from pymarxan.zones.cache import ZoneHeld
+from pymarxan.zones.diagnostics import ZoneMIPNoSolutionWarning, diagnose_zone_infeasibility
 from pymarxan.zones.heuristic import ZoneHeuristicSolver
 from pymarxan.zones.iterative_improvement import ZoneIISolver
 from pymarxan.zones.mip_solver import ZoneMIPSolver
@@ -46,6 +47,7 @@ __all__ = [
     "ZoneHeld",
     "ZoneHeuristicSolver",
     "ZoneIISolver",
+    "ZoneMIPNoSolutionWarning",
     "ZoneMIPSolver",
     "ZoneSASolver",
     "ZoneTargetWarning",
@@ -58,6 +60,7 @@ __all__ = [
     "compute_zone_objective",
     "compute_zone_shortfall",
     "compute_zone_shortfalls",
+    "diagnose_zone_infeasibility",
     "load_zone_project",
     "read_zone_boundary_costs",
     "read_zone_contributions",

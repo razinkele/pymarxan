@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import numpy as np
 import pulp
 
-from pymarxan.models.problem import (
-    STATUS_LOCKED_IN,
-    STATUS_LOCKED_OUT,
-)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.zones.diagnostics import (
+    ZoneMIPNoSolutionWarning,
+    _feature_groups,
+    _pu_zone_rules,
+    diagnose_zone_infeasibility,
+)
 from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
 from pymarxan.zones.objective import _feature_arrays, build_zone_solution
 
@@ -107,7 +110,7 @@ class ZoneMIPSolver(Solver):
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
-        pu_status = problem.planning_units["status"].values.astype(int)
+        rules = _pu_zone_rules(problem)
         zone_ids = sorted(problem.zone_ids)
 
         model = pulp.LpProblem("ZoneMIP", pulp.LpMinimize)
@@ -116,11 +119,8 @@ class ZoneMIPSolver(Solver):
         x: dict[tuple[int, int], pulp.LpVariable] = {}
         for k, pid in enumerate(pu_ids):
             pid = int(pid)
-            status = int(pu_status[k])
             for zid in zone_ids:
-                x[(pid, zid)] = pulp.LpVariable(
-                    f"x_{pid}_{zid}", cat="Binary"
-                )
+                x[(pid, zid)] = pulp.LpVariable(f"x_{pid}_{zid}", cat="Binary")
 
             # Each PU in at most one zone
             model += (
@@ -128,13 +128,14 @@ class ZoneMIPSolver(Solver):
                 f"assign_{pid}",
             )
 
-            # Locked-in: assign to first zone
-            if status == STATUS_LOCKED_IN:
-                model += x[(pid, zone_ids[0])] == 1, f"locked_in_{pid}"
-            # Locked-out: not in any zone
-            elif status == STATUS_LOCKED_OUT:
+            rule = rules[k]
+            if rule.forced:
+                (forced_zone,) = rule.allowed
+                model += x[(pid, forced_zone)] == 1, f"locked_in_{pid}"
+            else:
                 for zid in zone_ids:
-                    model += x[(pid, zid)] == 0, f"locked_out_{pid}_{zid}"
+                    if zid not in rule.allowed:
+                        model += x[(pid, zid)] == 0, f"locked_out_{pid}_{zid}"
 
         # --- Objective components ---
 
@@ -204,6 +205,7 @@ class ZoneMIPSolver(Solver):
         first_pid = int(pu_ids[0])
         has_values = pulp.value(x[(first_pid, zone_ids[0])]) is not None
         if model.status in infeasible_statuses or not has_values:
+            _warn_no_solution(problem, model.status)
             return []
 
         # Extract zone assignment
@@ -343,17 +345,6 @@ def _build_zone_boundary_expr(
     return expr
 
 
-def _feature_groups(problem: ZonalProblem) -> dict[int, list[tuple[int, float]]]:
-    """feature id -> [(pu id, amount), ...] from pu_vs_features."""
-    puvspr = problem.pu_vs_features
-    groups: dict[int, list[tuple[int, float]]] = {}
-    for pid, fid, amt in zip(
-        puvspr["pu"].values, puvspr["species"].values, puvspr["amount"].values, strict=True,
-    ):
-        groups.setdefault(int(fid), []).append((int(pid), float(amt)))
-    return groups
-
-
 def _spf_lookup(problem: ZonalProblem) -> dict[int, float]:
     """feature id -> spf (1.0 when the column is absent; one rule, ``_feature_arrays``)."""
     ids, _, spf = _feature_arrays(problem)
@@ -457,3 +448,34 @@ def _add_overall_target_constraints(
                 if c != 0.0 and (pid, zid) in x:
                     terms.append(amt * c * x[(pid, zid)])
         model += (pulp.lpSum(terms) >= t * misslevel, f"overall_target_{fid}")
+
+
+def _warn_no_solution(problem: ZonalProblem, status: int) -> None:
+    """One ZoneMIPNoSolutionWarning explaining an empty result; the return stays []."""
+    name = pulp.LpStatus.get(status, str(status))
+    if status == pulp.constants.LpStatusInfeasible:
+        try:
+            unreachable = diagnose_zone_infeasibility(problem)
+            failed = ""
+        except Exception as exc:  # a diagnostic must never turn [] into a crash
+            unreachable, failed = [], f" (diagnostic failed: {exc!r})"
+        if unreachable:
+            more = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
+            msg = (
+                "ZoneMIPSolver: infeasible. Unreachable targets: "
+                + "; ".join(unreachable[:5]) + more
+            )
+        else:
+            msg = (
+                "ZoneMIPSolver: infeasible, but every target is reachable on its own — "
+                "targets compete for the same planning units. ZoneSASolver treats "
+                f"targets as penalties and will return a best-effort plan.{failed}"
+            )
+    elif status == pulp.constants.LpStatusNotSolved:
+        msg = (
+            "ZoneMIPSolver: no feasible solution found within the time limit (status "
+            f"{name}); raise MIP_TIME_LIMIT or use ZoneSASolver."
+        )
+    else:
+        msg = f"ZoneMIPSolver: no solution (status {name})."
+    warnings.warn(msg, ZoneMIPNoSolutionWarning, stacklevel=3)
