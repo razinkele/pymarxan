@@ -11,7 +11,7 @@ from pymarxan.models.problem import (
     STATUS_LOCKED_OUT,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
 from pymarxan.zones.objective import _feature_arrays, build_zone_solution
 
 
@@ -101,6 +101,7 @@ class ZoneMIPSolver(Solver):
             )
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneMIPSolver")
+        warn_zone_target_issues(problem, "ZoneMIPSolver")
         if config is None:
             config = SolverConfig()
 
@@ -363,22 +364,22 @@ def _zone_achieved_exprs(
     problem: ZonalProblem,
     x: dict[tuple[int, int], pulp.LpVariable],
 ) -> dict[tuple[int, int], pulp.LpAffineExpression]:
-    """Σ_i amount[i, f] × w[z, f] × x[i, z] for every listed (zone, feature) target.
+    """Σ_i amount[i, f] × w[z, f] × x[i, z] for every effective (zone, feature) target.
 
-    Built once and shared by the penalty (slack) and the hard constraint. ``w`` is
-    ``problem.zone_target_weight_matrix()`` (raw by default, MarZone ``reserve.hpp:164``).
+    Targets come from ``zone_target_lookup``. Built once and shared by the penalty
+    (slack) and the hard constraint. ``w`` is ``problem.zone_target_weight_matrix()``
+    (raw by default, MarZone ``reserve.hpp:164``).
     """
-    if problem.zone_targets is None:
+    lookup = problem.zone_target_lookup()
+    if not lookup:
         return {}
     weight = problem.zone_target_weight_matrix()
     zidx = problem.zone_index()
     fidx = problem.feature_index()
     groups = _feature_groups(problem)
     exprs: dict[tuple[int, int], pulp.LpAffineExpression] = {}
-    zt = problem.zone_targets
-    for zid, fid in zip(zt["zone"].values, zt["feature"].values, strict=True):
-        zid, fid = int(zid), int(fid)
-        w = float(weight[zidx[zid], fidx[fid]]) if zid in zidx and fid in fidx else 0.0
+    for zid, fid in lookup:
+        w = float(weight[zidx[zid], fidx[fid]])
         exprs[(zid, fid)] = pulp.lpSum(
             amt * w * x[(pid, zid)]
             for pid, amt in groups.get(fid, [])
@@ -393,20 +394,17 @@ def _build_penalty_expr(
     model: pulp.LpProblem,
 ) -> tuple[pulp.LpAffineExpression, dict]:
     """Build penalty expression for unmet zone targets (SPF * slack)."""
-    if problem.zone_targets is None:
+    lookup = problem.zone_target_lookup()
+    if not lookup:
         return pulp.lpSum([]), {}
     spf_lookup = _spf_lookup(problem)
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    zt = problem.zone_targets
     expr = pulp.lpSum([])
     slack_vars = {}
-    for zid, fid, target in zip(
-        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
-    ):
-        zid, fid = int(zid), int(fid)
+    for (zid, fid), target in lookup.items():
         slack = pulp.LpVariable(f"slack_{zid}_{fid}", lowBound=0, cat="Continuous")
         model += (
-            slack >= float(target) * misslevel - exprs[(zid, fid)],
+            slack >= target * misslevel - exprs[(zid, fid)],
             f"shortfall_{zid}_{fid}",
         )
         slack_vars[(zid, fid)] = slack
@@ -420,15 +418,9 @@ def _add_zone_target_constraints(
     model: pulp.LpProblem,
 ) -> None:
     """Add hard zone-specific feature target constraints."""
-    if problem.zone_targets is None:
-        return
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    zt = problem.zone_targets
-    for zid, fid, target in zip(
-        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
-    ):
-        zid, fid = int(zid), int(fid)
-        model += (exprs[(zid, fid)] >= float(target) * misslevel, f"zone_target_{zid}_{fid}")
+    for (zid, fid), target in problem.zone_target_lookup().items():
+        model += (exprs[(zid, fid)] >= target * misslevel, f"zone_target_{zid}_{fid}")
 
 
 def _add_overall_target_constraints(

@@ -6,7 +6,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
 from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
 
 
@@ -42,6 +42,7 @@ class ZoneIISolver(Solver):
             raise TypeError("ZoneIISolver requires a ZonalProblem")
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneIISolver")
+        warn_zone_target_issues(problem, "ZoneIISolver")
         if config is None:
             config = SolverConfig()
 
@@ -80,6 +81,7 @@ class ZoneIISolver(Solver):
         solution: Solution,
     ) -> Solution:
         """Improve an existing solution (for RUNMODE pipeline)."""
+        warn_zone_target_issues(problem, "ZoneIISolver")
         blm = float(problem.parameters.get("BLM", 0.0))
         itimptype = int(problem.parameters.get("ITIMPTYPE", 0))
         pu_ids = problem.planning_units["id"].tolist()

@@ -6,7 +6,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
 from pymarxan.zones.objective import build_zone_solution, compute_zone_objective
 
 
@@ -38,6 +38,7 @@ class ZoneHeuristicSolver(Solver):
             raise TypeError("ZoneHeuristicSolver requires a ZonalProblem")
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneHeuristicSolver")
+        warn_zone_target_issues(problem, "ZoneHeuristicSolver")
         if config is None:
             config = SolverConfig()
 

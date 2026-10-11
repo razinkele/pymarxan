@@ -12,7 +12,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pymarxan.zones import compute_zone_achieved
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.solvers.run_mode import RunModePipeline
+from pymarxan.zones import (
+    ZoneHeuristicSolver,
+    ZoneIISolver,
+    ZoneMIPSolver,
+    ZoneSASolver,
+    ZoneTargetWarning,
+    compute_zone_achieved,
+)
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.objective import (
     _compute_zone_achieved,
@@ -146,3 +155,91 @@ def test_no_warnings_from_objective_helpers():
         warnings.simplefilter("error")
         compute_zone_objective(p, ASSIGN, 0.0)
         _cache_objective(p, ASSIGN)
+
+
+CONFIG = SolverConfig(num_solutions=1, seed=1)
+SOLVERS = [ZoneMIPSolver, ZoneSASolver, ZoneHeuristicSolver, ZoneIISolver]
+STAGES = {1: 1, 2: 2, 5: 3}  # zone-solver calls per run (run_mode.py docstring)
+
+
+def _fast(p):
+    return p.copy_with(parameters={**p.parameters, "NUMITNS": 1000})
+
+
+def _mip(p):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ZoneMIPSolver().solve(p, CONFIG)
+
+
+def _zone_target_warnings(rec):
+    return [w for w in rec if issubclass(w.category, ZoneTargetWarning)]
+
+
+@pytest.mark.parametrize("name", sorted(VARIANTS))
+def test_mip_matches_hand_normalized(name):
+    p = _variant(VARIANTS[name])
+    got, want = _mip(p), _mip(_hand_normalized(p))
+    assert [list(s.zone_assignment) for s in got] == [list(s.zone_assignment) for s in want]
+    assert [s.objective for s in got] == pytest.approx([s.objective for s in want])
+
+
+def test_mip_duplicate_rows_no_longer_raise():
+    sols = _mip(_variant(VARIANTS["dup_25_then_10"]))
+    assert len(sols) == 1 and sols[0].objective == pytest.approx(7.0)
+
+
+def test_mip_last_wins_is_discriminating():
+    # Last row (zone-1 target 20) needs two PUs in zone 1: (1, 1, 0) at 11.0.
+    # First-wins (10) would give the anchor optimum (1, 2, 2) at 7.0.
+    sols = _mip(_variant(VARIANTS["dup_zone1_10_then_20"]))
+    assert [list(s.zone_assignment) for s in sols] == [[1, 1, 0]]
+    assert sols[0].objective == pytest.approx(11.0)
+
+
+def test_all_rows_inert_mip_matches_none():
+    p = _variant([(9, 1, 10.0), (2, 1, 10.0), (2, 1, 0.0)])
+    none = make_anchor_problem().copy_with(zone_targets=None)
+    got, want = _mip(p), _mip(none)
+    assert [list(s.zone_assignment) for s in got] == [list(s.zone_assignment) for s in want]
+    assert [s.objective for s in got] == pytest.approx([s.objective for s in want])
+
+
+@pytest.mark.parametrize("cls", SOLVERS, ids=lambda c: c.__name__)
+def test_each_solver_warns_exactly_once(cls):
+    p = _fast(_variant(VARIANTS["all_three"], spf=10.0))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        cls().solve(p, SolverConfig(num_solutions=2, seed=1))
+    hits = _zone_target_warnings(rec)
+    assert len(hits) == 1
+    assert str(hits[0].message).startswith(f"{cls.__name__}: zone_targets has")
+
+
+@pytest.mark.parametrize("cls", SOLVERS, ids=lambda c: c.__name__)
+def test_each_solver_silent_on_clean_anchor(cls):
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        cls().solve(_fast(make_anchor_problem(spf=10.0)), CONFIG)
+    assert not _zone_target_warnings(rec)
+
+
+def test_ii_improve_warns_once():
+    p = _fast(_variant(VARIANTS["all_three"], spf=10.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sol = ZoneHeuristicSolver().solve(p, CONFIG)[0]
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneIISolver().improve(p, sol)
+    assert len(_zone_target_warnings(rec)) == 1
+
+
+@pytest.mark.parametrize("runmode", sorted(STAGES))
+def test_pipeline_warns_once_per_solver_call(runmode):
+    p = _fast(_variant(VARIANTS["all_three"], spf=10.0))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        sols = RunModePipeline(runmode=runmode).solve(p, SolverConfig(num_solutions=2, seed=1))
+    assert len(sols) == 2
+    assert len(_zone_target_warnings(rec)) == 2 * STAGES[runmode]
