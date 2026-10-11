@@ -41,10 +41,12 @@ class TestSimulatedAnnealingSolver:
         # tiny 6-PU problem — preserves randomness across runs.
         problem.parameters["NUMITNS"] = 50
         problem.parameters["NUMTEMP"] = 5
-        config = SolverConfig(num_solutions=5, seed=None)
+        # Fixed seed: run i uses seed + i, so the 5 runs still differ from
+        # each other but the outcome is reproducible. With seed=None ~5% of
+        # draws converged all 5 runs to one reserve (a recurring CI flake).
+        config = SolverConfig(num_solutions=5, seed=42)
         solver = SimulatedAnnealingSolver()
         solutions = solver.solve(problem, config)
-        # With 5 independent runs (no fixed seed), not all should be identical
         arrays = [s.selected for s in solutions]
         any_different = any(
             not np.array_equal(arrays[0], a) for a in arrays[1:]

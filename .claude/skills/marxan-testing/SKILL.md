@@ -56,18 +56,15 @@ Pytest markers (defined in `pyproject.toml`): `slow`, `integration`,
 slower runners. Only run them deliberately with `make bench` when you've
 touched an SA inner loop and want to check the per-flip cost budget.
 
-## Known flake — don't chase it
+## Former flake — now deterministic
 
-`test_solutions_are_different` is a stochastic SA test that occasionally fails
-and **passes on rerun**. If it's the only failure, rerun just that test before
-treating it as real:
-
-```bash
-/opt/micromamba/envs/shiny/bin/pytest tests/ -q -k test_solutions_are_different
-```
-
-A failure that reproduces on rerun, or any *other* test failing, is a real
-signal — debug it (see `superpowers:systematic-debugging`), don't rerun-and-hope.
+`test_solutions_are_different` used `seed=None` and failed on ~5% of runs
+(all 5 SA runs converging to one reserve on the 6-PU problem). Since 2026-10-11
+it pins `seed=42` (run *i* uses `seed + i`), so it is deterministic. **If it
+fails now, it is a real signal** — most likely an SA change altered RNG
+consumption or convergence. Investigate (see `superpowers:systematic-debugging`);
+don't rerun-and-hope. The same goes for any other SA test: never use
+`seed=None` in an assertion that depends on stochastic outcomes.
 
 ## Adding tests
 

@@ -45,7 +45,7 @@ make docs         # pdoc API docs
 
 Markers: `slow` (SA/zone/pipeline), `integration`, `spatial` (geopandas), `bench`. Coverage threshold 75%; `src/pymarxan_app/` is excluded from coverage. Shared fixture `tiny_problem` (6 PUs, 3 features) comes from `tests/data/simple/` via `conftest.py`.
 
-`test_solutions_are_different` is a known stochastic flake — it passes on rerun. Only treat it as real if it reproduces on rerun, or if any *other* test fails.
+`test_solutions_are_different` was a stochastic flake (~5% of runs) until 2026-10-11; it now pins `seed=42` and is deterministic, so a failure is real. Keep SA assertions seeded — never `seed=None`.
 
 ## Correctness anchor
 
