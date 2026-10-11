@@ -86,6 +86,15 @@ constraint, met-flag or report:
 Effect: duplicates no longer raise `PulpError`; unknown-id and `<= 0` pairs contribute nothing
 anywhere; all four components agree.
 
+**Addendum (found while planning, 2026-10-11):** `ZoneProblemCache._compute_zone_penalty` and
+`_penalty_delta` apply `max(0, target − held × w)` to the *whole* dense matrix. Under
+`ZONETARGETCONTRIB = 1` with a negative contribution, an **untargeted** pair (matrix 0) whose
+weighted held is negative gets a phantom shortfall — on the anchor with zone-1 contribution
+−0.5 at `(1, 2, 2)` the cache reports 26.0 against `compute_zone_objective`'s 21.0. Fix: the
+cache precomputes `zone_target_active = zone_target_matrix > 0` and masks shortfalls with it,
+**only when `zone_target_weight` has a negative entry** (a precomputed bool gate), so the
+default per-flip path is unchanged.
+
 ### 2. Shared issue detection, `validate()` and the warning
 
 ```python
@@ -119,7 +128,7 @@ not suppressed.
 
 New module `zones/diagnostics.py`, function exported from `pymarxan.zones`.
 
-**Shared allowed-zone rule.** New private `_allowed_zones(problem) -> list[frozenset[int]]`
+**Shared allowed-zone rule.** New private `_pu_zone_rules(problem) -> list[PUZoneRule]` (`PUZoneRule(allowed: frozenset[int], forced: bool)`)
 (per PU, in `planning_units` order) used by **both** `ZoneMIPSolver` (replacing its inline
 locked-in/out constraints' status parsing) and the diagnostic, so #6 part 2 (lock into a named
 zone) changes one place:
@@ -199,7 +208,7 @@ All under `tests/pymarxan/zones/`, TDD, on the MarZone anchor unless noted.
    diagnostic `[]` and the MIP warning uses the "compete" wording; (f) overall target 0 with a
    forced negative contribution → `[]`; (g) bound equals the MIP constraint's coefficient sum
    (`_feature_groups` × contributions over allowed zones).
-8. **Shared allowed-zones:** MIP built via `_allowed_zones` gives identical results on the
+8. **Shared allowed-zones:** MIP built via `_pu_zone_rules` gives identical results on the
    existing zone MIP suite.
 9. **Perf (comparative, per memory):** `compute_zone_objective` on the anchor after vs before
    ≤ 1.05× (median of repeats, `bench` marker); zone SA per-flip bench non-regressing.
@@ -223,4 +232,4 @@ All under `tests/pymarxan/zones/`, TDD, on the MarZone anchor unless noted.
 - `ZONETARGET2NAME` / `ZONECONTRIB2NAME` / `ZONECONTRIB3NAME` silently ignored by the loader
   (review #13) — file a separate issue.
 - Joint-infeasibility explanation (IIS / elastic re-solve, review #14).
-- #6 part 2 (lock into a named zone) — `_allowed_zones` is its single extension point.
+- #6 part 2 (lock into a named zone) — `_pu_zone_rules` is its single extension point.
