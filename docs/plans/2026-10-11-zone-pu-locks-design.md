@@ -116,8 +116,8 @@ the solvers do:
 | status 3 (not pulocked) with puzone rows | status 3 wins | yes | yes |
 | a pulock zone outside the same PU's puzone list | the lock wins (MarZone accepts) | no | yes |
 
-Status 2 with a pulock (they agree) and status 2 with puzone rows (combined in the table) are
-not issues.
+Status 2 with a pulock (both require the PU to be assigned; the lock names the zone, even when
+it is not `min(zone_ids)`) and status 2 with puzone rows (combined in the table) are not issues.
 
 Warnings: new base `ZoneInputWarning(UserWarning)`; `ZoneTargetWarning` (re-parented; backward
 compatible) and new `ZoneLockWarning` subclass it. One module-level dispatcher
