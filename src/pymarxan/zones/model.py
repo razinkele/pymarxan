@@ -1,12 +1,34 @@
 """Zonal conservation problem data model for MarZone-style multi-zone planning."""
 from __future__ import annotations
 
+import warnings
+from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
+
+
+def _first_five(items: list[str]) -> str:
+    """'a; b; c; d; e …' — the first five items, with an ellipsis when more exist."""
+    return "; ".join(items[:5]) + (" …" if len(items) > 5 else "")
+
+
+def _known_id(value: object, known: set[int]) -> int | None:
+    """The integer id ``value`` names when it is integral and in ``known``; else ``None``.
+
+    Accepts ``2`` and ``2.0``; rejects NaN, inf, ``2.5`` and non-numeric values (never raises).
+    """
+    try:
+        as_float = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not as_float.is_integer():
+        return None
+    ident = int(as_float)
+    return ident if ident in known else None
 
 
 @dataclass
@@ -76,6 +98,71 @@ class ZonalProblem(ConservationProblem):
         return self.contribution_lookup().get(
             (int(feature_id), int(zone_id)), self.contribution_default(),
         )
+
+    # ------------------------------------------------------------------
+    # Zone targets (MarZone zones.hpp BuildZoneTarget; reserve.hpp target > 0 gate)
+    # ------------------------------------------------------------------
+
+    def zone_target_lookup(
+        self, *, include_inert: bool = False,
+    ) -> dict[tuple[int, int], float]:
+        """Zone targets keyed ``(zone_id, feature_id)`` under MarZone load semantics.
+
+        Rows naming a zone not in ``zone_ids`` or a feature not in ``features["id"]``
+        (or a non-integral id) are skipped; a repeated pair keeps its LAST row
+        (``zones.hpp`` BuildZoneTarget). Pairs whose surviving target is not > 0 are
+        inert (``reserve.hpp`` applies zone targets only when > 0) and are dropped
+        unless ``include_inert`` — met-flags and the summary keep them, as met.
+        Insertion order is each kept pair's first appearance. ``{}`` when
+        ``zone_targets`` is ``None`` or lacks ``zone``/``feature``/``target``.
+        Never warns. Last-wins on ``(zone, feature)`` is exact because the reader
+        rejects occurrence targettypes 2/3; supporting them makes the key per field.
+        """
+        zt = self.zone_targets
+        if zt is None or not {"zone", "feature", "target"}.issubset(zt.columns):
+            return {}
+        zones = {int(z) for z in self.zone_ids}
+        feats = {int(f) for f in self.features["id"].values}
+        out: dict[tuple[int, int], float] = {}
+        for z, f, t in zip(
+            zt["zone"].tolist(), zt["feature"].tolist(), zt["target"].tolist(), strict=True,
+        ):
+            zid, fid = _known_id(z, zones), _known_id(f, feats)
+            if zid is not None and fid is not None:
+                out[(zid, fid)] = float(t)
+        if include_inert:
+            return out
+        return {key: t for key, t in out.items() if t > 0}
+
+    def zone_target_issues(
+        self,
+    ) -> tuple[list[tuple[int, object, object]], list[tuple[int, int]]]:
+        """(unknown rows as ``(position, zone, feature)``, duplicate ``(zone, feature)`` keys).
+
+        The rows ``zone_target_lookup`` skips or collapses; shared by ``validate()`` and
+        ``warn_zone_target_issues``. ``([], [])`` when ``zone_targets`` is ``None`` or
+        lacks ``zone``/``feature``/``target``.
+        """
+        zt = self.zone_targets
+        if zt is None or not {"zone", "feature", "target"}.issubset(zt.columns):
+            return [], []
+        zones = {int(z) for z in self.zone_ids}
+        feats = {int(f) for f in self.features["id"].values}
+        unknown: list[tuple[int, object, object]] = []
+        seen: set[tuple[int, int]] = set()
+        dups: list[tuple[int, int]] = []
+        for pos, (z, f) in enumerate(
+            zip(zt["zone"].tolist(), zt["feature"].tolist(), strict=True),
+        ):
+            zid, fid = _known_id(z, zones), _known_id(f, feats)
+            if zid is None or fid is None:
+                unknown.append((pos, z, f))
+                continue
+            key = (zid, fid)
+            if key in seen and key not in dups:
+                dups.append(key)
+            seen.add(key)
+        return unknown, dups
 
     def contribution_matrix(self) -> np.ndarray:
         """(n_zones + 1, n_feat) contribution per (zone row, feature column); row 0 is zero."""
@@ -180,6 +267,15 @@ class ZonalProblem(ConservationProblem):
                         f"zone_contributions references {len(unknown)} unknown "
                         f"(feature, zone) pair(s): {shown}{more}"
                     )
+                pairs = list(zip(self.zone_contributions["feature"].tolist(),
+                                 self.zone_contributions["zone"].tolist(), strict=True))
+                dup_pairs = [p for p, n in Counter(pairs).items() if n > 1]
+                if dup_pairs:
+                    errors.append(
+                        f"zone_contributions has {len(dup_pairs)} duplicate (feature, zone) "
+                        "pair(s), resolved last-wins: "
+                        + _first_five([f"feature {f}, zone {z}" for f, z in dup_pairs])
+                    )
 
         if self.zone_targets is not None:
             req = {"zone", "feature", "target"}
@@ -188,6 +284,20 @@ class ZonalProblem(ConservationProblem):
                     f"zone_targets missing columns: "
                     f"{sorted(req - set(self.zone_targets.columns))}"
                 )
+            else:
+                unknown_rows, dup_keys = self.zone_target_issues()
+                if unknown_rows:
+                    errors.append(
+                        f"zone_targets references {len(unknown_rows)} row(s) with unknown "
+                        "zone/feature ids (skipped by the solvers): "
+                        + _first_five([f"zone {z}, feature {f}" for _, z, f in unknown_rows])
+                    )
+                if dup_keys:
+                    errors.append(
+                        f"zone_targets has {len(dup_keys)} duplicate (zone, feature) "
+                        "pair(s), resolved last-wins by the solvers: "
+                        + _first_five([f"zone {z}, feature {f}" for z, f in dup_keys])
+                    )
 
         if self.zone_boundary_costs is not None:
             req = {"zone1", "zone2", "cost"}
@@ -220,3 +330,34 @@ class ZonalProblem(ConservationProblem):
                 )
 
         return errors
+
+
+class ZoneTargetWarning(UserWarning):
+    """``zone_targets`` rows the zone solvers skip (unknown ids) or collapse (duplicates)."""
+
+
+def warn_zone_target_issues(problem: ZonalProblem, solver_name: str) -> None:
+    """Emit one ``ZoneTargetWarning`` when ``problem.zone_target_issues()`` is non-empty.
+
+    Called once at the entry of every zone-solver call (``solve`` and
+    ``ZoneIISolver.improve``); nothing downstream warns.
+    """
+    unknown, dups = problem.zone_target_issues()
+    if not unknown and not dups:
+        return
+    parts: list[str] = []
+    if unknown:
+        parts.append(
+            f"{len(unknown)} row(s) with unknown zone/feature ids (skipped, as MarZone "
+            "does): " + _first_five([f"zone {z}, feature {f}" for _, z, f in unknown])
+        )
+    if dups:
+        parts.append(
+            f"{len(dups)} duplicate (zone, feature) pair(s) (last row wins): "
+            + _first_five([f"zone {z}, feature {f}" for z, f in dups])
+        )
+    warnings.warn(
+        f"{solver_name}: zone_targets has " + "; and ".join(parts),
+        ZoneTargetWarning,
+        stacklevel=3,
+    )

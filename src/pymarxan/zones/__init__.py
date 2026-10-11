@@ -9,7 +9,7 @@ from pymarxan.zones.cache import ZoneHeld
 from pymarxan.zones.heuristic import ZoneHeuristicSolver
 from pymarxan.zones.iterative_improvement import ZoneIISolver
 from pymarxan.zones.mip_solver import ZoneMIPSolver
-from pymarxan.zones.model import ZonalProblem
+from pymarxan.zones.model import ZonalProblem, ZoneTargetWarning
 from pymarxan.zones.objective import (
     build_zone_solution,
     check_overall_targets,
@@ -47,6 +47,7 @@ __all__ = [
     "ZoneIISolver",
     "ZoneMIPSolver",
     "ZoneSASolver",
+    "ZoneTargetWarning",
     "build_zone_solution",
     "check_overall_targets",
     "check_zone_targets",
