@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Rev 2** — patched after the dry-run plan review (`2026-10-11-zone-pu-locks-plan-review.md`): stronger v0.37 golden + mutation check, strict-subset solver fixture, honest bench, corrected red lists, issue-message fixes, stricter reader.
+
 **Goal:** Let zone problems lock a planning unit into a named zone (`pulock.dat`) or restrict it to a set of zones (`puzone.dat`), honoured identically by ZoneMIPSolver, ZoneSASolver, ZoneHeuristicSolver and ZoneIISolver.
 
 **Architecture:** Two optional `ZonalProblem` tables (`pu_locks`, `pu_zones`) are parsed once by new model methods into one `PUZoneRule(allowed, may_be_unassigned, start)` per PU (`ZonalProblem.pu_zone_rules()`), which replaces every per-solver status parser. Every solver derives its fixed PUs, candidate zones and start zones from those rules; behaviour without the tables is pinned byte-identical to v0.37 by characterization tests recorded before any solver change.
@@ -30,7 +32,7 @@
 1. **A MarZone `pulock.dat` saved on Windows (CRLF, UTF-8 BOM, `puid, zoneid` header with spaces)** — loads exactly like a Unix file. Test: Task 3 `test_reads_marzone_fixture_bytes`, `test_bom_and_crlf`.
 2. **RUNMODE pipelines (heuristic → SA → II, `improve()`) with restrictions** — never return a solution that breaks a rule. Test: Task 6 `test_pipeline_respects_rules`.
 3. **Every PU forced or locked out** — every solver returns exactly the forced assignment. Test: Task 6 `test_all_forced_every_solver`.
-4. **Non-contiguous zone ids (`{2, 5, 9}`)** — status 2 / status 1 use the smallest id; restrictions name real ids. Test: Task 1 `test_non_contiguous_zone_ids`.
+4. **Non-contiguous zone ids (`{5, 9}`)** — status 2 / status 1 use the smallest id; restrictions name real ids; solvers return those ids. Tests: Task 1 `test_non_contiguous_zone_ids`, Task 6 `test_non_contiguous_zone_ids_solvers`.
 5. **A lock that makes a target unreachable** — the MIP warning names the target and mentions the PU zone restrictions. Test: Task 4 `test_lock_induced_infeasibility_message`.
 
 ---
@@ -92,7 +94,7 @@ def _table(rows):
 **Files:**
 - Create: `tests/pymarxan/zones/test_zone_golden_v037.py` (Step 1 — BEFORE any source change)
 - Modify: `src/pymarxan/zones/model.py`, `src/pymarxan/zones/diagnostics.py`
-- Modify: `tests/pymarxan/zones/test_zone_diagnostics.py` (`TestRules`, ≈ lines 36-48)
+- Modify: `tests/pymarxan/zones/test_zone_diagnostics.py` (`class TestRules`)
 - Test: `tests/pymarxan/zones/test_pu_zone_rules.py`
 
 **Interfaces:**
@@ -114,72 +116,109 @@ Create `tests/pymarxan/zones/test_zone_golden_v037.py`:
 The GOLDEN values were recorded on the unmodified v0.37 code; #6 must not change them
 (no pu_locks / pu_zones here). Regenerate only with a written reason:
     PYTHONPATH=src /opt/micromamba/envs/shiny/bin/python \
-        tests/pymarxan/zones/test_zone_golden_v037.py
+        tests/pymarxan/zones/test_zone_golden_v037.py   (PYTHONPATH=src:. for tests.benchmarks)
 """
 from __future__ import annotations
 
 import warnings
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones import ZoneHeuristicSolver, ZoneIISolver, ZoneSASolver, load_zone_project
 
 ZONES_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
-CASES = [
+SOLVER_CASES = [
     ("sa", None, None), ("sa", 10.0, None),
     ("heuristic", None, None), ("heuristic", 10.0, None),
     ("ii", None, 1), ("ii", None, 2), ("ii", None, 3),
     ("ii", 10.0, 1), ("ii", 10.0, 2), ("ii", 10.0, 3),
 ]
+CASES = [(fx, *case) for fx in ("small", "large") for case in SOLVER_CASES]
+Golden = list[tuple[tuple[int, ...], float]]
 
 
-def _fixture(spf: float | None, itimptype: int | None):
+def _small():
+    """tests/data/zones (4 PUs, 2 zones), statuses 1/2/3/0 — converged SA."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         p = load_zone_project(ZONES_DIR)
-    params = {**p.parameters, "NUMITNS": 3000, "NUMTEMP": 30}
+    return p.copy_with(
+        planning_units=p.planning_units.assign(status=[1, 2, 3, 0]),
+        parameters={**p.parameters, "NUMITNS": 3000, "NUMTEMP": 30},
+    )
+
+
+def _large():
+    """30 PUs + one tie PU, 3 zones, statuses cycling 0/1/2/3/0/0, UNconverged SA
+    (NUMITNS 400) so the output depends on the RNG stream; PU 31 (no features, zone costs
+    5 / 0 / 7) gives II's swap pass a tie between zone 0 and zone 2 from its zone-1 seed,
+    so candidate order matters."""
+    from tests.benchmarks.conftest import make_zone_problem
+
+    p = make_zone_problem(n_pu=30, n_feat=5, n_zones=3, density=0.4, seed=3)
+    statuses = [[0, 1, 2, 3, 0, 0][i % 6] for i in range(30)]
+    pu = p.planning_units.assign(status=statuses)
+    tie = {c: [0] for c in pu.columns}
+    tie.update({"id": [31], "status": [0]})
+    pu = pd.concat([pu, pd.DataFrame(tie)], ignore_index=True)
+    zc = pd.concat(
+        [p.zone_costs, pd.DataFrame({"pu": [31, 31, 31], "zone": [1, 2, 3],
+                                     "cost": [5.0, 0.0, 7.0]})],
+        ignore_index=True,
+    )
+    return p.copy_with(
+        planning_units=pu, zone_costs=zc,
+        parameters={**p.parameters, "NUMITNS": 400, "NUMTEMP": 10, "BLM": 0.5},
+    )
+
+
+def _fixture(fx: str, spf: float | None, itimptype: int | None):
+    p = _small() if fx == "small" else _large()
     if itimptype is not None:
-        params["ITIMPTYPE"] = itimptype
-    p = p.copy_with(planning_units=p.planning_units.assign(status=[1, 2, 3, 0]), parameters=params)
+        p = p.copy_with(parameters={**p.parameters, "ITIMPTYPE": itimptype})
     if spf is not None:
         p = p.copy_with(features=p.features.assign(spf=spf))
     return p
 
 
-def _run(kind: str, spf: float | None, itimptype: int | None) -> list[tuple[tuple[int, ...], float]]:
-    p = _fixture(spf, itimptype)
+def _run(fx: str, kind: str, spf: float | None, itimptype: int | None) -> Golden:
+    p = _fixture(fx, spf, itimptype)
     solver = {"sa": ZoneSASolver, "heuristic": ZoneHeuristicSolver, "ii": ZoneIISolver}[kind]()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         sols = solver.solve(p, SolverConfig(num_solutions=2, seed=7))
-    return [(tuple(int(z) for z in s.zone_assignment), round(float(s.objective), 9)) for s in sols]
+    return [
+        (tuple(int(z) for z in s.zone_assignment), round(float(s.objective), 6)) for s in sols
+    ]
 
 
-GOLDEN: dict[str, list[tuple[tuple[int, ...], float]]] = {
+GOLDEN: dict[str, Golden] = {
     # PASTE the dict printed by running this file as a script on the unmodified code.
 }
 
 
-@pytest.mark.parametrize("kind,spf,itimptype", CASES)
-def test_matches_v037(kind, spf, itimptype):
-    key = f"{kind}-{spf}-{itimptype}"
-    assert _run(kind, spf, itimptype) == GOLDEN[key]
+@pytest.mark.parametrize("fx,kind,spf,itimptype", CASES)
+def test_matches_v037(fx, kind, spf, itimptype):
+    assert _run(fx, kind, spf, itimptype) == GOLDEN[f"{fx}-{kind}-{spf}-{itimptype}"]
 
 
 if __name__ == "__main__":
     print("GOLDEN = {")
-    for kind, spf, itimptype in CASES:
-        print(f"    {f'{kind}-{spf}-{itimptype}'!r}: {_run(kind, spf, itimptype)!r},")
+    for fx, kind, spf, itimptype in CASES:
+        print(f"    {f'{fx}-{kind}-{spf}-{itimptype}'!r}: {_run(fx, kind, spf, itimptype)!r},")
     print("}")
 ```
 
-Run on the **unmodified** code: `PYTHONPATH=src /opt/micromamba/envs/shiny/bin/python tests/pymarxan/zones/test_zone_golden_v037.py`, paste the printed dict over the `GOLDEN` placeholder, then run `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_golden_v037.py -q` → 10 passed. Commit it alone:
+Run on the **unmodified** code: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python tests/pymarxan/zones/test_zone_golden_v037.py`, paste the printed dict over the `GOLDEN` placeholder, then run `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_golden_v037.py -q` → 20 passed.
+
+**Mutation check (do it, then revert; record the outcome in the commit message):** (a) in `src/pymarxan/zones/solver.py`'s annealing loop add `rng.integers(2)` immediately before the `new_zone` draw → at least one `large-sa-*` case must FAIL; (b) in `src/pymarxan/zones/iterative_improvement.py` change `all_options = [0, *zone_ids]` to `[*zone_ids, 0]` → at least one `large-ii-*` case must FAIL. Revert both (`git diff src` empty). If either mutation passes, the fixture does not discriminate — stop and report (BLOCKED) rather than continuing. Commit the test file alone:
 
 ```bash
 git add tests/pymarxan/zones/test_zone_golden_v037.py
-git commit -m "test(zones): characterize v0.37 SA/heuristic/II output on a status-0/1/2/3 fixture (#6)
+git commit -m "test(zones): characterize v0.37 SA/heuristic/II output on two status-0/1/2/3 fixtures (#6)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -291,6 +330,19 @@ def test_non_contiguous_zone_ids():
     ]
 
 
+def test_precedence_pairs():
+    p = _three_zone(
+        (1, 2, 3),
+        pu_locks=_table([(2, 3)]),
+        pu_zones=_table([(1, 2), (1, 3), (2, 1), (2, 2), (3, 2)]),
+    )
+    assert p.pu_zone_rules() == [
+        _rule({2, 3}, False, None),   # status 1 + puzone -> puzone (start dropped)
+        _rule({3}, False, 3),         # status 2 + puzone + lock -> lock
+        _rule(set(), True, 0),        # status 3 + puzone -> status 3
+    ]
+
+
 def test_invariant_no_unsatisfiable_rule():
     p = _three_zone((3, 2, 1), pu_locks=_table([(1, 99)]), pu_zones=_table([(2, 99), (3, 98)]))
     assert all(r.allowed or r.may_be_unassigned for r in p.pu_zone_rules())
@@ -344,12 +396,20 @@ class TestRules:
 - [ ] **Step 2b: Run the new tests to verify they fail**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_rules.py tests/pymarxan/zones/test_zone_diagnostics.py -q`
-Expected: collection ERROR — `ImportError: cannot import name 'fixed_zones'`.
+Expected: collection ERROR — `ImportError: cannot import name 'PUZoneRule' from 'pymarxan.zones.model'`.
 
 - [ ] **Step 3: Implement in `src/pymarxan/zones/model.py`**
 
-Imports: add `from typing import NamedTuple` and
-`from pymarxan.models.problem import STATUS_INITIAL_INCLUDE, STATUS_LOCKED_IN, STATUS_LOCKED_OUT, ConservationProblem`.
+Imports: add `from typing import NamedTuple` and replace the `ConservationProblem` import with
+
+```python
+from pymarxan.models.problem import (
+    STATUS_INITIAL_INCLUDE,
+    STATUS_LOCKED_IN,
+    STATUS_LOCKED_OUT,
+    ConservationProblem,
+)
+```
 
 Add above `@dataclass class ZonalProblem`:
 
@@ -469,6 +529,8 @@ Add the methods after `zone_target_issues`:
                 start = first if s == STATUS_INITIAL_INCLUDE else None
                 rule = PUZoneRule(allowed=every, may_be_unassigned=True, start=start)
             rules.append(rule)
+        if any(not r.allowed and not r.may_be_unassigned for r in rules):
+            raise AssertionError("pu_zone_rules: a PU with no zone that must be assigned")
         return rules
 ```
 
@@ -491,7 +553,18 @@ def _best(rule: PUZoneRule, value_in: dict[int, float]) -> float:
     return max(values) if values else 0.0
 ```
 
-Update the module docstring: "#6 part 2 extends `_pu_zone_rules`" → "rules live on `ZonalProblem.pu_zone_rules`". The MIP keeps working unchanged (it reads `rule.forced` / `rule.allowed`).
+Replace the module docstring with:
+
+```python
+"""Single-target infeasibility diagnostics for ZoneMIPSolver.
+
+``_feature_groups`` (the MIP constraints' amount source) lives here; which zones a PU may
+take is ``ZonalProblem.pu_zone_rules`` (``_pu_zone_rules`` is a thin alias kept for the MIP
+and older imports).
+"""
+```
+
+Note: from this task on the MIP already honours pulocks and puzone allowed sets (it reads `rule.forced` / `rule.allowed` from the new rules); Task 4 adds only the must-assign equality and the message.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -581,6 +654,41 @@ def test_missing_columns_reported():
                for m in _issues(pu_locks=pd.DataFrame({"pu": [1]})))
 
 
+ERROR_ROWS = [
+    ("unknown PU or zone", dict(pu_locks=_table([(9, 1)]))),
+    ("repeats 1 PU(s)", dict(pu_locks=_table([(1, 1), (1, 2)]))),
+    ("duplicate (pu, zone)", dict(pu_zones=_table([(1, 1), (1, 1), (1, 2)]))),
+    ("name only unknown zones", dict(pu_zones=_table([(1, 99)]))),
+    ("single zone (treated as a lock", dict(pu_zones=_table([(1, 2)]))),
+    ("status 3 and a pu_locks row", dict(statuses=(3, 0, 0), pu_locks=_table([(1, 2)]))),
+    ("status 3 and pu_zones rows",
+     dict(statuses=(3, 0, 0), pu_zones=_table([(1, 1), (1, 2)]))),
+    ("missing columns", dict(pu_locks=pd.DataFrame({"pu": [1]}))),
+]
+
+
+@pytest.mark.parametrize("needle,kw", ERROR_ROWS, ids=[r[0] for r in ERROR_ROWS])
+def test_each_error_row_reaches_validate(needle, kw):
+    kw = dict(kw)
+    statuses = kw.pop("statuses", (0, 0, 0))
+    assert any(needle in e for e in _three_zone(statuses, **kw).validate())
+
+
+def test_repeated_lock_with_unknown_last_zone_says_not_locked():
+    assert any("PU 1 → zone 99 (unknown zone, PU not locked)" in m
+               for m in _issues(pu_locks=_table([(1, 2), (1, 99)])))
+
+
+def test_status_3_single_zone_puzone_reported_only_as_status_3():
+    issues = _issues(statuses=(3, 0, 0), pu_zones=_table([(1, 2)]))
+    assert any("status 3 and pu_zones rows" in m for m in issues)
+    assert not any("single zone" in m for m in issues)
+
+
+def test_no_tables_no_scan():
+    assert _three_zone((1, 2, 3)).pu_lock_issues() == []
+
+
 def test_clean_problem_has_no_issues():
     p = _three_zone((2, 1, 0), pu_locks=_table([(1, 2)]), pu_zones=_table([(2, 1), (2, 2)]))
     assert p.pu_lock_issues() == []
@@ -606,6 +714,17 @@ def test_each_solver_warns_once_about_locks(cls):
     hits = [w for w in rec if issubclass(w.category, ZoneLockWarning)]
     assert len(hits) == 1
     assert str(hits[0].message).startswith(f"{cls.__name__}: PU zone restrictions:")
+
+
+def test_ii_improve_warns_once_about_locks():
+    p = _three_zone(pu_locks=_table([(1, 2), (9, 1)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        (sol,) = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneIISolver().improve(p, sol)
+    assert len([w for w in rec if issubclass(w.category, ZoneLockWarning)]) == 1
 
 
 def test_target_wrapper_emits_only_target_warning():
@@ -638,6 +757,14 @@ In `ZonalProblem` (after `pu_zone_rules`):
     def _pu_lock_issue_list(self) -> list[tuple[str, bool]]:
         """(message, is_validate_error) per issue class — spec §3 table."""
         out: list[tuple[str, bool]] = []
+        if self.pu_locks is None and self.pu_zones is None:
+            return out  # v0.37 problems: no scan, no status cast
+        pu = self.planning_units
+        status_of = (
+            dict(zip((int(p) for p in pu["id"].values), pu["status"].values.astype(int),
+                     strict=True))
+            if "status" in pu.columns else {}
+        )
         pus = {int(p) for p in self.planning_units["id"].values}
         zones = {int(z) for z in self.zone_ids}
         usable: dict[str, list[tuple[object, object]]] = {}
@@ -702,7 +829,9 @@ In `ZonalProblem` (after `pu_zone_rules`):
                     + _first_five([f"PU {p}, zone {z}" for p, z in dups]),
                     True,
                 ))
-            all_unknown = sorted(pid for pid in listed if pid not in restrict)
+            all_unknown = sorted(pid for pid in listed if pid not in restrict
+                                 and pid not in locks
+                                 and status_of.get(pid) != STATUS_LOCKED_OUT)
             if all_unknown:
                 out.append((
                     f"pu_zones rows for {len(all_unknown)} PU(s) name only unknown zones "
@@ -710,7 +839,8 @@ In `ZonalProblem` (after `pu_zone_rules`):
                     True,
                 ))
             single = [(pid, next(iter(zs))) for pid, zs in restrict.items()
-                      if len(zs) == 1 and pid not in locks]
+                      if len(zs) == 1 and pid not in locks
+                      and status_of.get(pid) != STATUS_LOCKED_OUT]
             if single:
                 out.append((
                     f"pu_zones restricts {len(single)} PU(s) to a single zone (treated as a "
@@ -718,12 +848,6 @@ In `ZonalProblem` (after `pu_zone_rules`):
                     + _first_five([f"PU {p} → zone {z}" for p, z in single]),
                     True,
                 ))
-        pu = self.planning_units
-        status_of = (
-            dict(zip((int(p) for p in pu["id"].values), pu["status"].values.astype(int),
-                     strict=True))
-            if "status" in pu.columns else {}
-        )
         st3_lock = [p for p in locks if status_of.get(p) == STATUS_LOCKED_OUT]
         if st3_lock:
             out.append((
@@ -774,9 +898,10 @@ class ZoneLockWarning(ZoneInputWarning):
     """``pu_locks`` / ``pu_zones`` rows the zone solvers skip, collapse or override."""
 
 
-def _emit(message: str, category: type[UserWarning]) -> None:
+def _emit(message: str, category: type[UserWarning], stacklevel: int = 4) -> None:
     # _emit <- warn_* <- solve() <- caller: stacklevel 4 reports the caller of solve().
-    warnings.warn(message, category, stacklevel=4)
+    # The warn_* helpers are meant to be called only from a solver entry point.
+    warnings.warn(message, category, stacklevel=stacklevel)
 
 
 def _zone_target_message(problem: ZonalProblem) -> str | None:
@@ -943,6 +1068,26 @@ def test_loader_reads_only_named_files(tmp_path):
     assert p.pu_zone_lookup() == {2: frozenset({1, 2})}
 
 
+def test_loader_drops_unknown_pus_from_marzone_file(tmp_path):
+    proj = _project(tmp_path, ["PULOCKNAME pulock.dat"])
+    (proj / "input" / "pulock.dat").write_bytes(MARZONE_PULOCK)
+    assert _load(proj).pu_lock_lookup() == {2: 1}  # PUs 5 and 30 are not in pu.dat
+
+
+def test_loader_named_empty_file_raises(tmp_path):
+    proj = _project(tmp_path, ["PUZONENAME puzone.dat"])
+    (proj / "input" / "puzone.dat").write_bytes(b"")
+    with pytest.raises(ValueError, match="puzone.dat"):
+        _load(proj)
+
+
+def test_blank_middle_cell_raises(tmp_path):
+    f = tmp_path / "pulock.dat"
+    f.write_text("puid,zoneid\n1,,2\n")
+    with pytest.raises(ValueError, match="pulock.dat"):
+        read_pu_lock(f)
+
+
 def test_loader_named_missing_file_raises(tmp_path):
     proj = _project(tmp_path, ["PULOCKNAME nope.dat"])
     with pytest.raises(FileNotFoundError, match="nope.dat"):
@@ -958,7 +1103,7 @@ Add to `ZONES_EXPORTS`:
     "write_pu_zone": "pymarxan.zones.writers",
 ```
 
-Before relying on `_project`, confirm `load_project` keeps unknown `input.dat` keys (`PULOCKNAME`) in `problem.parameters` (read `src/pymarxan/io/readers.py` `load_project` / its input.dat parser). If it drops unknown keys, add the two names to whatever allow-list it uses, as part of this task.
+`read_input_dat` keeps unknown keys (non-numeric values as strings), so `PULOCKNAME` / `PUZONENAME` reach `base.parameters`; no allow-list change is needed (verified in the plan dry run).
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -972,7 +1117,7 @@ Expected: collection ERROR — `ImportError: cannot import name 'read_pu_lock'`.
 ```python
 # MarZone util.hpp is_like_numerical_data: a line made only of these is data, not a header.
 _NUMERIC_LINE_CHARS = frozenset(" ,;:^*\"/\t'\\\n\r.+-Ee0123456789")
-_SPLIT = re.compile(r"[,;\s]+")
+_WS = re.compile(r"\s+")
 
 
 def _read_pu_zone_pairs(path: str | Path) -> pd.DataFrame:
@@ -984,10 +1129,13 @@ def _read_pu_zone_pairs(path: str | Path) -> pd.DataFrame:
     lines = text.splitlines()
     start = 0 if set(lines[0]) <= _NUMERIC_LINE_CHARS else 1
     rows: list[tuple[int, int]] = []
+    data = [ln for ln in lines[start:] if ln.strip()]
+    sep = "," if data and "," in data[0] else ("\t" if data and "\t" in data[0] else None)
     for lineno, line in enumerate(lines[start:], start=start + 1):
         if not line.strip():
             continue
-        cells = [c for c in _SPLIT.split(line.strip()) if c != ""]
+        raw = line.strip()
+        cells = [c.strip() for c in raw.split(sep)] if sep else _WS.split(raw)
         if len(cells) < 2:
             raise ValueError(f"{path}: line {lineno} needs two values (puid, zoneid)")
         try:
@@ -1010,7 +1158,7 @@ def read_pu_zone(path: str | Path) -> pd.DataFrame:
     return _read_pu_zone_pairs(path)
 ```
 
-Note: `"1,"` splits to one cell → "needs two values" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
+One delimiter per file, detected from the first data line (`,`, else tab, else whitespace), so a blank cell (`1,,2`, `1,`) fails the numeric parse. Note: `"1,"` gives cells `["1", ""]` → "non-numeric id" `ValueError` (the `match="pulock.dat"` test passes because the path is in every message). An empty DataFrame from a header-only file must still have int dtype — `pd.DataFrame([], columns=[...], dtype=int)` does that.
 
 In `load_zone_project`, before `problem = ZonalProblem(...)`:
 
@@ -1116,6 +1264,26 @@ def _with_pu4(**kw):
     return p.copy_with(planning_units=pu, zone_costs=zc)
 
 
+def _strict_subset():
+    """3 zones; zone 3 is free and fully contributing, but every PU is restricted to {1, 2}.
+    Feasible under the restriction ((1, 2, 2) at 7.0); any solver ignoring it drifts to 3."""
+    p = make_anchor_problem(spf=10.0)
+    zones = pd.DataFrame({"id": [1, 2, 3], "name": ["protect", "restore", "use"]})
+    zc = pd.concat(
+        [p.zone_costs, pd.DataFrame({"pu": [1, 2, 3], "zone": [3, 3, 3], "cost": [0.0] * 3})],
+        ignore_index=True,
+    )
+    contrib = pd.concat(
+        [p.zone_contributions,
+         pd.DataFrame({"feature": [1], "zone": [3], "contribution": [1.0]})],
+        ignore_index=True,
+    )
+    return p.copy_with(
+        zones=zones, zone_costs=zc, zone_contributions=contrib,
+        pu_zones=_table([(i, z) for i in (1, 2, 3) for z in (1, 2)]),
+    )
+
+
 def _mip(p):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -1146,6 +1314,12 @@ class TestMIP:
         sols = _mip(p)
         assert sols[0].zone_assignment[0] == 1
 
+    def test_strict_subset(self):
+        p = _strict_subset()
+        sols = _mip(p)
+        assert _assign(sols) == [(1, 2, 2)]
+        assert rule_violations(p.pu_zone_rules(), sols[0].zone_assignment) == []
+
     def test_rules_hold_on_output(self):
         p = _with_pu4().copy_with(pu_locks=_table([(1, 2)]), pu_zones=_table([(4, 1), (4, 2)]))
         sols = _mip(p)
@@ -1165,7 +1339,7 @@ class TestMIP:
 - [ ] **Step 2: Run to verify failure**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py -q`
-Expected: FAIL — `test_lock_moves_anchor_optimum` returns `(1, 2, 2)` at 7.0; `test_puzone_forbids_unassigned` returns `(1, 2, 2, 0)`; `test_lock_induced_infeasibility_message` lacks the restriction phrase (it may also return a solution because the MIP ignores locks). The other three pass already (pins).
+Expected: 3 FAIL — (`test_strict_subset` already passes: since Task 1 the MIP bounds disallowed zones) `test_puzone_forbids_unassigned` returns `(1, 2, 2, 0)`; `test_rules_hold_on_output` reports violation `[3]` (PU4 unassigned); `test_lock_induced_infeasibility_message` lacks the restriction phrase. Pins that already pass (since Task 1 the MIP reads locks/puzone through `rule.forced` / `rule.allowed`): `test_lock_moves_anchor_optimum`, `test_unrestricted_pu4_variant`, `test_status_semantics_unchanged`. The only new MIP behaviour in this task is `== 1` for must-assign PUs plus the message.
 
 - [ ] **Step 3: Implement** in `mip_solver.py`. Replace the per-PU block inside `for k, pid in enumerate(pu_ids):` (from the variable loop through the `locked_out_` constraint) with:
 
@@ -1185,18 +1359,36 @@ Expected: FAIL — `test_lock_moves_anchor_optimum` returns `(1, 2, 2)` at 7.0; 
                 model += assigned == 1, f"assign_{pid}"
 ```
 
-Replace the feasibility probe:
+Replace the two probe lines (`first_pid = int(pu_ids[0])` and `has_values = pulp.value(x[(first_pid, zone_ids[0])]) is not None`) with the single line:
 
 ```python
         has_values = any(var.varValue is not None for var in x.values())
 ```
 
-In `_warn_no_solution`, after `msg` is built in the `LpStatusInfeasible` branch (both the "unreachable" and the "compete" sub-branches, not the diagnostic-failure one), append:
+In `_warn_no_solution`, replace the `else:` clause of the `try` (the block that builds the "unreachable" and "compete" messages) with:
 
 ```python
-        if problem.pu_locks is not None or problem.pu_zones is not None:
-            msg += " (given the PU zone restrictions)"
+        else:
+            note = (
+                " (given the PU zone restrictions)"
+                if problem.pu_locks is not None or problem.pu_zones is not None
+                else ""
+            )
+            if unreachable:
+                more = f" (+{len(unreachable) - 5} more)" if len(unreachable) > 5 else ""
+                msg = (
+                    "ZoneMIPSolver: infeasible. Unreachable targets: "
+                    + "; ".join(unreachable[:5]) + more + note
+                )
+            else:
+                msg = (
+                    f"ZoneMIPSolver: infeasible, but every target is reachable on its own{note} "
+                    "— targets compete for the same planning units. ZoneSASolver treats "
+                    "targets as penalties and will return a best-effort plan."
+                )
 ```
+
+(The diagnostic-failure message is unchanged.)
 
 Update the class docstring's constraint list: replace the two status lines with
 "x[i,z] fixed to 0 for zones outside a PU's rule; Σ_z x[i,z] == 1 for PUs that must be assigned, <= 1 otherwise (``ZonalProblem.pu_zone_rules``: status, pu_locks, pu_zones)".
@@ -1219,7 +1411,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 5: ZoneSASolver honours the rules
 
 **Files:**
-- Modify: `src/pymarxan/zones/solver.py` (status parsing ≈ lines 78-91, initial assignment ≈ 131-135, temperature loop ≈ 143-146, annealing move ≈ 194-197)
+- Modify: `src/pymarxan/zones/solver.py` (anchors by content: the `locked: dict[int, int] = {}` status block, the initial-assignment loop, the temperature-estimation draw, the annealing-loop draw)
 - Test: `tests/pymarxan/zones/test_pu_zone_solvers.py` (append)
 
 **Interfaces:**
@@ -1241,6 +1433,7 @@ def _solve(cls, p, n_sol=3, seed=3):
 RESTRICTED = [
     ("lock", lambda: make_anchor_problem(spf=10.0).copy_with(pu_locks=_table([(1, 2)]))),
     ("must_assign", lambda: _with_pu4(spf=10.0).copy_with(pu_zones=_table([(4, 1), (4, 2)]))),
+    ("strict_subset", _strict_subset),
 ]
 
 
@@ -1252,7 +1445,7 @@ class TestSA:
             assert rule_violations(p.pu_zone_rules(), s.zone_assignment) == []
 ```
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestSA -q` → FAIL (SA ignores the lock / may leave PU4 anywhere it likes; at least one violation, e.g. PU1 in zone 1).
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestSA -q` → FAIL: `test_rules_hold[lock]` (PU1 leaves zone 2) and `test_rules_hold[strict_subset]` (PUs drift to zone 3). `test_rules_hold[must_assign]` already passes (zone SA never proposes zone 0) — kept as a pin.
 
 - [ ] **Step 3: Implement** in `solver.py`. Import `from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues`. Replace the status-parsing block (`locked: dict[int, int] = {}` … through `swappable = np.array(...)`) with:
 
@@ -1295,7 +1488,7 @@ Initial assignment — replace the `for idx in swappable:` block with:
                     assignment[idx] = options[rng.integers(len(options))]
 ```
 
-Temperature loop — replace the two lines drawing `idx` and `new_zone` with `idx, new_zone = _propose(rng, swappable, opts)` followed by `old_zone = int(assignment[idx])` (keep the `if new_zone == old_zone: continue`). Do the same in the annealing loop. Remove the now-unused `initial_include`, `n_swappable` (if unused), and the old `locked`/status code. `n_zone_options` may become unused — remove it if so.
+Temperature loop — replace the two lines drawing `idx` and `new_zone` with `idx, new_zone = _propose(rng, swappable, opts)` followed by `old_zone = int(assignment[idx])` (keep the `if new_zone == old_zone: continue`). Do the same in the annealing loop. Remove the now-unused `initial_include`, `pu_id_to_idx` and `n_zone_options` locals and the old status loop (keep `n_swappable`: the all-locked branch still uses it). Put `_propose` two blank lines after the imports, before `_COOLING_FACTORIES`.
 
 Note on byte-identity: v0.37 drew `rng.integers(n_swappable)` then `rng.integers(n_zone_options)`; `_propose` makes the same two draws with the same bounds for free PUs, and status-1 PUs start at `rules[idx].start == min(zone_ids)` exactly as `initial_include` did. The golden tests verify this.
 
@@ -1375,6 +1568,28 @@ class TestHeuristicAndII:
             assert rule_violations(p.pu_zone_rules(), s.zone_assignment) == []
 
     @pytest.mark.parametrize(
+        "cls", [ZoneMIPSolver, ZoneSASolver, ZoneIISolver], ids=lambda c: c.__name__,
+    )
+    def test_non_contiguous_zone_ids_solvers(self, cls):
+        p = make_anchor_problem(spf=10.0)
+        relabel = {1: 5, 2: 9}
+        p = _ii(_fast(p.copy_with(
+            zones=p.zones.assign(id=p.zones["id"].map(relabel)),
+            zone_costs=p.zone_costs.assign(zone=p.zone_costs["zone"].map(relabel)),
+            zone_contributions=p.zone_contributions.assign(
+                zone=p.zone_contributions["zone"].map(relabel),
+            ),
+            zone_targets=p.zone_targets.assign(zone=p.zone_targets["zone"].map(relabel)),
+            planning_units=p.planning_units.assign(status=[2, 1, 0]),
+            pu_zones=_table([(3, 9)]),
+        )), 3)
+        sols = _solve(cls, p, n_sol=1)
+        assert sols
+        for s in sols:
+            assert set(int(z) for z in s.zone_assignment) <= {0, 5, 9}
+            assert rule_violations(p.pu_zone_rules(), s.zone_assignment) == []
+
+    @pytest.mark.parametrize(
         "cls", [ZoneMIPSolver, ZoneSASolver, ZoneHeuristicSolver, ZoneIISolver],
         ids=lambda c: c.__name__,
     )
@@ -1394,7 +1609,7 @@ class TestHeuristicAndII:
 
 (If `Solution.zone_assignment` is read-only on the dataclass, build `bad` with `dataclasses.replace(seed_sol, zone_assignment=np.array([1, 2, 2, 0]))` instead of assignment.)
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL (heuristic/II ignore locks; PU4 left at 0; improve keeps PU1 in zone 1).
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
 
 - [ ] **Step 3: Implement**
 
@@ -1429,6 +1644,8 @@ def _seed(rule: PUZoneRule) -> int:
 ```
 
 `solve`: replace `locked = self._parse_locked(...)` with `rules = problem.pu_zone_rules()`, `locked = fixed_zones(rules)`; seeding of swappable PUs: `assignment[idx] = _seed(rules[idx])` (v0.37 used `zone_ids_list[0]`, which equals `_seed` for every free PU); call `self._improve(problem, assignment, swappable, rules, blm, itimptype)`.
+
+In `solve` and `improve`, delete the now-unused `pu_id_to_idx` and `zone_ids_list` locals (ruff F841).
 
 `improve`: same `rules`/`locked`/`swappable`; after copying the incoming assignment, repair it:
 
@@ -1505,7 +1722,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 7: Replacement cost, bench, docs, full gate
 
 **Files:**
-- Modify: `src/pymarxan/analysis/replacement_cost.py` (variant construction ≈ lines 92-100)
+- Modify: `src/pymarxan/analysis/replacement_cost.py` (the `variant = problem.copy_with(planning_units=problem.planning_units.copy())` construction inside the loop)
 - Create: `tests/pymarxan/analysis/test_replacement_cost_zone_locks.py`, `tests/benchmarks/bench_zone_pu_restrictions.py`
 - Modify: `CHANGELOG.md` (`## [Unreleased]`), `docs/VALIDATION.md` (end of §4, before `## Comparing against the Marxan C++ binary`)
 
@@ -1573,40 +1790,77 @@ pytestmark = pytest.mark.bench
 N_PU, N_FEAT, N_ZONES, N_MOVES = 1000, 50, 3, 20_000
 
 
-def _per_proposal(problem) -> float:
+def _opts(problem):
     rules = problem.pu_zone_rules()
     zone_options = np.array(sorted(problem.zone_ids), dtype=int)
     every = frozenset(zone_options.tolist())
     opts = [zone_options if r.allowed == every else np.array(sorted(r.allowed), dtype=int)
             for r in rules]
     swappable = np.array([i for i in range(len(rules)) if i not in fixed_zones(rules)])
+    return opts, swappable, zone_options
+
+
+def _per_evaluated_delta(problem) -> float:
+    """Seconds per evaluated delta (no-op proposals excluded, so the restricted run's higher
+    no-op share cannot hide proposal overhead)."""
+    opts, swappable, _ = _opts(problem)
     cache = ZoneProblemCache.from_zone_problem(problem)
-    rng = np.random.default_rng(0)
-    assignment = np.array([opts[i][0] for i in range(len(rules))])
+    assignment = np.array([o[0] for o in opts])
     held = cache.compute_held(assignment)
+    samples = []
+    for rep in range(5):
+        rng = np.random.default_rng(rep)
+        evaluated = 0
+        t0 = time.perf_counter()
+        for _ in range(N_MOVES):
+            idx, new_zone = _propose(rng, swappable, opts)
+            old_zone = int(assignment[idx])
+            if new_zone != old_zone:
+                cache.compute_delta_zone_objective(
+                    idx, old_zone, new_zone, assignment, held=held, blm=1.0,
+                )
+                evaluated += 1
+        samples.append((time.perf_counter() - t0) / evaluated)
+    return statistics.median(samples)
+
+
+def _propose_seconds(draw) -> float:
     samples = []
     for _ in range(5):
         t0 = time.perf_counter()
         for _ in range(N_MOVES):
-            idx, new_zone = _propose(rng, swappable, opts)
-            if new_zone != int(assignment[idx]):
-                cache.compute_delta_zone_objective(
-                    idx, int(assignment[idx]), new_zone, assignment, held=held, blm=1.0,
-                )
+            draw()
         samples.append((time.perf_counter() - t0) / N_MOVES)
     return statistics.median(samples)
 
 
-def test_restrictions_cost_at_most_ten_percent() -> None:
-    base = make_zone_problem(n_pu=N_PU, n_feat=N_FEAT, n_zones=N_ZONES, density=0.3, seed=42)
+def _restricted(base):
     ids = base.planning_units["id"].astype(int).tolist()[::2]
     rows = [(pid, z) for pid in ids for z in (1, 2)]
-    restricted = base.copy_with(pu_zones=pd.DataFrame(rows, columns=["pu", "zone"]))
-    ratio = _per_proposal(restricted) / _per_proposal(base)
-    assert ratio <= 1.10, f"restricted/unrestricted per-proposal ratio {ratio:.3f}"
+    return base.copy_with(pu_zones=pd.DataFrame(rows, columns=["pu", "zone"]))
+
+
+def test_restrictions_cost_at_most_ten_percent_per_delta() -> None:
+    base = make_zone_problem(n_pu=N_PU, n_feat=N_FEAT, n_zones=N_ZONES, density=0.3, seed=42)
+    ratio = _per_evaluated_delta(_restricted(base)) / _per_evaluated_delta(base)
+    assert ratio <= 1.10, f"restricted/unrestricted per-delta ratio {ratio:.3f}"
+
+
+def test_propose_vs_v037_inline_draw() -> None:
+    base = make_zone_problem(n_pu=N_PU, n_feat=N_FEAT, n_zones=N_ZONES, density=0.3, seed=42)
+    opts, swappable, zone_options = _opts(base)
+    n_sw, n_z = len(swappable), len(zone_options)
+    rng_a, rng_b = np.random.default_rng(0), np.random.default_rng(0)
+
+    def v037() -> tuple[int, int]:
+        idx = int(swappable[rng_a.integers(n_sw)])
+        return idx, int(zone_options[rng_a.integers(n_z)])
+
+    ratio = _propose_seconds(lambda: _propose(rng_b, swappable, opts)) / _propose_seconds(v037)
+    assert ratio <= 1.10, f"_propose / v0.37 inline draw {ratio:.3f}"
 ```
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (report the ratio in the commit message).
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (dry run: per-delta ratio ≈ 1.0, `_propose` vs v0.37 ≈ 1.02–1.08). Report both ratios in the commit message.
 
 - [ ] **Step 4: Docs** — `CHANGELOG.md` under `## [Unreleased]`:
 
@@ -1627,6 +1881,11 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restr
 - `ZoneIISolver.improve()` first repairs an incoming assignment that breaks a PU's rule
   (e.g. a status-2 PU outside its zone) before improving it.
 - `compute_replacement_cost` drops a PU's `pu_locks` / `pu_zones` rows in its lock-out variant.
+  Other status edits (e.g. WDPA lock-in) do not override a `pu_locks` row.
+- `ZoneLockWarning` is emitted once per zone-solver call; `RunModePipeline` RUNMODEs 2–5 call
+  several zone solvers per run and warn once per stage.
+- Zone projects have no `save_zone_project`; `write_pu_lock` / `write_pu_zone` are standalone
+  writers.
 ```
 
 `docs/VALIDATION.md` — append before `## Comparing against the Marxan C++ binary`:
@@ -1662,3 +1921,13 @@ git commit -m "feat(zones): replacement cost drops PU lock rows; restriction ben
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+---
+
+## Follow-ons (not in this plan)
+
+- **ROWER_pymarxan_DST on the v0.38 pin bump:** derive `attainable_by_target` from
+  `problem.pu_zone_rules()` (per-PU `allowed`) instead of status masks; add `pu_locks`,
+  `pu_zones` (and `zone_boundary_costs`) to `problem_hash` so scenarios differing only in locks
+  do not collide.
+- `save_zone_project` writing every zone table incl. pulock/puzone (roadmap).
