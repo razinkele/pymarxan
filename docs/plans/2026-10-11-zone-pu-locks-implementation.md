@@ -1912,9 +1912,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import fixed_zones
-from pymarxan.zones.solver import _propose
+from pymarxan.zones.solver import ZoneSASolver, _propose
 from tests.benchmarks.conftest import make_zone_problem
 
 pytestmark = pytest.mark.bench
@@ -1989,9 +1990,32 @@ def test_propose_vs_v037_inline_draw() -> None:
 
     ratio = _propose_seconds(lambda: _propose(rng_b, swappable, opts)) / _propose_seconds(v037)
     assert ratio <= 1.10, f"_propose / v0.37 inline draw {ratio:.3f}"
+
+
+def _sa_seconds_per_iteration(problem) -> float:
+    problem.parameters["NUMITNS"] = 50_000
+    problem.parameters["NUMTEMP"] = 500
+    samples = []
+    for rep in range(5):
+        t0 = time.perf_counter()
+        ZoneSASolver().solve(problem, SolverConfig(num_solutions=1, seed=rep))
+        samples.append((time.perf_counter() - t0) / 50_000)
+    return statistics.median(samples)
+
+
+def test_whole_sa_loop_restricted_vs_unrestricted() -> None:
+    """End-to-end guard on the real SA loop (rule building, option arrays, temperature
+    schedule, deltas). Restricted runs skip ~1/12 more deltas (2-zone PUs propose a no-op
+    1/2 of the time vs 1/3), which lowers the ratio by ~0.1, so this catches gross loop
+    overhead (e.g. per-iteration rule rebuilding); the two tests above bound the fine one."""
+    base = make_zone_problem(n_pu=N_PU, n_feat=N_FEAT, n_zones=N_ZONES, density=0.3, seed=42)
+    restricted = _restricted(base)
+    restricted.parameters = dict(base.parameters)
+    ratio = _sa_seconds_per_iteration(restricted) / _sa_seconds_per_iteration(base)
+    assert ratio <= 1.10, f"whole-SA restricted/unrestricted per-iteration {ratio:.3f}"
 ```
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (dry run: per-delta ratio ≈ 1.0, `_propose` vs v0.37 ≈ 1.02–1.08). Report both ratios in the commit message.
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restrictions.py tests/benchmarks/bench_zone_sa.py tests/benchmarks/bench_zone_overall.py -m bench -q` → PASS (dry run: per-delta ratio ≈ 1.0, `_propose` vs v0.37 ≈ 1.02–1.08; whole-SA ratio expected ≈ 0.9–1.0). Report all three ratios in the commit message.
 
 - [ ] **Step 4: Docs** — `CHANGELOG.md` under `## [Unreleased]`:
 
@@ -2013,6 +2037,8 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/benchmarks/bench_zone_pu_restr
   (e.g. a status-2 PU outside its zone) before improving it.
 - `compute_replacement_cost` drops a PU's `pu_locks` / `pu_zones` rows in its lock-out variant.
   Other status edits (e.g. WDPA lock-in) do not override a `pu_locks` row.
+- The status-based analyses (gap analysis, representation, irreplaceability, Ferrier
+  importance) read only the pu.dat `status` column and do not see `pu_locks` / `pu_zones`.
 - `ZoneLockWarning` is emitted once per zone-solver call; `RunModePipeline` RUNMODEs 2–5 call
   several zone solvers per run and warn once per stage.
 - Zone projects have no `save_zone_project`; `write_pu_lock` / `write_pu_zone` are standalone
@@ -2031,6 +2057,9 @@ differences: MarZone does not read a pu.dat status column, so pymarxan's status 
 MarZone counterpart; a single-zone puzone, fatal in MarZone, is treated as a lock and reported;
 MarZone's `CalcPenalties` pre-counts pulocked amounts when calibrating penalties
 (`marzone.cpp:769-782`), which pymarxan's `spf × shortfall` objective does not model.
+The status-based analyses (gap analysis, representation, irreplaceability, Ferrier importance)
+read only the pu.dat `status` column and do not see pulock/puzone rows;
+`compute_replacement_cost` is the exception (its lock-out variant drops the PU's rows).
 `tests/pymarxan/zones/test_pu_zone_solvers.py` pins the exact-MIP anchors (lock: `(2, 1, 2)` at
 8.0; must-assign: `(1, 2, 2, 2)` at 9.0) and the rules on every solver's output.
 ```

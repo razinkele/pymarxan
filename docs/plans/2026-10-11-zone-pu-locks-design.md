@@ -162,15 +162,19 @@ constraint block; status wording in the `mip_solver` and `diagnostics` module do
   restrictions)".
 - **Analysis**: `compute_replacement_cost`'s status-3 variant also drops that PU's `pu_locks` /
   `pu_zones` rows (otherwise the lock wins and the cost is 0). Other status-based analyses
-  (gap, representation, irreplaceability, Ferrier) do not see pulock/puzone — documented.
+  (gap, representation, irreplaceability, Ferrier) do not see pulock/puzone — documented in
+  the CHANGELOG and `docs/VALIDATION.md`.
 
 ### 5. Performance
 
 Default path: seeded golden tests — a fixture with status 0/1/2/3 PUs and no
 pulock/puzone gives the same assignment and objective as v0.37 for SA, heuristic and II
-ITIMPTYPE 1, 2, 3 (spf 1 and 10). Bench: SA seconds per proposal on
+ITIMPTYPE 1, 2, 3 (spf 1 and 10). Bench on
 `make_zone_problem(n_pu=1000, n_feat=50, n_zones=3)` with ~50 % of PUs puzone-restricted to two
-zones vs unrestricted, median of ≥ 5 reps, ≤ 1.10×.
+zones, median of ≥ 5 reps, each ≤ 1.10×: (a) seconds per *evaluated* delta (no-op proposals
+excluded), restricted vs unrestricted; (b) the shared proposal helper vs the v0.37 inline draw;
+(c) whole-SA seconds per iteration, restricted vs unrestricted (a gross-overhead guard: the
+restricted run skips more no-op deltas, so (a) and (b) bound the fine overhead).
 
 ## Testing
 
