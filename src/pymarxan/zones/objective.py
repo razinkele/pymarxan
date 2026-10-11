@@ -235,7 +235,7 @@ def compute_overall_shortfall(
     return float(sum(shortfalls.values()))
 
 
-def _compute_zone_achieved(
+def compute_zone_achieved(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
 ) -> dict[tuple[int, int], float]:
@@ -261,31 +261,33 @@ def _compute_zone_achieved(
     return achieved
 
 
+_compute_zone_achieved = compute_zone_achieved  # pre-0.37 private name, kept for callers
+
+
 def check_zone_targets(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
     *,
     zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> dict[tuple[int, int], bool]:
-    """(zone id, feature id) -> Z_kf >= zone target × MISSLEVEL for listed zone targets.
+    """(zone id, feature id) -> Z_kf >= zone target × MISSLEVEL, for every known pair.
 
-    ``zone_achieved`` is the dict ``_compute_zone_achieved`` returns; ``None`` recomputes it.
-    The met test tolerates a relative 1e-9 to absorb float summation;
+    Keys are ``ZonalProblem.zone_target_lookup(include_inert=True)``: inert pairs
+    (surviving target <= 0) are reported as met, like ``check_overall_targets``.
+    ``zone_achieved`` is the dict ``compute_zone_achieved`` returns; ``None`` recomputes
+    it. The met test tolerates a relative 1e-9 to absorb float summation;
     ``compute_zone_shortfalls`` / ``compute_zone_penalty`` are exact.
     """
-    if problem.zone_targets is None:
+    lookup = problem.zone_target_lookup(include_inert=True)
+    if not lookup:
         return {}
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     if zone_achieved is None:
-        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
-    zt = problem.zone_targets
-    targets_met: dict[tuple[int, int], bool] = {}
-    for zid, fid, target in zip(
-        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
-    ):
-        key = (int(zid), int(fid))
-        targets_met[key] = _meets(zone_achieved.get(key, 0.0), float(target) * misslevel)
-    return targets_met
+        zone_achieved = compute_zone_achieved(problem, zone_assignment)
+    return {
+        key: bool(not target > 0 or _meets(zone_achieved.get(key, 0.0), target * misslevel))
+        for key, target in lookup.items()
+    }
 
 
 def compute_zone_shortfalls(
@@ -294,20 +296,21 @@ def compute_zone_shortfalls(
     *,
     zone_achieved: dict[tuple[int, int], float] | None = None,
 ) -> dict[tuple[int, int], float]:
-    """(zone id, feature id) -> max(0, zone target × MISSLEVEL − Z_kf) for listed zone targets."""
-    if problem.zone_targets is None:
+    """(zone id, feature id) -> max(0, zone target × MISSLEVEL − Z_kf).
+
+    For the effective zone targets (``ZonalProblem.zone_target_lookup``; inert pairs
+    carry no shortfall and are absent).
+    """
+    lookup = problem.zone_target_lookup()
+    if not lookup:
         return {}
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     if zone_achieved is None:
-        zone_achieved = _compute_zone_achieved(problem, zone_assignment)
-    zt = problem.zone_targets
-    out: dict[tuple[int, int], float] = {}
-    for zid, fid, target in zip(
-        zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
-    ):
-        key = (int(zid), int(fid))
-        out[key] = max(0.0, float(target) * misslevel - zone_achieved.get(key, 0.0))
-    return out
+        zone_achieved = compute_zone_achieved(problem, zone_assignment)
+    return {
+        key: max(0.0, target * misslevel - zone_achieved.get(key, 0.0))
+        for key, target in lookup.items()
+    }
 
 
 def compute_zone_penalty(
@@ -422,7 +425,7 @@ def build_zone_solution(
     # alone is recomputed by an independent ``compute_zone_objective`` call, so the test that
     # objective == cost + boundaries + penalties compares two separate code paths.
     overall_achieved = compute_overall_achieved(problem, assignment)
-    zone_achieved = _compute_zone_achieved(problem, assignment)
+    zone_achieved = compute_zone_achieved(problem, assignment)
     overall_penalty = compute_overall_penalty(problem, assignment, achieved=overall_achieved)
     zone_penalty = compute_zone_penalty(problem, assignment, zone_achieved=zone_achieved)
     zone_targets_met = check_zone_targets(problem, assignment, zone_achieved=zone_achieved)

@@ -253,17 +253,15 @@ class TestWriteZoneSummary:
             assert row["target"] == float(problem.features.set_index("id").loc[fid, "target"])
 
     def test_zone_rows_match_objective_module(self, tmp_path: Path) -> None:
-        from pymarxan.zones.objective import _compute_zone_achieved, check_zone_targets
+        from pymarxan.zones.objective import check_zone_targets, compute_zone_achieved
         problem, sols = self._problem_and_solutions()
         out = tmp_path / "zone_summary.csv"
         write_zone_summary(problem, sols, out)
         df = pd.read_csv(out)
-        for zid, fid, target in problem.zone_targets[["zone", "feature", "target"]].itertuples(
-            index=False,
-        ):
+        for (zid, fid), target in problem.zone_target_lookup(include_inert=True).items():
             row = df[(df["tier"] == "zone") & (df["zone"] == zid) & (df["feature"] == fid)].iloc[0]
             achieved = [
-                _compute_zone_achieved(problem, s.zone_assignment).get((zid, fid), 0.0)
+                compute_zone_achieved(problem, s.zone_assignment).get((zid, fid), 0.0)
                 for s in sols
             ]
             met = [check_zone_targets(problem, s.zone_assignment)[(zid, fid)] for s in sols]

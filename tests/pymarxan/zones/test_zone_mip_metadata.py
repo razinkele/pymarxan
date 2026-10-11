@@ -19,8 +19,7 @@ def zone_problem():
 
 
 def _expected_keys(problem) -> set[str]:
-    zt = problem.zone_targets
-    return {f"z{int(z)}_f{int(f)}" for z, f in zip(zt["zone"], zt["feature"])}
+    return {f"z{z}_f{f}" for z, f in problem.zone_target_lookup(include_inert=True)}
 
 
 def test_mip_metadata_keeps_zone_targets_met_and_status(zone_problem):

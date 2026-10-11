@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 
 from pymarxan.zones.objective import (
-    _compute_zone_achieved,
     check_overall_targets,
     check_zone_targets,
     compute_overall_achieved,
+    compute_zone_achieved,
 )
 
 if TYPE_CHECKING:
@@ -134,7 +134,9 @@ def write_zone_summary(
       ``features.target``; ``mean_achieved`` the contribution-weighted amount
       (``compute_overall_achieved``); ``times_met`` counts runs where
       ``check_overall_targets`` is True.
-    - ``tier == "zone"`` — one row per listed zone target: raw amounts by default
+    - ``tier == "zone"`` — one row per known zone target
+      (``ZonalProblem.zone_target_lookup(include_inert=True)``: unknown ids omitted,
+      duplicates last-wins, inert targets <= 0 reported as met): raw amounts by default
       (contribution-weighted under ``ZONETARGETCONTRIB = 1``), met per ``check_zone_targets``.
 
     Solutions without ``zone_assignment`` are read as "selected PUs in the first zone".
@@ -171,19 +173,16 @@ def write_zone_summary(
             "total_runs": total_runs,
         })
 
-    if problem.zone_targets is not None:
-        zone_achieved = [_compute_zone_achieved(problem, a) for a in assignments]
+    lookup = problem.zone_target_lookup(include_inert=True)
+    if lookup:
+        zone_achieved = [compute_zone_achieved(problem, a) for a in assignments]
         zone_met = [check_zone_targets(problem, a) for a in assignments]
-        zt = problem.zone_targets
-        for zid, fid, target in zip(
-            zt["zone"].values, zt["feature"].values, zt["target"].values, strict=True,
-        ):
-            key = (int(zid), int(fid))
+        for key, target in lookup.items():
             rows.append({
                 "tier": "zone",
                 "zone": key[0],
                 "feature": key[1],
-                "target": float(target),
+                "target": target,
                 "mean_achieved": (
                     sum(a.get(key, 0.0) for a in zone_achieved) / total_runs
                     if total_runs else 0.0

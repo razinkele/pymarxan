@@ -23,6 +23,7 @@ ZONES_EXPORTS = {
     "check_overall_targets": "pymarxan.zones.objective",
     "compute_overall_achieved": "pymarxan.zones.objective",
     "compute_overall_shortfalls": "pymarxan.zones.objective",
+    "compute_zone_achieved": "pymarxan.zones.objective",
     "compute_zone_shortfalls": "pymarxan.zones.objective",
     "resolve_zone_target_types": "pymarxan.zones.readers",
 }

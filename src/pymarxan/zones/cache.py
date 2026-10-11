@@ -68,6 +68,10 @@ class ZoneProblemCache:
     zone_target_weight : np.ndarray
         (n_zones+1, n_feat) float64 — weight applied to raw held amounts when scoring zone
         targets; ones by default, the contribution matrix under ZONETARGETCONTRIB=1.
+    zone_target_active : np.ndarray | None
+        (n_zones+1, n_feat) bool — True where a zone target exists. Built only when
+        zone_target_weight has a negative entry (ZONETARGETCONTRIB=1 with a negative
+        contribution) to mask phantom shortfalls of untargeted pairs; None otherwise.
     overall_target_vector : np.ndarray
         (n_feat,) features.target × MISSLEVEL, 0 where target <= 0.
     has_overall_targets : bool
@@ -103,6 +107,7 @@ class ZoneProblemCache:
     self_boundary: np.ndarray
     conn_neighbors: list[list[tuple[int, float]]]
     conn_weight: float
+    zone_target_active: np.ndarray | None = None
 
     @classmethod
     def from_zone_problem(cls, problem: ZonalProblem) -> ZoneProblemCache:
@@ -178,18 +183,17 @@ class ZoneProblemCache:
 
         # --- Zone target matrix: (n_zones+1, n_feat) ---
         zone_target_matrix = np.zeros((n_zones + 1, n_feat), dtype=np.float64)
-        if problem.zone_targets is not None:
-            zt_zn = problem.zone_targets["zone"].values
-            zt_ft = problem.zone_targets["feature"].values
-            zt_tg = problem.zone_targets["target"].values
-            for k in range(len(zt_zn)):
-                zcol = zone_id_to_col.get(int(zt_zn[k]))
-                fcol = feat_id_to_col.get(int(zt_ft[k]))
-                if zcol is not None and fcol is not None:
-                    zone_target_matrix[zcol, fcol] = float(zt_tg[k])
+        for (zid, fid), target in problem.zone_target_lookup().items():
+            zcol = zone_id_to_col.get(zid)
+            fcol = feat_id_to_col.get(fid)
+            if zcol is not None and fcol is not None:
+                zone_target_matrix[zcol, fcol] = target
 
         # Apply MISSLEVEL to zone targets (match objective.py behavior)
         zone_target_matrix *= misslevel
+        zone_target_active = (
+            zone_target_matrix > 0 if bool(np.any(zone_target_weight < 0)) else None
+        )
 
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
         zbc: dict[tuple[int, int], float] = {}
@@ -264,6 +268,7 @@ class ZoneProblemCache:
             self_boundary=self_boundary,
             conn_neighbors=conn_neighbors,
             conn_weight=conn_weight,
+            zone_target_active=zone_target_active,
         )
 
     # ------------------------------------------------------------------
@@ -502,10 +507,9 @@ class ZoneProblemCache:
         shortfalls = np.maximum(
             0.0, self.zone_target_matrix - held_per_zone * self.zone_target_weight,
         )
-        # shortfalls shape: (n_zones+1, n_feat)
-        # Multiply each feature's shortfall by its SPF and sum
-        total = float(np.sum(shortfalls * self.feat_spf[np.newaxis, :]))
-        return total
+        if self.zone_target_active is not None:
+            shortfalls = shortfalls * self.zone_target_active
+        return float(np.sum(shortfalls * self.feat_spf[np.newaxis, :]))
 
     def _compute_overall_penalty(self, overall: np.ndarray) -> float:
         """Σ_f spf[f] × max(0, overall_target[f] − overall[f])."""
@@ -611,7 +615,10 @@ class ZoneProblemCache:
 
             old_shortfall = np.maximum(0.0, old_targets - old_held)
             new_shortfall = np.maximum(0.0, old_targets - (old_held - old_w))
-            delta += float(np.dot(self.feat_spf, new_shortfall - old_shortfall))
+            diff = new_shortfall - old_shortfall
+            if self.zone_target_active is not None:
+                diff = diff * self.zone_target_active[old_col]
+            delta += float(np.dot(self.feat_spf, diff))
 
         # New zone: increase held => possibly decrease shortfall
         if new_col != 0:
@@ -621,7 +628,10 @@ class ZoneProblemCache:
 
             old_shortfall = np.maximum(0.0, new_targets - new_held)
             new_shortfall = np.maximum(0.0, new_targets - (new_held + new_w))
-            delta += float(np.dot(self.feat_spf, new_shortfall - old_shortfall))
+            diff = new_shortfall - old_shortfall
+            if self.zone_target_active is not None:
+                diff = diff * self.zone_target_active[new_col]
+            delta += float(np.dot(self.feat_spf, diff))
 
         return delta
 
