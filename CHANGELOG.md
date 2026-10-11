@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Zone problems: MarZone `pulock.dat` (lock a planning unit into a named zone) and
+  `puzone.dat` (restrict it to a set of zones), as `ZonalProblem.pu_locks` / `pu_zones`,
+  `read_pu_lock` / `read_pu_zone` / `write_pu_lock` / `write_pu_zone`, and loaded by
+  `load_zone_project` only when `PULOCKNAME` / `PUZONENAME` is set — unlike the other zone files
+  these have no default file name (MarZone parity) (#6). All four zone solvers
+  honour them. Precedence: pulock → status 3 → status 2 (within puzone if given) → puzone.
+  A puzone PU must take one of its listed zones.
+- `ZonalProblem.pu_zone_rules()` / `pu_lock_lookup()` / `pu_zone_lookup()` /
+  `pu_lock_issues()`; `validate()` reports unknown, repeated, duplicate and conflicting rows.
+- `ZoneLockWarning` and the common base `ZoneInputWarning` (also the base of
+  `ZoneTargetWarning`), one per zone-solver call.
+
+### Changed
+- `ZoneIISolver.improve()` first repairs an incoming assignment that breaks a PU's rule
+  (e.g. a status-2 PU outside its zone) before improving it.
+- `compute_replacement_cost` drops a PU's `pu_locks` / `pu_zones` rows in its lock-out variant.
+
+### Notes
+- A `pu_locks` row beats every pu.dat status (2 and 3); status edits made by other tools
+  (e.g. `apply_wdpa_status` lock-in) do not override it.
+- The status-based analyses (gap analysis, representation, irreplaceability, Ferrier
+  importance) read only the pu.dat `status` column and do not see `pu_locks` / `pu_zones`.
+- `ZoneLockWarning` is emitted once per zone-solver call; `RunModePipeline` RUNMODEs 2–5 call
+  several zone solvers per run and warn once per stage.
+- Zone projects have no `save_zone_project`; `write_pu_lock` / `write_pu_zone` are standalone
+  writers.
+
 ## [0.37.0] — 2026-10-11
 
 ### Fixed

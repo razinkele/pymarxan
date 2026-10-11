@@ -133,6 +133,21 @@ accessor (`ZonalProblem.zone_target_lookup`); `tests/pymarxan/zones/test_zone_ta
 pins their agreement. `validate()` reports such rows, and each zone solver warns once
 (`ZoneTargetWarning`).
 
+**PU locks and zone restrictions (since v0.38).** `pulock.dat` and `puzone.dat` follow MarZone
+`LoadPuLock` / `PersistPuLock` / `LoadPuZone` / `PersistPuZone` (`pu.hpp:483-526`, `:708-790`):
+the last pulock row per PU wins and a lock naming an unknown zone is then dropped; unknown puzone
+zones are skipped and a PU left with none is unrestricted; a pulock overrides everything
+(`reserve.hpp:100-103`); a puzone PU always takes one of its listed zones. Deliberate
+differences: MarZone does not read a pu.dat status column, so pymarxan's status 2/3 locks have no
+MarZone counterpart; a single-zone puzone, fatal in MarZone, is treated as a lock and reported;
+MarZone's `CalcPenalties` pre-counts pulocked amounts when calibrating penalties
+(`marzone.cpp:769-782`), which pymarxan's `spf × shortfall` objective does not model.
+The status-based analyses (gap analysis, representation, irreplaceability, Ferrier importance)
+read only the pu.dat `status` column and do not see pulock/puzone rows;
+`compute_replacement_cost` is the exception (its lock-out variant drops the PU's rows).
+`tests/pymarxan/zones/test_pu_zone_solvers.py` pins the exact-MIP anchors (lock: `(2, 1, 2)` at
+8.0; must-assign: `(1, 2, 2, 2)` at 9.0) and the rules on every solver's output.
+
 ## Comparing against the Marxan C++ binary
 
 The strongest possible check is a numerical comparison against the

@@ -39,7 +39,9 @@ def compute_replacement_cost(
 
     For each PU ``i`` in the baseline MIP optimum, returns the objective
     increase when ``i`` is locked out and the problem is re-solved.
-    PUs not in the baseline get score 0.
+    PUs not in the baseline get score 0. For zone problems the PU's ``pu_locks`` /
+    ``pu_zones`` rows are dropped in the variant; other status-based analyses do not consult
+    them.
 
     Parameters
     ----------
@@ -75,9 +77,12 @@ def compute_replacement_cost(
     for i in selected_indices:
         pid = int(pu_ids[i])
         # Build a problem variant with PU `i` locked out.
-        variant = problem.copy_with(
-            planning_units=problem.planning_units.copy(),
-        )
+        overrides: dict[str, object] = {"planning_units": problem.planning_units.copy()}
+        for name in ("pu_locks", "pu_zones"):  # zone problems: the lock would beat status 3
+            table = getattr(problem, name, None)
+            if table is not None and "pu" in table.columns:
+                overrides[name] = table[table["pu"] != pid].reset_index(drop=True)
+        variant = problem.copy_with(**overrides)
         variant.planning_units.loc[
             variant.planning_units["id"] == pid, "status"
         ] = STATUS_LOCKED_OUT
