@@ -1618,6 +1618,17 @@ class TestHeuristicAndII:
             out = ZoneIISolver().improve(p, seed_sol)
         assert rule_violations(p.pu_zone_rules(), out.zone_assignment) == []
 
+    def test_improve_repairs_into_allowed_set_not_first_zone(self):
+        # PU 4 may take only {2, 3}; zone 1 (cost 0) is cheapest, so a repair to
+        # min(zone_ids) or to zone 1 is never undone by the II passes.
+        p = _ii(_excludes_first(), 3)
+        (seed_sol,) = _solve(ZoneHeuristicSolver, make_anchor_problem(spf=10.0), n_sol=1)
+        seed_sol.zone_assignment = np.array([1, 2, 2, 0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = ZoneIISolver().improve(p, seed_sol)
+        assert rule_violations(p.pu_zone_rules(), out.zone_assignment) == []
+
     @pytest.mark.parametrize("runmode", [0, 1, 2, 3, 4, 5, 6])
     def test_pipeline_respects_rules(self, runmode):
         p = _fast(_with_pu4(spf=10.0).copy_with(
@@ -1671,7 +1682,7 @@ class TestHeuristicAndII:
 
 (If `Solution.zone_assignment` is read-only on the dataclass, build `bad` (and the out-of-set seed) with `dataclasses.replace(seed_sol, zone_assignment=np.array([1, 2, 2, 0]))` instead of assignment.)
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, `test_improve_repairs_into_allowed_set_not_first_zone`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
 
 - [ ] **Step 3: Implement**
 
@@ -1798,6 +1809,7 @@ import math
 import warnings
 
 import pandas as pd
+import pytest
 
 from pymarxan.analysis.replacement_cost import compute_replacement_cost
 from pymarxan.zones import ZoneMIPSolver
@@ -1813,9 +1825,32 @@ def test_locked_pu_replacement_cost_not_zero():
         scores = compute_replacement_cost(p, solver=ZoneMIPSolver())  # type: ignore[arg-type]
     # Without PU1, PUs 2-3 cannot meet overall 15 and zone-2 10 together -> infeasible.
     assert scores[1] == math.inf
+
+
+def _with_pu4():
+    p = make_anchor_problem()
+    pu = pd.concat(
+        [p.planning_units, pd.DataFrame({"id": [4], "cost": [0.0], "status": [0]})],
+        ignore_index=True,
+    )
+    zc = pd.concat(
+        [p.zone_costs, pd.DataFrame({"pu": [4, 4], "zone": [1, 2], "cost": [3.0, 2.0]})],
+        ignore_index=True,
+    )
+    return p.copy_with(planning_units=pu, zone_costs=zc)
+
+
+def test_variant_keeps_other_pus_locks():
+    p = _with_pu4().copy_with(pu_locks=pd.DataFrame({"pu": [1, 4], "zone": [2, 1]}))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        scores = compute_replacement_cost(p, solver=ZoneMIPSolver())  # type: ignore[arg-type]
+    # Base (2, 1, 2, 1) = 8 + 3. PU 4's variant keeps PU 1's lock: (2, 1, 2, 0) = 8 -> -3.
+    # Dropping every lock row instead gives (1, 2, 2, 0) = 7 -> -4.
+    assert scores[4] == pytest.approx(-3.0)
 ```
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_replacement_cost_zone_locks.py -q` → FAIL (`0.0 != inf`: the lock wins over status 3).
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_replacement_cost_zone_locks.py -q` → FAIL (2 tests: `0.0 != inf`, and `0.0 != -3.0`: the lock wins over status 3).
 
 - [ ] **Step 2: Implement** — in `compute_replacement_cost`, replace the variant construction with:
 
