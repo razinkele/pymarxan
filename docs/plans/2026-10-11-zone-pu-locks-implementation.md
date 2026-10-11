@@ -351,6 +351,11 @@ def test_precedence_pairs():
     ]
 
 
+def test_status_1_start_dropped_even_when_first_zone_allowed():
+    p = _three_zone((1, 0, 0), pu_zones=_table([(1, 1), (1, 2)]))
+    assert p.pu_zone_rules()[0] == _rule({1, 2}, False, None)
+
+
 def test_invariant_no_unsatisfiable_rule():
     p = _three_zone((3, 2, 1), pu_locks=_table([(1, 99)]), pu_zones=_table([(2, 99), (3, 98)]))
     assert all(r.allowed or r.may_be_unassigned for r in p.pu_zone_rules())
@@ -1629,6 +1634,17 @@ class TestHeuristicAndII:
             out = ZoneIISolver().improve(p, seed_sol)
         assert rule_violations(p.pu_zone_rules(), out.zone_assignment) == []
 
+    def test_improve_repair_target_is_min_allowed(self):
+        # ITIMPTYPE 1 = removal pass only, which skips must-assign PUs, so PU 4 keeps the
+        # zone the repair gave it: min({2, 3}) = 2 (spec), not 3 or min(zone_ids) = 1.
+        p = _ii(_excludes_first(), 1)
+        (seed_sol,) = _solve(ZoneHeuristicSolver, make_anchor_problem(spf=10.0), n_sol=1)
+        seed_sol.zone_assignment = np.array([1, 2, 2, 0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = ZoneIISolver().improve(p, seed_sol)
+        assert tuple(int(z) for z in out.zone_assignment) == (1, 2, 2, 2)
+
     @pytest.mark.parametrize("runmode", [0, 1, 2, 3, 4, 5, 6])
     def test_pipeline_respects_rules(self, runmode):
         p = _fast(_with_pu4(spf=10.0).copy_with(
@@ -1682,7 +1698,7 @@ class TestHeuristicAndII:
 
 (If `Solution.zone_assignment` is read-only on the dataclass, build `bad` (and the out-of-set seed) with `dataclasses.replace(seed_sol, zone_assignment=np.array([1, 2, 2, 0]))` instead of assignment.)
 
-- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: every `strict_subset` case (heuristic, II 1/2/3), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, `test_improve_repairs_into_allowed_set_not_first_zone`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof.
+- [ ] **Step 2: Run to verify failure** — `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_pu_zone_solvers.py::TestHeuristicAndII -q` → FAIL. Record the exact count in the commit message. Must fail: the `strict_subset` cases for the heuristic, II 1 and II 3 (`test_ii_rules_hold[strict_subset-2]` already passes on v0.37: its removal→addition passes happen to land PU 1 in zone 2, inside {1, 2}, so it is a pin; `excludes_first-2` and `test_ii_addition_moves_must_assign_pu_to_better_zone` carry the II-2 proof), every `excludes_first` case (`test_heuristic_rules_hold[excludes_first]`, `test_ii_rules_hold[excludes_first-1/2/3]` — PU 4's set {2, 3} excludes min(zone_ids), so a zone-1 seed is out of rule), `test_ii_addition_moves_must_assign_pu_to_better_zone`, `test_improve_repairs_out_of_rule_input`, `test_improve_repairs_out_of_set_zone_of_unlocked_pu`, `test_improve_repairs_into_allowed_set_not_first_zone`, `test_improve_repair_target_is_min_allowed`, and the `test_all_forced_every_solver` cases for the heuristic and II. Some `lock` cases may pass on v0.37 by coincidence — the strict-subset and all-forced tests carry the proof. Dry run (rev 3, before `test_improve_repair_target_is_min_allowed` was added): 23 failed, 11 passed — expect 24 failed, 11 passed with it.
 
 - [ ] **Step 3: Implement**
 
