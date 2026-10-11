@@ -14,7 +14,7 @@ from pymarxan.zones.diagnostics import (
     _pu_zone_rules,
     diagnose_zone_infeasibility,
 )
-from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
+from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
 from pymarxan.zones.objective import _feature_arrays, build_zone_solution
 
 
@@ -106,7 +106,7 @@ class ZoneMIPSolver(Solver):
             )
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneMIPSolver")
-        warn_zone_target_issues(problem, "ZoneMIPSolver")
+        warn_zone_input_issues(problem, "ZoneMIPSolver")
         if config is None:
             config = SolverConfig()
 

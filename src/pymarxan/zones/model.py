@@ -283,6 +283,129 @@ class ZonalProblem(ConservationProblem):
             raise AssertionError("pu_zone_rules: a PU with no zone that must be assigned")
         return rules
 
+    def _pu_lock_issue_list(self) -> list[tuple[str, bool]]:
+        """(message, is_validate_error) per issue class — spec §3 table."""
+        out: list[tuple[str, bool]] = []
+        if self.pu_locks is None and self.pu_zones is None:
+            return out  # v0.37 problems: no scan, no status cast
+        pu = self.planning_units
+        status_of: dict[int, int] = {}
+        if "status" in pu.columns:  # per-row parse: validate() never raises on a bad status
+            for p, s in zip(pu["id"].values, pu["status"].values, strict=True):
+                sid = _known_id(s, {0, 1, 2, 3})
+                if sid is not None:
+                    status_of[int(p)] = sid
+        pus = {int(p) for p in self.planning_units["id"].values}
+        zones = {int(z) for z in self.zone_ids}
+        usable: dict[str, list[tuple[object, object]]] = {}
+        for name, table in (("pu_locks", self.pu_locks), ("pu_zones", self.pu_zones)):
+            if table is None:
+                continue
+            missing = sorted({"pu", "zone"} - set(table.columns))
+            if missing:
+                out.append((f"{name} missing columns {missing} (table ignored)", True))
+                continue
+            rows = self._pu_table_rows(table)
+            usable[name] = rows
+            bad = [(p, z) for p, z in rows
+                   if _known_id(p, pus) is None or _known_id(z, zones) is None]
+            if bad:
+                out.append((
+                    f"{name} has {len(bad)} row(s) naming an unknown PU or zone, or a "
+                    "non-integral id (skipped): "
+                    + _first_five([f"PU {p}, zone {z}" for p, z in bad]),
+                    True,
+                ))
+        locks = self.pu_lock_lookup()
+        restrict = self.pu_zone_lookup()
+        if "pu_locks" in usable:
+            per_pu: dict[int, list[object]] = {}
+            for p, z in usable["pu_locks"]:
+                pid = _known_id(p, pus)
+                if pid is not None:
+                    per_pu.setdefault(pid, []).append(z)
+            repeated = [(pid, zs[-1]) for pid, zs in per_pu.items() if len(zs) > 1]
+            if repeated:
+                items = [
+                    f"PU {pid} → zone {z}" + ("" if pid in locks
+                                               else " (unknown zone, PU not locked)")
+                    for pid, z in repeated
+                ]
+                out.append((
+                    f"pu_locks repeats {len(repeated)} PU(s); the last row wins: "
+                    + _first_five(items),
+                    True,
+                ))
+        if "pu_zones" in usable:
+            seen: set[tuple[int, int]] = set()
+            dup_set: set[tuple[int, int]] = set()
+            dups: list[tuple[int, int]] = []
+            listed: set[int] = set()
+            for p, z in usable["pu_zones"]:
+                pid, zid = _known_id(p, pus), _known_id(z, zones)
+                if pid is None:
+                    continue
+                listed.add(pid)
+                if zid is None:
+                    continue
+                key = (pid, zid)
+                if key in seen and key not in dup_set:
+                    dup_set.add(key)
+                    dups.append(key)
+                seen.add(key)
+            if dups:
+                out.append((
+                    f"pu_zones has {len(dups)} duplicate (pu, zone) row(s) (collapsed): "
+                    + _first_five([f"PU {p}, zone {z}" for p, z in dups]),
+                    True,
+                ))
+            all_unknown = sorted(pid for pid in listed if pid not in restrict
+                                 and pid not in locks
+                                 and status_of.get(pid) != STATUS_LOCKED_OUT)
+            if all_unknown:
+                out.append((
+                    f"pu_zones rows for {len(all_unknown)} PU(s) name only unknown zones "
+                    "(PU unrestricted): " + _first_five([f"PU {p}" for p in all_unknown]),
+                    True,
+                ))
+            single = [(pid, next(iter(zs))) for pid, zs in restrict.items()
+                      if len(zs) == 1 and pid not in locks
+                      and status_of.get(pid) != STATUS_LOCKED_OUT]
+            if single:
+                out.append((
+                    f"pu_zones restricts {len(single)} PU(s) to a single zone (treated as a "
+                    "lock; MarZone rejects single-zone puzone — use pu_locks): "
+                    + _first_five([f"PU {p} → zone {z}" for p, z in single]),
+                    True,
+                ))
+        st3_lock = [p for p in locks if status_of.get(p) == STATUS_LOCKED_OUT]
+        if st3_lock:
+            out.append((
+                f"{len(st3_lock)} PU(s) have status 3 and a pu_locks row (the lock wins): "
+                + _first_five([f"PU {p}" for p in st3_lock]),
+                True,
+            ))
+        st3_zone = [p for p in restrict
+                    if status_of.get(p) == STATUS_LOCKED_OUT and p not in locks]
+        if st3_zone:
+            out.append((
+                f"{len(st3_zone)} PU(s) have status 3 and pu_zones rows (status 3 wins): "
+                + _first_five([f"PU {p}" for p in st3_zone]),
+                True,
+            ))
+        outside = [(p, z) for p, z in locks.items() if p in restrict and z not in restrict[p]]
+        if outside:
+            out.append((
+                f"{len(outside)} pu_locks zone(s) are outside the PU's pu_zones list "
+                "(the lock wins): " + _first_five([f"PU {p} → zone {z}" for p, z in outside]),
+                False,
+            ))
+        return out
+
+    def pu_lock_issues(self) -> list[str]:
+        """Messages for every pu_locks / pu_zones row the solvers skip, collapse or override."""
+        return [msg for msg, _ in self._pu_lock_issue_list()]
+
     def contribution_matrix(self) -> np.ndarray:
         """(n_zones + 1, n_feat) contribution per (zone row, feature column); row 0 is zero."""
         zidx = self.zone_index()
@@ -458,22 +581,32 @@ class ZonalProblem(ConservationProblem):
                     f"{int((t2 > 0).sum())} feature(s) have target2 > 0"
                 )
 
+        errors.extend(msg for msg, is_error in self._pu_lock_issue_list() if is_error)
         return errors
 
 
-class ZoneTargetWarning(UserWarning):
+class ZoneInputWarning(UserWarning):
+    """Zone input rows the zone solvers skip, collapse or override (base class)."""
+
+
+class ZoneTargetWarning(ZoneInputWarning):
     """``zone_targets`` rows the zone solvers skip (unknown ids) or collapse (duplicates)."""
 
 
-def warn_zone_target_issues(problem: ZonalProblem, solver_name: str) -> None:
-    """Emit one ``ZoneTargetWarning`` when ``problem.zone_target_issues()`` is non-empty.
+class ZoneLockWarning(ZoneInputWarning):
+    """``pu_locks`` / ``pu_zones`` rows the zone solvers skip, collapse or override."""
 
-    Called once at the entry of every zone-solver call (``solve`` and
-    ``ZoneIISolver.improve``); nothing downstream warns.
-    """
+
+def _emit(message: str, category: type[UserWarning], stacklevel: int = 4) -> None:
+    # _emit <- warn_* <- solve() <- caller: stacklevel 4 reports the caller of solve().
+    # The warn_* helpers are meant to be called only from a solver entry point.
+    warnings.warn(message, category, stacklevel=stacklevel)
+
+
+def _zone_target_message(problem: ZonalProblem) -> str | None:
     unknown, dups = problem.zone_target_issues()
     if not unknown and not dups:
-        return
+        return None
     parts: list[str] = []
     if unknown:
         parts.append(
@@ -485,8 +618,21 @@ def warn_zone_target_issues(problem: ZonalProblem, solver_name: str) -> None:
             f"{len(dups)} duplicate (zone, feature) pair(s) (last row wins): "
             + _first_five([f"zone {z}, feature {f}" for z, f in dups])
         )
-    warnings.warn(
-        f"{solver_name}: zone_targets has " + "; and ".join(parts),
-        ZoneTargetWarning,
-        stacklevel=3,
-    )
+    return "; and ".join(parts)
+
+
+def warn_zone_target_issues(problem: ZonalProblem, solver_name: str) -> None:
+    """Emit one ``ZoneTargetWarning`` when ``zone_targets`` has skipped/collapsed rows."""
+    msg = _zone_target_message(problem)
+    if msg:
+        _emit(f"{solver_name}: zone_targets has {msg}", ZoneTargetWarning)
+
+
+def warn_zone_input_issues(problem: ZonalProblem, solver_name: str) -> None:
+    """At most one ``ZoneTargetWarning`` and one ``ZoneLockWarning`` per zone-solver call."""
+    msg = _zone_target_message(problem)
+    if msg:
+        _emit(f"{solver_name}: zone_targets has {msg}", ZoneTargetWarning)
+    issues = problem.pu_lock_issues()
+    if issues:
+        _emit(f"{solver_name}: PU zone restrictions: " + " | ".join(issues), ZoneLockWarning)

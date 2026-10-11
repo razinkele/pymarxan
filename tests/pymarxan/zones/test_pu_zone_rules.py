@@ -1,10 +1,23 @@
 """PU zone rules: pulock / puzone / status precedence (#6 spec §2)."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
+import pytest
 
-from pymarxan.zones.model import PUZoneRule, fixed_zones, rule_violations
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.zones import (
+    ZoneHeuristicSolver,
+    ZoneIISolver,
+    ZoneInputWarning,
+    ZoneLockWarning,
+    ZoneMIPSolver,
+    ZoneSASolver,
+    ZoneTargetWarning,
+)
+from pymarxan.zones.model import PUZoneRule, fixed_zones, rule_violations, warn_zone_target_issues
 from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
 
 ALL3 = frozenset({1, 2, 3})
@@ -149,3 +162,190 @@ def test_copy_with_carries_tables():
     p = _three_zone(pu_locks=_table([(1, 2)]))
     q = p.copy_with(planning_units=p.planning_units.copy())
     assert q.pu_locks is not None and q.pu_lock_lookup() == {1: 2}
+
+
+def _issues(**kw):
+    return _three_zone(**kw).pu_lock_issues()
+
+
+def test_issue_rows_and_validate():
+    p = _three_zone(
+        (3, 3, 0),
+        pu_locks=_table([(1, 2), (9, 1), (2, 1), (2, 3)]),
+        pu_zones=_table([(1, 3), (3, 2), (3, 2), (2, 99)]),
+    )
+    issues = p.pu_lock_issues()
+    text = " | ".join(issues)
+    assert "unknown PU or zone" in text and "PU 9, zone 1" in text
+    assert "repeats 1 PU(s); the last row wins" in text and "PU 2 → zone 3" in text
+    assert "duplicate (pu, zone)" in text and "PU 3, zone 2" in text
+    assert "single zone (treated as a lock" in text and "PU 3 → zone 2" in text
+    assert "status 3 and a pu_locks row (the lock wins)" in text
+    assert "outside the PU's pu_zones list (the lock wins)" in text and "PU 1 → zone 2" in text
+    errors = p.validate()
+    assert any("repeats 1 PU(s)" in e for e in errors)
+    assert not any("outside the PU's pu_zones list" in e for e in errors)  # warning only
+
+
+def test_all_unknown_puzone_reported():
+    assert any("name only unknown zones (PU unrestricted)" in m
+               for m in _issues(pu_zones=_table([(1, 98), (1, 99)])))
+
+
+def test_status_3_with_puzone_reported():
+    assert any("status 3 and pu_zones rows (status 3 wins)" in m
+               for m in _issues(statuses=(3, 0, 0), pu_zones=_table([(1, 2), (1, 3)])))
+
+
+def test_all_unknown_puzone_not_reported_for_locked_or_status_3_pu():
+    issues = _issues(statuses=(3, 0, 0), pu_locks=_table([(2, 1)]),
+                     pu_zones=_table([(1, 99), (2, 99)]))
+    assert not any("name only unknown zones" in m for m in issues)
+
+
+def test_single_zone_puzone_not_reported_for_locked_pu():
+    issues = _issues(pu_locks=_table([(1, 3)]), pu_zones=_table([(1, 2)]))
+    assert not any("single zone" in m for m in issues)
+    assert any("outside the PU's pu_zones list" in m for m in issues)
+
+
+def test_status_3_with_lock_and_puzone_reports_lock_only():
+    issues = _issues(statuses=(3, 0, 0), pu_locks=_table([(1, 2)]),
+                     pu_zones=_table([(1, 2), (1, 3)]))
+    assert any("status 3 and a pu_locks row" in m for m in issues)
+    assert not any("status 3 and pu_zones rows" in m for m in issues)
+
+
+def test_missing_columns_reported():
+    assert any("pu_locks missing columns ['zone'] (table ignored)" in m
+               for m in _issues(pu_locks=pd.DataFrame({"pu": [1]})))
+
+
+ERROR_ROWS = [
+    ("unknown PU or zone", dict(pu_locks=_table([(9, 1)]))),
+    ("repeats 1 PU(s)", dict(pu_locks=_table([(1, 1), (1, 2)]))),
+    ("duplicate (pu, zone)", dict(pu_zones=_table([(1, 1), (1, 1), (1, 2)]))),
+    ("name only unknown zones", dict(pu_zones=_table([(1, 99)]))),
+    ("single zone (treated as a lock", dict(pu_zones=_table([(1, 2)]))),
+    ("status 3 and a pu_locks row", dict(statuses=(3, 0, 0), pu_locks=_table([(1, 2)]))),
+    ("status 3 and pu_zones rows",
+     dict(statuses=(3, 0, 0), pu_zones=_table([(1, 1), (1, 2)]))),
+    ("missing columns", dict(pu_locks=pd.DataFrame({"pu": [1]}))),
+]
+
+
+@pytest.mark.parametrize("needle,kw", ERROR_ROWS, ids=[r[0] for r in ERROR_ROWS])
+def test_each_error_row_reaches_validate(needle, kw):
+    kw = dict(kw)
+    statuses = kw.pop("statuses", (0, 0, 0))
+    assert any(needle in e for e in _three_zone(statuses, **kw).validate())
+
+
+def test_repeated_lock_with_unknown_last_zone_says_not_locked():
+    assert any("PU 1 → zone 99 (unknown zone, PU not locked)" in m
+               for m in _issues(pu_locks=_table([(1, 2), (1, 99)])))
+
+
+def test_repeated_known_lock_has_no_not_locked_suffix():
+    text = " | ".join(_issues(pu_locks=_table([(1, 1), (1, 2)])))
+    assert "PU 1 → zone 2" in text and "PU not locked" not in text
+
+
+def test_triplicate_puzone_row_counted_once():
+    issues = _issues(pu_zones=_table([(1, 2), (1, 2), (1, 2), (1, 3)]))
+    assert any("has 1 duplicate (pu, zone) row(s)" in m for m in issues)
+
+
+def test_status_3_single_zone_puzone_reported_only_as_status_3():
+    issues = _issues(statuses=(3, 0, 0), pu_zones=_table([(1, 2)]))
+    assert any("status 3 and pu_zones rows" in m for m in issues)
+    assert not any("single zone" in m for m in issues)
+
+
+def test_no_tables_no_scan():
+    assert _three_zone((1, 2, 3)).pu_lock_issues() == []
+
+
+def test_clean_problem_has_no_issues():
+    p = _three_zone((2, 1, 0), pu_locks=_table([(1, 2)]), pu_zones=_table([(2, 1), (2, 2)]))
+    assert p.pu_lock_issues() == []
+    assert p.validate() == []
+
+
+def test_warning_hierarchy():
+    assert issubclass(ZoneTargetWarning, ZoneInputWarning)
+    assert issubclass(ZoneLockWarning, ZoneInputWarning)
+    assert not issubclass(ZoneLockWarning, ZoneTargetWarning)
+
+
+SOLVERS = [ZoneMIPSolver, ZoneSASolver, ZoneHeuristicSolver, ZoneIISolver]
+
+
+@pytest.mark.parametrize("cls", SOLVERS, ids=lambda c: c.__name__)
+def test_each_solver_warns_once_about_locks(cls):
+    # two issue classes (unknown PU, repeated PU): still ONE ZoneLockWarning, joined by " | "
+    p = _three_zone(pu_locks=_table([(1, 2), (9, 1), (2, 1), (2, 3)]))
+    p = p.copy_with(parameters={**p.parameters, "NUMITNS": 500})
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        cls().solve(p, SolverConfig(num_solutions=2, seed=1))
+    hits = [w for w in rec if issubclass(w.category, ZoneLockWarning)]
+    assert len(hits) == 1
+    assert str(hits[0].message).startswith(f"{cls.__name__}: PU zone restrictions:")
+    assert "PU 9, zone 1" in str(hits[0].message) and "the last row wins" in str(hits[0].message)
+
+
+def test_ii_improve_warns_once_about_locks():
+    p = _three_zone(pu_locks=_table([(1, 2), (9, 1)]))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        (sol,) = ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneIISolver().improve(p, sol)
+    assert len([w for w in rec if issubclass(w.category, ZoneLockWarning)]) == 1
+
+
+def test_target_wrapper_emits_only_target_warning():
+    p = _three_zone(pu_locks=_table([(9, 1)])).copy_with(
+        zone_targets=pd.DataFrame({"zone": [9], "feature": [1], "target": [1.0]}),
+    )
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        warn_zone_target_issues(p, "ZoneSASolver")
+    assert [w.category for w in rec] == [ZoneTargetWarning]
+
+
+def test_lock_warning_points_at_the_solve_caller():
+    p = _three_zone(pu_locks=_table([(9, 1)]))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    (w,) = [w for w in rec if issubclass(w.category, ZoneLockWarning)]
+    assert w.filename == __file__
+
+
+def test_partly_unknown_puzone_reported_as_single_zone():
+    issues = _issues(pu_zones=_table([(1, 1), (1, 99)]))
+    assert any("single zone (treated as a lock" in m and "PU 1 → zone 1" in m for m in issues)
+    assert any("unknown PU or zone" in m and "PU 1, zone 99" in m for m in issues)
+
+
+@pytest.mark.parametrize("bad", [np.nan, "x"], ids=["nan", "text"])
+def test_validate_never_raises_on_bad_status_with_locks(bad):
+    # per-row status parse: "x" raises under astype(int); NaN casts silently (pin: still skipped)
+    p = _three_zone((0, bad, 0), pu_locks=_table([(1, 2)]))
+    assert isinstance(p.validate(), list)
+    assert isinstance(p.pu_lock_issues(), list)
+
+
+def test_dispatcher_emits_one_of_each_kind_in_one_call():
+    # spec §3: at most one warning of EACH kind; Testing 5: ZoneInputWarning catches both
+    p = _three_zone(pu_locks=_table([(9, 1)])).copy_with(
+        zone_targets=pd.DataFrame({"zone": [9], "feature": [1], "target": [1.0]}),
+    )
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        ZoneHeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+    kinds = sorted(w.category.__name__ for w in rec if issubclass(w.category, ZoneInputWarning))
+    assert kinds == ["ZoneLockWarning", "ZoneTargetWarning"]

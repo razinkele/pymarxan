@@ -10,7 +10,12 @@ from pymarxan.zones.diagnostics import ZoneMIPNoSolutionWarning, diagnose_zone_i
 from pymarxan.zones.heuristic import ZoneHeuristicSolver
 from pymarxan.zones.iterative_improvement import ZoneIISolver
 from pymarxan.zones.mip_solver import ZoneMIPSolver
-from pymarxan.zones.model import ZonalProblem, ZoneTargetWarning
+from pymarxan.zones.model import (
+    ZonalProblem,
+    ZoneInputWarning,
+    ZoneLockWarning,
+    ZoneTargetWarning,
+)
 from pymarxan.zones.objective import (
     build_zone_solution,
     check_overall_targets,
@@ -47,6 +52,8 @@ __all__ = [
     "ZoneHeld",
     "ZoneHeuristicSolver",
     "ZoneIISolver",
+    "ZoneInputWarning",
+    "ZoneLockWarning",
     "ZoneMIPNoSolutionWarning",
     "ZoneMIPSolver",
     "ZoneSASolver",

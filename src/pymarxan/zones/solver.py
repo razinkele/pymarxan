@@ -10,7 +10,7 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.zones.cache import ZoneProblemCache
-from pymarxan.zones.model import ZonalProblem, warn_zone_target_issues
+from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
 from pymarxan.zones.objective import build_zone_solution
 
 _COOLING_FACTORIES: dict[str, Callable[..., CoolingSchedule]] = {
@@ -51,7 +51,7 @@ class ZoneSASolver(Solver):
             )
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneSASolver")
-        warn_zone_target_issues(problem, "ZoneSASolver")
+        warn_zone_input_issues(problem, "ZoneSASolver")
         if config is None:
             config = SolverConfig()
 

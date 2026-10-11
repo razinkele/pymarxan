@@ -10,6 +10,8 @@ ZONES_EXPORTS = {
     "ZoneMIPSolver": "pymarxan.zones.mip_solver",
     "ZoneMIPNoSolutionWarning": "pymarxan.zones.diagnostics",
     "ZoneSASolver": "pymarxan.zones.solver",
+    "ZoneInputWarning": "pymarxan.zones.model",
+    "ZoneLockWarning": "pymarxan.zones.model",
     "ZoneTargetWarning": "pymarxan.zones.model",
     "ZoneHeuristicSolver": "pymarxan.zones.heuristic",
     "ZoneIISolver": "pymarxan.zones.iterative_improvement",
