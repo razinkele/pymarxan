@@ -42,3 +42,34 @@ Spec patched to rev 2.
 | 14 | LOW | architect | Warning classes. | **Accepted.** `ZoneInputWarning` base for `ZoneTargetWarning` + `ZoneLockWarning`; one dispatcher. |
 | 15 | LOW | parity | MarZone II candidate filter has an index bug — must not be copied; CalcPenalties pre-counts pulocked PUs. | Noted in spec (not copied / out of scope). |
 | 16 | LOW | grounding, re-design | Anchor tests that pass on a no-op. | **Accepted.** PU4 variant as the primary must-assign test. |
+
+---
+
+# Round 2 — review of spec rev 2 (`369faa8`)
+
+Workflow `wf_a10fcfe5-ba1`: fix-verification, executing grounding (prototype rules / MIP / SA /
+heuristic / II / readers), MarZone parity of rev-2 claims, edge-case hunter; HIGH+ adversarially
+verified. 9 agents, 0 errors. **No HIGH survived verification** (4 raised, all confirmed and
+downgraded to MEDIUM). All 16 round-1 dispositions confirmed present in rev 2.
+
+Verified by execution: pulock PU1→2 → (2,1,2) at 8.0; PU4 variant 7.0 → 9.0; every-PU-forced
+returns the locked assignment in all solvers; zones {2,5,9} no violations; SA seeded golden
+identical for status 0–3; reparenting `ZoneTargetWarning` under a new base is backward compatible.
+
+| # | Sev | Lens(es) | Finding | Disposition (rev 3) |
+|---|---|---|---|---|
+| R2-1 | MEDIUM (verified) | fix-ver, grounding, edge | Heuristic seeding a status-1 PU at `start` makes it a de facto lock (8.0 → 10.0); v0.37 heuristic ignores status 1. | Heuristic uses `start` only for must-assign PUs; free PUs start at 0 as today. Golden fixture includes status 1/2/3. |
+| R2-2 | MEDIUM (verified) | grounding | II ITIMPTYPE 1/2 never move a must-assign PU off its seed. | Addition pass also moves must-assign multi-zone PUs to a better allowed zone (no effect on free PUs). |
+| R2-3 | MEDIUM (verified, P) | fix-ver, grounding, parity, edge | PU whose puzone rows are all unknown → literal reading `(∅, must-assign)` is unsatisfiable; MarZone: free. | Omitted from `pu_zone_lookup` → falls through; reported; invariant: no rule is `(∅, False)`. |
+| R2-4 | MEDIUM (verified, P) | fix-ver, edge | II candidate order load-bearing for ties; blanket "allowed + 0" turns removal into swap. | Per-pass sets: removal `{0}` iff may-be-unassigned; addition (PUs at 0) `sorted(allowed)`; swap `[0]` (iff) + `sorted(allowed)` — v0.37 order. Golden for ITIMPTYPE 1/2/3. |
+| R2-5 | MEDIUM (P) | grounding, edge, fix-ver | SA starts puzone PUs at `min(set)`; MarZone draws randomly. | `start = None` for non-forced puzone rows; SA draws from options; heuristic/II fall back to `min(allowed)`. |
+| R2-6 | MEDIUM | edge | `compute_replacement_cost` variant (status 3) overridden by a pulock → cost 0. | Variant drops that PU's `pu_locks` / `pu_zones` rows; doc note that status-based analyses do not see pulock/puzone. |
+| R2-7 | MEDIUM | edge, grounding, parity | Reader details: `_read_dat` drops the first row of a headerless file; empty / blank cells; id parsing; MarZone header char-set. | Dedicated parser (spec §1 list); lookups parse ids with `_known_id`. |
+| R2-8 | MEDIUM | fix-ver | `ZoneLockWarning` trigger set and conflict winners undefined; missing columns unhandled. | Explicit issue list with "solvers follow:"; missing columns → table ignored + reported. |
+| R2-9 | MEDIUM | grounding | SA bench 1.05× barely met (1.044); metric undefined. | Seconds per proposal, median of ≥ 5 reps, ≤ 1.10×, fixture named. |
+| R2-10 | LOW | parity | MarZone accepts a pulock outside the puzone list (lock wins). | Warning only, not a `validate()` error. |
+| R2-11 | LOW | parity | Default-name loading changes solutions vs MarZone on the same input.dat. | **Changed:** load only when `PULOCKNAME` / `PUZONENAME` is in parameters (MarZone); named missing → `FileNotFoundError`; named empty → `ValueError`. |
+| R2-12 | LOW | edge | Infeasibility message silent about locks. | Messages note restrictions when `pu_locks` / `pu_zones` are set. |
+| R2-13 | LOW | edge | MIP `has_values` probe on a variable fixed by `upBound = 0`. | Probe any variable. Test with PU1 locked to a non-min zone. |
+| R2-14 | LOW | fix-ver, grounding, edge | Wrapper semantics, stacklevel, RUNMODE counts. | Wrapper emits `ZoneTargetWarning` only; shared private emitter keeps stacklevel; "one per call" scoped to direct solver calls. |
+| R2-15 | LOW | fix-ver | `PUZoneRule` location; removal list; exports; fixture bytes; citations (`ReadPUData` 635-706); CalcPenalties wording; single-zone message; `_best` negative test; improve() repair compatibility note. | All accepted (rev 3 text). |
