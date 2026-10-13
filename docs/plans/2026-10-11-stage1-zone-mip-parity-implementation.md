@@ -18,7 +18,7 @@
 
 - **File conventions.** Every file starts with `from __future__ import annotations` and has full type hints. ruff (E, F, I, UP; line length 99) and mypy must be clean. **Run ruff on the test files at every task handoff.**
 - **Test interpreter.** Tests run ONLY with `/opt/micromamba/envs/shiny/bin/pytest` (never `.venv`).
-  - In the worktree, run mypy as `/home/razinka/marxan/.venv/bin/mypy`.
+  - In the worktree, run mypy as the Makefile (`make types`) does: `/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports <file>`; pulp has no stubs, and without the flag it reports 13 import-untyped errors on pulp/scipy/geopandas.
   - Run non-pytest Python as `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python`.
 - **Anchors must not move.**
   - `tests/data/simple` MIP = 35.0 **with BLM = 0**; the fixture's own BLM 1.0 gives objective 43.0.
@@ -710,7 +710,7 @@ Expected: 12 passed.
 
 ```bash
 ruff check src/pymarxan/solvers/_mip_objectives.py tests/pymarxan/solvers/test_mip_objectives_module.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/solvers/_mip_objectives.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/solvers/_mip_objectives.py
 git add src/pymarxan/solvers/_mip_objectives.py tests/pymarxan/solvers/test_mip_objectives_module.py
 git commit -m "feat(stage1): solver-agnostic MIP objective builders and lexicographic solve
 
@@ -893,20 +893,32 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
   Deviation from spec §3: the probmode / TARGET2 / sep flags are carried on `_BuiltModel`, not recomputed in `solve()`. This gives one source and changes no behaviour.
 
-- [ ] **Step 1: Write the failing tests** (append to `test_mip_stage1.py`)
+- [ ] **Step 1: Write the failing tests.** Put the import lines and `SIMPLE` into the module header of `test_mip_stage1.py` (the header becomes the block below); append only the three test functions after the existing tests. The header grows per task (it is not written in full in Task 3) so that ruff F401 stays clean at the Task 3 and Task 4 handoffs.
 
 ```python
+"""Stage 1 changes to the single-zone MIPSolver (spec §1 MIPSolver, S2, S9)."""
+from __future__ import annotations
+
 import warnings
 from pathlib import Path
 
+import pandas as pd
 import pulp
+import pytest
 
 from pymarxan.io.readers import load_project
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.solvers.mip_solver import MIPSolver
 from tests.pymarxan.lp_canon import canonical_model, captured_models
 
+ONE = SolverConfig(num_solutions=1)
 SIMPLE = Path(__file__).parent.parent.parent / "data" / "simple"
+```
 
+Appended after the Task 3 tests:
 
+```python
 def test_build_model_equals_solved_model() -> None:
     p = load_project(SIMPLE)
     built = MIPSolver().build_model(p)
@@ -956,9 +968,12 @@ Expected: `AttributeError: 'MIPSolver' object has no attribute 'build_model'`.
                 objective_expr = -model.objective
         return _BuiltModel(
             model=model, x=x, pu_ids=pu_ids, blm=blm, objective_expr=objective_expr,
-            probmode=probmode, has_target2=has_target2, has_sep_active=has_sep_active,
+            probmode=probmode, has_target2=bool(has_target2),
+            has_sep_active=bool(has_sep_active),
         )
 ```
+
+The `bool(...)` wrapping is required: under pandas-stubs `(Series > 0).any()` is `numpy.bool`, which mypy rejects against the dataclass's `bool` fields. In Task 6 this block gains the trailing `lex=lex,` line.
 
 3. New public methods:
 
@@ -991,18 +1006,15 @@ Expected: `AttributeError: 'MIPSolver' object has no attribute 'build_model'`.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_examples.py -q -x`
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_examples.py -q --deselect tests/pymarxan/solvers/test_stage1_golden_v038.py::test_core_absolute_min_largest_shortfall_unchanged`
 
-Expected:
-- everything passes except the one known golden failure (`shortfall=`);
-- `test_core_min_set_model_unchanged` passes, so the refactor is byte-identical;
-- `examples/validate_marxan_parity.py` gives 35.0.
+Expected: 487 passed, 1 deselected (the `shortfall=` TypeError golden, green in Task 5); `test_core_min_set_model_unchanged` passes, so the refactor is byte-identical; `tests/test_examples.py` pins 35.0. (No `-x`: it would stop at the known golden failure before `tests/test_examples.py` ever ran.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/solvers/mip_solver.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/solvers/mip_solver.py
 git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py
 git commit -m "refactor(stage1): MIPSolver _build/build_model/solve split (no behaviour change)
 
@@ -1027,12 +1039,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
   - `_core_target_terms(problem, x, prob_map_m2) -> list[TargetTerm]`: one per feature with target > 0, with key `f"f{fid}"`, `required = target × MISSLEVEL` and weight from `_core_spf`.
   - `MIP_OBJECTIVES = ("min_set", "max_features", "max_weighted_features", "min_shortfall", "min_largest_shortfall", "min_penalties")`.
 
-- [ ] **Step 1: Write the failing tests** (append)
+- [ ] **Step 1: Write the failing tests** (append the test functions; add `from tests.pymarxan.solvers.test_stage1_golden_v038 import make_relabs_problem` to the header's `tests.` import group, after the `lp_canon` line)
 
 ```python
-from tests.pymarxan.solvers.test_stage1_golden_v038 import make_relabs_problem
-
-
 def test_relative_is_default_and_differs_from_absolute() -> None:
     rel = MIPSolver(objective="min_largest_shortfall").solve(make_relabs_problem(), ONE)[0]
     ab = MIPSolver(objective="min_largest_shortfall", shortfall="absolute").solve(
@@ -1108,16 +1117,17 @@ def _core_amount_exprs(
 ) -> dict[int, pulp.LpAffineExpression]:
     """feature id -> Σ amount·x (PROBMODE 2: × (1 − p)) for features with rows."""
     out: dict[int, pulp.LpAffineExpression] = {}
-    for fid, feat_data in problem.pu_vs_features.groupby("species"):
+    for fid_raw, feat_data in problem.pu_vs_features.groupby("species"):
+        fid = int(fid_raw)  # type: ignore[arg-type]  # pandas-stubs types the key as a union
         pus = feat_data["pu"].values
         amounts = feat_data["amount"].values
         if prob_map_m2:
-            out[int(fid)] = pulp.lpSum(
+            out[fid] = pulp.lpSum(
                 float(amt) * (1.0 - prob_map_m2.get(int(pu), 0.0)) * x[int(pu)]
                 for pu, amt in zip(pus, amounts)
             )
         else:
-            out[int(fid)] = pulp.lpSum(float(amt) * x[int(pu)] for pu, amt in zip(pus, amounts))
+            out[fid] = pulp.lpSum(float(amt) * x[int(pu)] for pu, amt in zip(pus, amounts))
     return out
 
 
@@ -1195,7 +1205,7 @@ Expected: all pass, **including `test_core_absolute_min_largest_shortfall_unchan
 
 ```bash
 ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/solvers/mip_solver.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/solvers/mip_solver.py
 git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py CHANGELOG.md
 git commit -m "feat(stage1): MIPSolver min_shortfall, relative min_largest_shortfall, shortfall= kw
 
@@ -1243,12 +1253,25 @@ def test_min_penalties_build_model_is_pass1() -> None:
 
 
 def test_min_penalties_objective_is_spf_weighted_and_cap_is_tight() -> None:
-    # The ghost (target 5, spf 7) is unmeetable: pass 1 = 7 * 5 = 35, not 5. A loose
-    # pass-2 cap would then drop PU1 (cost 1) for +3 weighted shortfall
-    # (38 <= 35 * (1 + rel_tol) with rel_tol >= 0.09).
+    # The ghost (target 5, spf 7) is unmeetable: pass 1 = 7 * 5 = 35, not 5.
     sol = MIPSolver(objective="min_penalties").solve(_with_ghost(1.0), ONE)[0]
     assert sol.metadata["mip_objective_value"] == pytest.approx(35.0)
     assert sol.selected.tolist() == [True, False]
+    # Cap tightness: with spf 1e-5 on feature 1, dropping PU1 (cost 1) adds only 1e-5 of
+    # weighted shortfall, so any pass-2 cap looser than 35 * (1 + 2.9e-7) lets cost win
+    # and returns [False, False]; the spec's rel_tol = abs_tol = 1e-9 keeps PU1.
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({
+        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [1e-5, 7.0],
+    })
+    pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
+    tight = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pvf,
+        parameters={"COSTBUDGET": 1.0, "BLM": 0.0},
+    )
+    sol = MIPSolver(objective="min_penalties").solve(tight, ONE)[0]
+    assert sol.selected.tolist() == [True, False]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(35.0, abs=1e-9)
 ```
 
 The v0.38 integral-data guard is `test_core_min_penalties_integral_selection_unchanged` in the golden file.
@@ -1573,7 +1596,18 @@ def test_min_set_metadata_and_alias() -> None:
     assert ZoneMIPSolver(objective="max_n_targets_met").objective == "max_features"
     with pytest.raises(ValueError, match="objective"):
         ZoneMIPSolver(objective="min_penalties")
+
+
+def test_zone_target_term_uses_misslevel() -> None:
+    # Zone target 15 at MISSLEVEL 0.5 -> R = 7.5: one PU in zone 2 (amount 10, cost 1)
+    # meets it. Without the MISSLEVEL divisor R = 15 and nothing is met under budget 1.
+    p = make_anchor_problem(misslevel=0.5)
+    p = _with_budget(p.copy_with(zone_targets=p.zone_targets.assign(target=15.0)), 1)
+    s = ZoneMIPSolver(objective="max_features").solve(p, ONE)[0]
+    assert s.metadata["mip_objective_value"] == pytest.approx(1.0)
 ```
+
+`test_zone_target_term_uses_misslevel` (M43) is the only test that reaches the zone-target `TargetTerm` with MISSLEVEL != 1. After Step 3, confirm it goes RED when `* misslevel` is temporarily dropped from the zone term in `_zone_target_terms`, then restore it.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1783,7 +1817,7 @@ Expected: all pass, including `test_zone_min_set_models_unchanged`.
 
 ```bash
 ruff check src/pymarxan/zones/ tests/pymarxan/zones/test_zone_mip_objectives.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/zones/mip_solver.py src/pymarxan/zones/diagnostics.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/zones/mip_solver.py src/pymarxan/zones/diagnostics.py
 git add src/pymarxan/zones/mip_solver.py src/pymarxan/zones/diagnostics.py tests/pymarxan/zones/test_zone_mip_objectives.py CHANGELOG.md
 git commit -m "feat(stage1): ZoneMIPSolver budgeted objectives, build_model, budget-floor message
 
@@ -2091,7 +2125,7 @@ Expected: all pass. `test_zone_golden_v037.py` must stay green, which confirms t
 
 ```bash
 ruff check src/pymarxan/zones/model.py tests/pymarxan/zones/test_mandatory_allocation.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/zones/model.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/zones/model.py
 git add src/pymarxan/zones/model.py tests/pymarxan/zones/test_mandatory_allocation.py CHANGELOG.md
 git commit -m "feat(stage1): MANDATORYALLOCATION via pu_zone_rules
 
@@ -2815,7 +2849,7 @@ When a check fires on a fixture it was not meant for, read the message and fix t
 
 ```bash
 ruff check src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py tests/pymarxan/solvers/test_presolve.py
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py
 git add src/pymarxan/solvers/presolve.py src/pymarxan/solvers/__init__.py src/pymarxan/__init__.py src/pymarxan/solvers/mip_solver.py src/pymarxan/zones/mip_solver.py tests/pymarxan/solvers/test_presolve.py CHANGELOG.md
 git commit -m "feat(stage1): presolve_check, solver presolve flag and model scan
 
@@ -2952,7 +2986,7 @@ Expected: pass.
 
 ```bash
 ruff check src/pymarxan/objectives/__init__.py tests/pymarxan/objectives/
-/home/razinka/marxan/.venv/bin/mypy src/pymarxan/objectives/__init__.py --ignore-missing-imports
+/home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/objectives/__init__.py
 git add src/pymarxan/objectives/__init__.py src/pymarxan_shiny/modules/solver_config/objective_selector.py tests/pymarxan/objectives/ CHANGELOG.md
 git commit -m "chore(stage1): deprecate pymarxan.objectives
 
