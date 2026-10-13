@@ -12,7 +12,7 @@
 
 **Tech Stack:** Python 3.12, numpy, pandas, PuLP 3.3 (CBC only in the `shiny` env; HiGHS is not installed), pytest.
 
-**Spec:** `docs/plans/2026-10-11-stage1-zone-mip-parity-design.md` (rev 3). Review: `docs/plans/2026-10-11-stage1-zone-mip-parity-review.md`, which has the first pass and the second pass S1–S9.
+**Spec:** `docs/plans/2026-10-11-stage1-zone-mip-parity-design.md` (rev 3). Review: `docs/plans/2026-10-11-stage1-zone-mip-parity-review.md`, which has the first pass and the second pass S1–S9. Spec D6's "core `min_penalties` is unchanged" predates S2; §1 and the review's S2 disposition (two-pass lexicographic, Task 6) govern.
 
 ## Global Constraints
 
@@ -41,6 +41,7 @@
 - **Metadata.** Both MIPs record `metadata["mip_objective_value"]` (natural sign: a count for `max_*`) and `metadata["shortfall"]`. The zone MIP also records `metadata["objective"]` (the canonical name).
 - **Commits.** Messages reference `(stage1)` and end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - **Benches.** Bench assertions are comparative, never absolute wall-clock.
+- **CHANGELOG.** One `### Added`, `### Changed`, `### Deprecated` and `### Fixed` header each under `## [Unreleased]`. A header is created once, by the first task that needs it (Task 3 `### Fixed`; Task 5 `### Added` and `### Changed`; Task 11 `### Deprecated`); every later task appends its bullets under the existing header its CHANGELOG step names, never a second copy. The Task 8, 9 and 10 bullets go under `### Added`.
 
 ## Review Focus
 
@@ -77,7 +78,7 @@
 | `tests/pymarxan/solvers/test_presolve.py` | Presolve | Create |
 | `tests/pymarxan/zones/test_zone_mip_random_oracle.py` | Random-instance enumeration oracle | Create |
 | `tests/pymarxan/objectives/test_objectives.py` | Silence deprecation on import | Modify |
-| `CHANGELOG.md`, `docs/TUTORIAL.md`, `docs/VALIDATION.md`, `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` | Docs | Modify |
+| `CHANGELOG.md`, `docs/TUTORIAL.md`, `docs/VALIDATION.md`, `docs/USER_MANUAL.md`, `README.md`, `.github/copilot-instructions.md`, `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` | Docs | Modify |
 
 ---
 
@@ -146,7 +147,8 @@ def canonical_model(model: pulp.LpProblem) -> dict[str, Any]:
         "constraints": cons,
         "variables": sorted([v.name, v.cat, v.lowBound, v.upBound] for v in model.variables()),
     }
-    return json.loads(json.dumps(out))
+    canon: dict[str, Any] = json.loads(json.dumps(out))  # typed: mypy warn_return_any
+    return canon
 
 
 @contextmanager
@@ -305,10 +307,10 @@ if __name__ == "__main__":
 
 ```bash
 PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python tests/pymarxan/solvers/test_stage1_golden_v038.py
-python -c "import json;d=json.load(open('tests/data/golden/stage1_v038.json'));print(d['core_mls_abs_relabs_selected'], d['core_min_penalties_simple_selected'])"
+/opt/micromamba/envs/shiny/bin/python -c "import json;d=json.load(open('tests/data/golden/stage1_v038.json'));print(d['core_mls_abs_relabs_selected'], d['core_min_penalties_simple_selected'])"
 ```
 
-Expected: `[1, 0, 0]`, followed by a 6-element 0/1 list. Check `git status`: `src/` must be clean, since this records v0.38.
+Expected: `[1, 0, 0] [0, 1, 0, 1, 0, 1]` (the second list is the {2, 4, 6} anchor reserve over PU ids 1..6; there is no bare `python` on this machine). Check `git status`: `src/` must be clean, since this records v0.38.
 
 - [ ] **Step 5: Run the checker**
 
@@ -479,7 +481,8 @@ def test_solve_lexicographic_beats_small_big_m() -> None:
     m += s >= 0.01 - 0.01 * x1, "short"
     status = solve_lexicographic(m, pulp.lpSum([s]), 100 * x1 + 1 * x2, CBC)
     assert pulp.LpStatus[status] == "Optimal"
-    assert (x1.varValue, x2.varValue, s.varValue) == (1.0, 0.0, 0.0)
+    assert (x1.varValue, x2.varValue) == (1.0, 0.0)
+    assert s.varValue == pytest.approx(0.0, abs=1e-9)  # free in [0, 1e-9] under the cap
     assert "lex_primary_cap" in m.constraints
 
 
@@ -837,7 +840,15 @@ def _core_spf(problem: ConservationProblem) -> dict[int, float]:
                     feat_met[fid].upBound = 0
 ```
 
-4. Line 573: `has_values = any(pulp.value(x[pid]) is not None for pid in pu_ids)`. Extraction at :579 already reads `None` as 0. Comment: `# A PU in no constraint and with zero cost never enters the model (value None): read as 0 (S9).`
+4. Line 573 becomes (the comment is split in two so the 8-space indent stays under 99 columns):
+
+```python
+        # A PU in no constraint and with zero cost never enters the model (value None):
+        # read as 0 (S9).
+        has_values = any(pulp.value(x[pid]) is not None for pid in pu_ids)
+```
+
+   Extraction at :579 already reads `None` as 0.
 
 5. Add the metadata stub described in Step 1.
 
@@ -852,7 +863,7 @@ Expected:
 
 - [ ] **Step 5: CHANGELOG and commit**
 
-Under `## [Unreleased]` → `### Fixed`:
+Under `## [Unreleased]` create the `### Fixed` header (the first CHANGELOG step of the plan; see the Global Constraints CHANGELOG rule):
 
 ```markdown
 - `MIPSolver` returned no solution when a zero-cost planning unit held no features (its
@@ -1036,7 +1047,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Produces:
   - `MIPSolver(objective=..., shortfall="relative", ...)`, which stores `self.objective` (canonical) and `self.shortfall`.
   - `_core_amount_exprs(problem, x, prob_map_m2) -> dict[int, pulp.LpAffineExpression]`: features with rows only, the same expressions as the target loop.
-  - `_core_target_terms(problem, x, prob_map_m2) -> list[TargetTerm]`: one per feature with target > 0, with key `f"f{fid}"`, `required = target × MISSLEVEL` and weight from `_core_spf`.
+  - `_core_target_terms(problem, x, prob_map_m2, exprs=None) -> list[TargetTerm]`: one per feature with target > 0, with key `f"f{fid}"`, `required = target × MISSLEVEL` and weight from `_core_spf`.
   - `MIP_OBJECTIVES = ("min_set", "max_features", "max_weighted_features", "min_shortfall", "min_largest_shortfall", "min_penalties")`.
 
 - [ ] **Step 1: Write the failing tests** (append the test functions; add `from tests.pymarxan.solvers.test_stage1_golden_v038 import make_relabs_problem` to the header's `tests.` import group, after the `lp_canon` line)
@@ -1102,6 +1113,7 @@ def test_relative_misslevel_divisor(misslevel: float) -> None:
     p = p.copy_with(parameters={**p.parameters, "MISSLEVEL": misslevel})
     sol = MIPSolver(objective="min_largest_shortfall").solve(p, ONE)[0]
     if misslevel == 0.0:
+        assert sol.metadata["shortfall"] == "relative"  # written by Step 3 only: RED now
         assert sol.metadata["mip_objective_value"] == pytest.approx(0.0)  # every R <= 0 skipped
     else:
         # R_a = 50, R_b = 5: PU3 -> a 20/50 = 0.4, b 0 -> 0.4; PU1 -> b 5/5 = 1.0
@@ -1121,7 +1133,7 @@ def test_alias_and_bad_names() -> None:
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_mip_stage1.py -v`
 
-Expected: `TypeError: ... unexpected keyword argument 'shortfall'` and similar.
+Expected: all 8 new cases fail (7 tests; `test_relative_misslevel_divisor` has two): `TypeError: ... unexpected keyword argument 'shortfall'`, `ValueError: objective must be one of (...)`, `KeyError: 'shortfall'`, and selection / value assertion errors. Without the `metadata["shortfall"]` assertion the `[0.0]` case would already pass on v0.38 (the absolute minimax over zero targets is 0.0); keep that case, since once relative shortfall exists it guards that *R* ≤ 0 terms stay skipped.
 
 - [ ] **Step 3: Implement**
 
@@ -1156,9 +1168,13 @@ def _core_target_terms(
     problem: ConservationProblem,
     x: dict[int, pulp.LpVariable],
     prob_map_m2: dict[int, float],
+    exprs: dict[int, pulp.LpAffineExpression] | None = None,
 ) -> list[TargetTerm]:
-    """One term per feature with target > 0; ghosts get lpSum([]) (spec §1)."""
-    exprs = _core_amount_exprs(problem, x, prob_map_m2)
+    """One term per feature with target > 0; ghosts get lpSum([]) (spec §1).
+
+    ``exprs`` is the ``_core_amount_exprs`` map when the caller has already built it.
+    """
+    exprs = _core_amount_exprs(problem, x, prob_map_m2) if exprs is None else exprs
     spf = _core_spf(problem)
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     terms: list[TargetTerm] = []
@@ -1177,7 +1193,7 @@ def _core_target_terms(
 
    The `groupby("species")` order is sorted by key. That does not matter for the expressions, whose term order is the row order within each group, as today.
 
-3. In `_build`, move the `prob_map_m2` construction above the objective selection. Then route the new and relative objectives through the builders:
+3. In `_build`, move the `prob_map_m2` construction above the objective selection and compute `amount_exprs = _core_amount_exprs(problem, x, prob_map_m2)` once, directly after it; the target loop (`amount_expr = amount_exprs[fid]`) and the builders share that map, so no path builds the expressions twice. Then route the new and relative objectives through the builders:
 
 ```python
         builder_path = self.objective == "min_shortfall" or (
@@ -1191,7 +1207,8 @@ def _core_target_terms(
                     "(problem.parameters['COSTBUDGET'] = ...); without a budget every "
                     "shortfall is 0 by selecting all planning units."
                 )
-            ctx = ObjectiveContext(model, cost_expr, _core_target_terms(problem, x, prob_map_m2))
+            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
+            ctx = ObjectiveContext(model, cost_expr, terms)
             term = BUILDERS[self.objective](ctx, self.shortfall)
             set_objective(model, term)
             model += cost_expr <= float(cost_budget), "cost_budget"
@@ -1202,15 +1219,32 @@ def _core_target_terms(
 
 4. Metadata: add `"shortfall": self.shortfall`. `"mip_objective_value"` comes from `built.objective_expr`, and `_BuiltModel` gets `objective_expr = term.expr` on the builder path.
 
-5. Docstrings: class docstring objective list; `min_largest_shortfall`: "relative (shortfall / (target × MISSLEVEL)) by default, as prioritizr; `shortfall='absolute'` is the v0.38 behaviour". Note that a ghost feature pins the relative minimax at 1.0 (`presolve_check` P5 flags it).
+5. Docstrings: the `MIPSolver` class docstring has no objective list today (it documents `min_set` and `mip_chance_strategy` only); append this before its closing quotes:
+
+```
+    ``objective`` selects the formulation (Stage 1): ``"min_set"`` (default, above),
+    ``"max_features"`` / ``"max_weighted_features"`` (count or SPF-weighted count of targets
+    met under ``COSTBUDGET``; ``"max_n_targets_met"`` is an accepted alias of
+    ``"max_features"``), ``"min_shortfall"`` (Σ SPF·shortfall under ``COSTBUDGET``),
+    ``"min_largest_shortfall"`` (minimax shortfall under ``COSTBUDGET``) and
+    ``"min_penalties"`` (Σ SPF·shortfall first, cost second).
+
+    ``shortfall`` sets the units of the two shortfall objectives: ``"relative"`` (default,
+    shortfall / (target × MISSLEVEL), as prioritizr) or ``"absolute"`` (the v0.38 behaviour
+    of ``min_largest_shortfall``). In relative units a feature with a target but no
+    ``pu_vs_features`` rows has full shortfall and pins the minimax at 1.0
+    (``presolve_check`` P5 flags it).
+```
 
 - [ ] **Step 4: Run the tests**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_tutorial_examples.py -q`
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_tutorial_examples.py tests/test_examples.py -q`
 
-Expected: all pass, **including `test_core_absolute_min_largest_shortfall_unchanged`, which is now green**.
+Expected: all pass, **including `test_core_absolute_min_largest_shortfall_unchanged`, which is now green**; `tests/test_examples.py` keeps the 35.0 anchor.
 
 - [ ] **Step 5: CHANGELOG and commit**
+
+Create `### Added` and `### Changed` above the `### Fixed` header Task 3 created (later tasks append under them):
 
 ```markdown
 ### Added
@@ -1302,7 +1336,7 @@ The v0.38 integral-data guard is `test_core_min_penalties_integral_selection_unc
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_mip_stage1.py -k min_penalties -v`
 
-Expected: FAIL. The first test gets `[False, False]` (the v0.38 big-M result); the build_model test fails on the variable names.
+Expected: 3 failed, 1 passed. `test_min_penalties_lexicographic_on_fractional_data` gets `[False, False]` (the v0.38 big-M result); `test_min_penalties_build_model_is_pass1` fails on the variable names (`{'slack_1', 'x_1', 'x_2'} != {'s_f1'}`); `test_min_penalties_objective_is_spf_weighted_and_cap_is_tight` fails on the objective value (v0.38 gives the ghost a free slack, so it is not 35.0). `test_min_penalties_cost_is_secondary` already passes (big-M is exact on integral data) and stays as the pass-2 cost-tiebreak guard.
 
 - [ ] **Step 3: Implement**
 
@@ -1314,7 +1348,8 @@ Replace the `min_penalties` branch in `_build`:
             # optimum (solve_lexicographic). v0.38's big-M (Σ cost + 1) only dominated when
             # SPF·Δshortfall >= 1, so fractional data could trade targets for cost. Not
             # prioritizr's add_min_penalties_objective (penalty-only, hard targets).
-            ctx = ObjectiveContext(model, cost_expr, _core_target_terms(problem, x, prob_map_m2))
+            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
+            ctx = ObjectiveContext(model, cost_expr, terms)
             primary = pulp.lpSum(t.weight * ctx.slack(t) for t in ctx.terms)
             model.setObjective(primary)  # build_model exports the pass-1 model
             lex = (primary, cost_expr)
@@ -1322,7 +1357,7 @@ Replace the `min_penalties` branch in `_build`:
 ```
 
 Then:
-- Remove the `elif self.objective == "min_penalties":` arm from the target loop; the builder's slack constraints replace it. The `builder_path` guard becomes `builder_path or self.objective == "min_penalties"`.
+- Remove the `elif self.objective == "min_penalties":` arm from the target loop; the builder's slack constraints replace it. In the target loop the guard becomes `if not (builder_path or self.objective == "min_penalties"):`. `builder_path` itself is unchanged (it still selects the `if builder_path:` budget branch), so `min_penalties` still needs no COSTBUDGET.
 - Pass `lex=lex` to `_BuiltModel`, with `lex = None` initialised at the top.
 - In `solve()`:
 
@@ -1338,18 +1373,20 @@ and use `status` in place of `model.status` in the status check and the metadata
 
 - [ ] **Step 4: Run the tests**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_tutorial_examples.py -q`
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/ tests/test_tutorial_examples.py tests/test_examples.py -q`
 
-Expected: all pass, including `test_core_min_penalties_integral_selection_unchanged` and the existing `test_min_penalties_*` in `test_mip_objectives.py`.
+Expected: all pass, including `test_core_min_penalties_integral_selection_unchanged` and the existing `test_min_penalties_*` in `test_mip_objectives.py`; `tests/test_examples.py` keeps the 35.0 anchor.
 
 - [ ] **Step 5: CHANGELOG and commit**
 
-Under `### Fixed`:
+Append to the existing `### Fixed` list (Task 3 created the header):
 
 ```markdown
 - `MIPSolver(objective="min_penalties")` could trade target shortfall for cost on fractional
   data (its big-M only dominated when SPF·Δshortfall ≥ 1); it is now an exact two-pass
-  lexicographic solve. `build_model` / `write_problem` export the pass-1 model. (stage1, S2)
+  lexicographic solve. A feature with a target but no `pu_vs_features` rows now carries its
+  full SPF-weighted shortfall (v0.38 gave it a free slack). `build_model` / `write_problem`
+  export the pass-1 model. (stage1, S2)
 ```
 
 ```bash
@@ -1508,20 +1545,23 @@ def test_weighted_differs_from_count() -> None:
     assert wtd.metadata["mip_objective_value"] == pytest.approx(5.0)
 
 
-def test_budget_required() -> None:
-    with pytest.raises(ValueError, match="min_shortfall.*COSTBUDGET"):
-        ZoneMIPSolver(objective="min_shortfall").solve(make_anchor_problem(), ONE)
+@pytest.mark.parametrize("objective", BUDGETED)
+def test_budget_required(objective: str) -> None:
+    with pytest.raises(ValueError, match=f"{objective}.*COSTBUDGET"):
+        ZoneMIPSolver(objective=objective).solve(make_anchor_problem(), ONE)
 
 
 def test_boundary_ignored_warning_once() -> None:
     p = _with_budget(make_anchor_problem(blm=2.0), 7)
     p = p.copy_with(boundary=pd.DataFrame({"id1": [1], "id2": [2], "boundary": [1.0]}))
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        ZoneMIPSolver(objective="min_shortfall").solve(p, ONE)
-    hits = [x for x in w if "ignores boundary penalties" in str(x.message)]
-    assert len(hits) == 1
-    assert hits[0].filename == __file__
+    for call in (ZoneMIPSolver(objective="min_shortfall").solve,
+                 ZoneMIPSolver(objective="min_shortfall").build_model):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            call(p)
+        hits = [x for x in w if "ignores boundary penalties" in str(x.message)]
+        assert len(hits) == 1
+        assert hits[0].filename == __file__
 
 
 def test_budget_floor_message() -> None:
@@ -1587,6 +1627,17 @@ def test_budgeted_missing_zone_cost_is_free() -> None:
     assert s.metadata["mip_objective_value"] == pytest.approx(2.0)
 
 
+def test_min_forced_cost_missing_pair_is_free() -> None:
+    # PU1 and PU2 forced into zone 1; the (PU1, zone 1) cost row is missing -> 0, PU2 costs 6.
+    p = make_anchor_problem()
+    zc = p.zone_costs
+    p = p.copy_with(
+        zone_costs=zc[~((zc["pu"] == 1) & (zc["zone"] == 1))],
+        planning_units=p.planning_units.assign(status=[2, 2, 0]),
+    )
+    assert min_forced_cost(p) == pytest.approx(6.0)  # a strict lookup raises KeyError
+
+
 def test_budgeted_no_terms() -> None:
     p = make_anchor_problem()
     p = _with_budget(
@@ -1642,13 +1693,13 @@ def test_zone_shortfall_absolute_differs_and_is_recorded() -> None:
     assert ab.metadata["mip_objective_value"] == pytest.approx(11.0)
 ```
 
-`test_zone_target_term_uses_misslevel` (M43) is the only test that reaches the zone-target `TargetTerm` with MISSLEVEL != 1. After Step 3, confirm it goes RED when `* misslevel` is temporarily dropped from the zone term in `_zone_target_terms`, then restore it.
+`test_zone_target_term_uses_misslevel` (M43) is the only test that reaches the zone-target `TargetTerm` with MISSLEVEL != 1. After Step 4 (which writes `_zone_target_terms`), confirm it goes RED when `* misslevel` is temporarily dropped from the zone term in `_zone_target_terms` (exactly one failure, `test_zone_target_term_uses_misslevel`), then restore it.
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_zone_mip_objectives.py -q`
 
-Expected: `TypeError: ... unexpected keyword argument 'objective'`, and an ImportError for `min_forced_cost`.
+Expected: the file fails at collection with `ImportError: cannot import name 'min_forced_cost' from 'pymarxan.zones.diagnostics'` (1 error during collection, 0 tests run). After Step 3 adds the diagnostics helpers and before Step 4, re-run: the file collects and every test that constructs `ZoneMIPSolver(objective=...)` fails with `TypeError: ... unexpected keyword argument 'objective'` (`test_min_set_metadata_and_alias` fails with `KeyError: 'objective'` instead, and `test_min_forced_cost_missing_pair_is_free` already passes, since it needs only the helper).
 
 - [ ] **Step 3: Implement the diagnostics helpers** (`zones/diagnostics.py`)
 
@@ -1689,7 +1740,8 @@ def min_forced_cost(problem: ZonalProblem) -> float:
 1. Imports:
    - `from dataclasses import dataclass`
    - from `pymarxan.solvers._mip_objectives`: `BUILDERS`, `NO_SOLUTION_STATUSES`, `ObjectiveContext`, `TargetTerm`, `resolve_objective`, `set_objective`, `validate_shortfall`
-   - `_zone_cost_lookup` and `min_forced_cost` from diagnostics.
+   - `_fmt`, `_zone_cost_lookup` and `min_forced_cost` from `pymarxan.zones.diagnostics` (`_fmt` formats the budget message in item 8)
+   - `from pymarxan.models.problem import ConservationProblem`, used only by the `_check` annotation in item 6 (`build_model` / `solve` keep `problem: ZonalProblem`; the module previously imported only `ZonalProblem`, so without this ruff F821 and mypy fail at the Step 6 gate)
 
 2. Module constant `ZONE_MIP_OBJECTIVES` (see Interfaces) and the dataclass:
 
@@ -1708,9 +1760,27 @@ class _BuiltZoneModel:
 
 4. Overall expressions. Refactor `_add_overall_target_constraints` into:
    - `_overall_achieved_exprs(problem, x, zone_ids) -> dict[int, LpAffineExpression]`, which keeps the loop body and the `t <= 0: continue` skip, and returns `{fid: pulp.lpSum(terms)}`;
-   - `_add_overall_target_constraints`, which iterates that dict in the same order, adding `exprs[fid] >= t * misslevel, f"overall_target_{fid}"`.
+   - `_add_overall_target_constraints`, which iterates that dict in the same order:
 
-   Keep `t` from the features frame, so the constraint order and content are identical; the golden checks this.
+```python
+def _add_overall_target_constraints(
+    problem: ZonalProblem,
+    x: dict[tuple[int, int], pulp.LpVariable],
+    zone_ids: list[int],
+    model: pulp.LpProblem,
+) -> None:
+    """Hard constraints ``_overall_achieved_exprs[f] >= target × MISSLEVEL`` (features order)."""
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    targets = dict(zip(
+        (int(f) for f in problem.features["id"].values),
+        problem.features["target"].values.astype(float),
+        strict=True,
+    ))
+    for fid, expr in _overall_achieved_exprs(problem, x, zone_ids).items():
+        model += (expr >= targets[fid] * misslevel, f"overall_target_{fid}")
+```
+
+   `targets[fid]` is the same float as the v0.38 `t` (the loop that built the terms no longer has `t` in scope), so constraint names, order and rhs are unchanged; the golden checks this.
 
 5. Terms:
 
@@ -1760,7 +1830,7 @@ def _zone_target_terms(
         blm = float(problem.parameters.get("BLM", 0.0))
         zbc = problem.zone_boundary_costs
         has_zbc = zbc is not None and bool((zbc["cost"].astype(float) != 0).any())
-        if (blm > 0 and problem.boundary is not None) or has_zbc:
+        if problem.boundary is not None and (blm > 0 or has_zbc):
             warnings.warn(
                 f"ZoneMIPSolver: objective {self.objective!r} ignores boundary penalties "
                 "(BLM / zone boundary costs); prioritizr applies them — planned follow-up",
@@ -1776,6 +1846,8 @@ def _zone_target_terms(
         self._warn_boundary_ignored(problem)
         return self._build(problem, config or SolverConfig()).model
 ```
+
+   The warning needs a boundary table: without one neither BLM nor zone boundary costs enter any objective (`_build_zone_boundary_expr` / `_build_standard_boundary_expr` add no terms), so there is nothing to ignore. Spec §1 keys it on BLM / zone boundary costs alone; see the plan-level deviations.
 
    `solve()` starts with the same three preamble lines (`_check`, `warn_zone_input_issues`, `_warn_boundary_ignored`), then `built = self._build(problem, config)`, then the existing solve, status and extraction code reading from `built`.
    - The status check uses `NO_SOLUTION_STATUSES`.
@@ -1808,7 +1880,7 @@ def _zone_target_terms(
 
    The min_set path also switches its inline `zc_lookup` loop (lines 139–144) to `_zone_cost_lookup(problem)`. The dict is the same, so the canonical model is unchanged.
 
-8. `def _warn_no_solution(problem: ZonalProblem, status: int, objective: str = "min_set") -> None:` — the `objective` parameter defaults to `"min_set"` so the two-argument calls in `tests/pymarxan/zones/test_zone_diagnostics.py:167, :177, :189` keep their v0.38 path (the budget branch runs only when `objective != "min_set"`; the `diagnose_zone_infeasibility` monkeypatch at :186 is unaffected). Add the budget branch first; otherwise the existing body is unchanged.
+8. `def _warn_no_solution(problem: ZonalProblem, status: int, objective: str = "min_set") -> None:` — the `objective` parameter defaults to `"min_set"` so the two-argument calls in `tests/pymarxan/zones/test_zone_diagnostics.py:167, :177, :189` keep their v0.38 path (the budget branch runs only when `objective != "min_set"`; the `diagnose_zone_infeasibility` monkeypatch at :186 is unaffected). Insert the budget branch directly after the existing `name = pulp.LpStatus.get(status, str(status))` line (its else-message uses `name`) and before `if status == pulp.constants.LpStatusInfeasible:`; otherwise the existing body is unchanged.
 
 ```python
     if objective != "min_set" and status == pulp.constants.LpStatusInfeasible:
@@ -1825,7 +1897,7 @@ def _zone_target_terms(
         return
 ```
 
-   Import `_fmt` from diagnostics; it is already defined there. Otherwise the existing body is unchanged.
+   `_fmt` comes from the item 1 imports (it is already defined in diagnostics).
 
 9. Class docstring: list the objectives, state the relative shortfall, say budgeted objectives drop hard targets and boundary terms, and give the prioritizr name mapping:
    - `max_features` = `max_n_targets_met`;
@@ -1839,8 +1911,9 @@ Expected: all pass, including `test_zone_min_set_models_unchanged`.
 
 - [ ] **Step 6: CHANGELOG and commit**
 
+Append under the existing `### Added` header (Task 5 created it):
+
 ```markdown
-### Added
 - `ZoneMIPSolver(objective=...)`: `max_features` (alias `max_n_targets_met`),
   `max_weighted_features`, `min_shortfall`, `min_largest_shortfall` under `COSTBUDGET` — each
   zone target and each overall target is its own term (prioritizr zones); relative shortfall
@@ -1948,7 +2021,7 @@ def test_accessor_rejects(value: object) -> None:
 def test_rules_free_pus_must_be_assigned() -> None:
     rules = _on(_six_pu()).pu_zone_rules()
     assert [r.may_be_unassigned for r in rules] == [False, False, False, False, True, False]
-    assert rules[5].start == 1  # status 1 start unchanged
+    assert [r.start for r in rules] == [None, None, None, None, 0, 1]  # starts unchanged
 
 
 def test_mip_optimum_matches_enumeration() -> None:
@@ -1968,7 +2041,8 @@ def test_every_solver_respects_rules() -> None:
         ZoneIISolver(),  # ITIMPTYPE is read from the parameters, set per case below
     ]
     for solver in solvers:
-        cases = [2, 3] if isinstance(solver, ZoneIISolver) else [None]
+        # ITIMPTYPE 1 is the removal pass: it must not unassign a must-assign PU (Testing 8)
+        cases = [1, 2, 3] if isinstance(solver, ZoneIISolver) else [None]
         for itimp in cases:
             q = p
             if itimp is not None:
@@ -2046,6 +2120,9 @@ def test_mandatory_non_contiguous_zone_ids() -> None:
     sol = ZoneMIPSolver(objective="max_features").solve(p, ONE)[0]
     assert set(int(z) for z in sol.zone_assignment) <= {5, 9}
     assert 0 not in set(int(z) for z in sol.zone_assignment)
+    min_set = ZoneMIPSolver().solve(p, ONE)[0]  # the min_set cost lookup must not re-index
+    assert tuple(int(z) for z in min_set.zone_assignment) == (5, 9, 9)
+    assert min_set.cost == pytest.approx(7.0)  # and min_set ignores COSTBUDGET
     tight = p.copy_with(parameters={**p.parameters, "COSTBUDGET": 2.0})
     with pytest.warns(UserWarning, match=r"at least 3 > COSTBUDGET 2"):
         ZoneMIPSolver(objective="max_features").solve(tight, ONE)
@@ -2063,13 +2140,13 @@ def test_off_matches_enumerated_unassigned_optimum() -> None:
     assert len(list(itertools.product([0, 1, 2], repeat=3))) == 27
 ```
 
-`write_input_dat(params, path)` and the module-level `rule_violations(rules, assignment)` were verified while planning. The expected 10.0 at `(1, 2, 2, 2, 0, 2)` was enumerated over {1,2}^5 x {0} during plan review (spec Testing 8 quoted 10.5 for a different zone-2 cost; PU5 is status 3 and stays unassigned). If the MIP disagrees, stop and report.
+`write_input_dat(params, path)` and the module-level `rule_violations(rules, assignment)` were verified while planning. The expected 10.0 at `(1, 2, 2, 2, 0, 2)` was enumerated over {1,2}^5 x {0} during plan review (spec Testing 8 quoted 10.5 for a different zone-2 cost; PU5 is status 3 and stays unassigned). If the MIP disagrees, stop and report. At ITIMPTYPE 1 (the removal pass) II returns `(1, 1, 1, 1, 0, 1)` with the parameter on; off, v0.38 gives `(0, 0, 1, 0, 0, 0)`, so the case discriminates (the removal pass is tempted: dropping PU4 or PU6 lowers the zone objective, and only `may_be_unassigned` stops it).
 
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/test_mandatory_allocation.py -q`
 
-Expected: `AttributeError: 'ZonalProblem' object has no attribute 'mandatory_allocation'`, among others.
+Expected: 15 failed, 2 passed (after Task 7; on bare v0.38 the file does not collect, `ImportError` on `min_forced_cost`): six `AttributeError: 'ZonalProblem' object has no attribute 'mandatory_allocation'`, the rest AssertionErrors. `test_input_dat_round_trip` and `test_off_matches_enumerated_unassigned_optimum` already pass: they pin the parameter-off path Task 8 must not change.
 
 - [ ] **Step 3: Implement** (`zones/model.py`)
 
@@ -2077,11 +2154,15 @@ Add a module helper next to `_known_id`:
 
 ```python
 def _mandatory_value(raw: object) -> int | None:
-    """0 or 1 for an accepted MANDATORYALLOCATION value (int/float 0 or 1), else None."""
-    if isinstance(raw, bool | str) or not isinstance(raw, int | float):
+    """0 or 1 for an accepted MANDATORYALLOCATION value (int/float 0 or 1, numpy included)."""
+    if isinstance(raw, bool | str) or not isinstance(
+        raw, int | float | np.integer | np.floating
+    ):
         return None
     return int(raw) if raw in (0, 1) else None
 ```
+
+`np` is already imported in `zones/model.py`. `np.int64(1)` must be accepted like `np.float64(1.0)` (which is a `float` subclass; `np.int64` is not an `int` subclass), as the sibling accessor `zone_target_contrib` already does; `np.bool_`, `bool` and `str` stay rejected.
 
 Accessor, next to `zone_target_contrib`:
 
@@ -2107,7 +2188,7 @@ In `pu_zone_rules`, read `mandatory = self.mandatory_allocation()` before the lo
 
 `every` is empty only with zero zones, and the guard keeps the assertion safe.
 
-At the top of `_pu_lock_issue_list`, before the early return:
+Replace `zones/model.py:295-297` (the `out: list[tuple[str, bool]] = []` initialiser and the two-line `if self.pu_locks is None and self.pu_zones is None: return out` early return) with the block below; its first and last statements are those existing lines, not new ones, and nothing further down changes:
 
 ```python
         out: list[tuple[str, bool]] = []
@@ -2132,8 +2213,6 @@ At the top of `_pu_lock_issue_list`, before the early return:
             return out
 ```
 
-Remove the old `out = []` line further down.
-
 In `validate()`, after the `zone_target_contrib` check:
 
 ```python
@@ -2151,6 +2230,8 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/zones/ tests/pymarxan
 Expected: all pass. `test_zone_golden_v037.py` must stay green, which confirms the parameter-off path is unchanged.
 
 - [ ] **Step 5: CHANGELOG and commit**
+
+Append under `### Added`:
 
 ```markdown
 - `MANDATORYALLOCATION` (pymarxan key; prioritizr `add_mandatory_allocation_constraints`):
@@ -2275,7 +2356,20 @@ def test_write_problem_exports_the_given_solver_objective(tmp_path: Path) -> Non
     assert _solve_mps(path) == pytest.approx(0.0)
     _, model = pulp.LpProblem.fromMPS(str(path))
     assert "cost_budget" in model.constraints
+
+
+def test_config_no_good_cut_is_exported(tmp_path: Path) -> None:
+    forbid = [0, 1, 0, 1, 0, 1]  # the 35.0 optimum {2, 4, 6}
+    cfg = SolverConfig(num_solutions=1, metadata={"forbidden_selections": [forbid]})
+    path = write_problem(_simple(0.0), tmp_path / "c.mps", config=cfg)
+    _, model = pulp.LpProblem.fromMPS(str(path))
+    assert "nogood_cut_0" in model.constraints
+    assert _solve_mps(path) == pytest.approx(38.0)  # next best: {4, 5, 6}
+    plain = write_problem(_simple(0.0), tmp_path / "d.mps")
+    assert "nogood_cut_0" not in pulp.LpProblem.fromMPS(str(plain))[1].constraints
 ```
+
+The no-good cut survives the MPS round trip and 38.0 is the second-best reserve on `tests/data/simple` at BLM 0 (both executed during plan review).
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -2335,9 +2429,12 @@ def write_problem(
             "ZoneMIPSolver"
         )
     if solver.supports_zones() != zonal:
+        detail = (
+            "a ZonalProblem needs ZoneMIPSolver" if zonal
+            else "ZonalProblem solvers need a ZonalProblem"
+        )
         raise TypeError(
-            f"write_problem: {type(solver).__name__} does not match the problem type "
-            f"({'a ZonalProblem needs ZoneMIPSolver' if zonal else 'ZonalProblem solvers need a ZonalProblem'})"
+            f"write_problem: {type(solver).__name__} does not match the problem type ({detail})"
         )
     model = build(problem, config)
     constant = float(model.objective.constant) if model.objective is not None else 0.0
@@ -2351,15 +2448,17 @@ def write_problem(
     return out
 ```
 
-Wrap the long f-string to 99 columns. Export it from `pymarxan.solvers.__init__`.
+Export it from `pymarxan.solvers.__init__`.
 
 - [ ] **Step 4: Run the tests**
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_write_problem.py -v`
 
-Expected: 7 passed. If `test_zone_round_trip_and_bound_survives` gives 7.0, the MPS writer dropped the `upBound 0` on `x_1_1`; report the finding rather than weakening the assertion.
+Expected: 8 passed. If `test_zone_round_trip_and_bound_survives` gives 7.0, the MPS writer dropped the `upBound 0` on `x_1_1`; report the finding rather than weakening the assertion.
 
 - [ ] **Step 5: CHANGELOG and commit**
+
+Append under `### Added`:
 
 ```markdown
 - `pymarxan.solvers.write_problem(problem, path, solver=None)` — write the MIP model to
@@ -2500,6 +2599,13 @@ def test_zone_checks_use_rules() -> None:
     q = make_anchor_problem().copy_with(
         planning_units=make_anchor_problem().planning_units.assign(status=3))
     assert "P7b" in _codes(presolve_check(q))
+    # P11 ceiling = Σ dearest allowed option per PU (zone 1: 5 + 6 + 7 = 18), not the
+    # cheapest (zone 2: 1 + 1 + 1 = 3).
+    r = make_anchor_problem()
+    at = r.copy_with(parameters={**r.parameters, "COSTBUDGET": 18.0})
+    below = r.copy_with(parameters={**r.parameters, "COSTBUDGET": 17.0})
+    assert "P11" in _codes(presolve_check(at))
+    assert "P11" not in _codes(presolve_check(below))
 
 
 def test_presolve_nan_amount_never_raises() -> None:
@@ -2563,6 +2669,23 @@ def test_model_scan_p10_tiny_relative_target() -> None:
     with pytest.warns(PresolveWarning, match="P10"):
         MIPSolver(objective="min_shortfall", presolve_check=True).solve(p, ONE)
     assert "P10" not in _codes(presolve_check(p))  # data-only function has no model
+
+
+def test_model_scan_p10_tiny_rhs_without_objective_coefficient() -> None:
+    # min_set: no objective coefficient is extreme; the 1e-8 target is only an rhs. Dropping
+    # the rhs visit or the small-value branch in scan_model survives the test above.
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [1e-8], "spf": [1.0]})
+    with pytest.warns(PresolveWarning, match=r"P10.*rhs of target_1"):
+        MIPSolver(presolve_check=True).solve(_core(features=feat), ONE)
+
+
+def test_presolve_check_guards_internal_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(problem: ConservationProblem) -> list[str]:
+        raise RuntimeError("x")
+
+    monkeypatch.setattr("pymarxan.solvers.presolve._core_checks", boom)
+    msgs = presolve_check(_core())
+    assert len(msgs) == 1 and msgs[0].startswith("P0: presolve check failed")
 
 
 @pytest.mark.parametrize("module", [
@@ -2853,16 +2976,30 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module 'pymarxan' has no attribute {name!r}")
 ```
 
-**Solver flag** (both solvers):
-- Add the constructor keyword `presolve_check: bool | str = False` and store `self.presolve_check = _validate_presolve_flag(presolve_check)`.
-- In both `solve` and `build_model`, directly after `_build`:
+**Solver flag** (both solvers, `solvers/mip_solver.py` and `zones/mip_solver.py`):
+- Add the imports exactly as `ruff --fix` groups them (ruff keeps an `as`-aliased name in its own `from` statement, so one combined block trips I001):
 
 ```python
-        messages = presolve_check(problem) + scan_model(built.model) if self.presolve_check else []
-        _emit_presolve(self.presolve_check, messages, self.name())
+from pymarxan.solvers.presolve import (
+    _emit_presolve,
+    _validate_presolve_flag,
+    scan_model,
+)
+from pymarxan.solvers.presolve import (
+    presolve_check as _presolve_data,
+)
 ```
 
-The name `presolve_check` collides with the attribute; import the function as `from pymarxan.solvers.presolve import presolve_check as _presolve_data`.
+  The alias keeps the method body unambiguous next to the `presolve_check=` constructor parameter and the `self.presolve_check` attribute.
+- Add the constructor keyword `presolve_check: bool | str = False` and store `self.presolve_check = _validate_presolve_flag(presolve_check)`.
+- In both `solve` and `build_model`, directly after `_build` (the P10 scan needs the built model, so this is after `_build`, not in the pre-`_build` preamble; see the plan-level deviations):
+
+```python
+        messages = (
+            _presolve_data(problem) + scan_model(built.model) if self.presolve_check else []
+        )
+        _emit_presolve(self.presolve_check, messages, self.name())
+```
 
 In `build_model`, `_build(...)` currently returns `.model` inline. Change it to `built = self._build(...)`, then the two lines above, then `return built.model`.
 
@@ -2876,6 +3013,8 @@ When a check fires on a fixture it was not meant for, read the message and fix t
 
 - [ ] **Step 5: CHANGELOG and commit**
 
+Append under `### Added`:
+
 ```markdown
 - `presolve_check(problem)` (also `pymarxan.presolve_check`) and `presolve_check=True |
   "strict"` on both MIP solvers — data and model-coefficient checks before solving, inspired by
@@ -2883,7 +3022,7 @@ When a check fires on a fixture it was not meant for, read the message and fix t
 ```
 
 ```bash
-ruff check src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py tests/pymarxan/solvers/test_presolve.py
+ruff check src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py src/pymarxan/solvers/mip_solver.py src/pymarxan/zones/mip_solver.py tests/pymarxan/solvers/test_presolve.py
 /home/razinka/marxan/.venv/bin/mypy --ignore-missing-imports src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py
 git add src/pymarxan/solvers/presolve.py src/pymarxan/solvers/__init__.py src/pymarxan/__init__.py src/pymarxan/solvers/mip_solver.py src/pymarxan/zones/mip_solver.py tests/pymarxan/solvers/test_presolve.py CHANGELOG.md
 git commit -m "feat(stage1): presolve_check, solver presolve flag and model scan
@@ -2992,17 +3131,27 @@ __all__ = [
 
 This is a deviation from spec §5, which says `stacklevel=2`. The planning prototype showed that `skip_file_prefixes` attributes the warning to the importer's frame, so Python's default filter shows it; `stacklevel=2` points at importlib instead. `skip_file_prefixes` is Python 3.12+ and pyproject's floor is 3.11 (mypy `python_version = "3.11"`, CI lint/types on 3.11), hence the `sys.version_info` guard: the 3.11 branch keeps the spec's `stacklevel=2`. The `_count(...)` probes pass on either branch because they count by category and message, not filename. The `warnings.warn` call must stay below every module-level import (ruff E402).
 
-In `tests/pymarxan/objectives/test_objectives.py`, wrap the package import:
+In `tests/pymarxan/objectives/test_objectives.py`, the five existing submodule imports (`.base`, `.max_coverage`, `.max_utility`, `.min_shortfall`, `.minset`; importing any submodule runs the package `__init__`, which now warns) all move inside one `catch_warnings` block. The header becomes (nothing else in the file changes):
 
 ```python
 import warnings
 
+import numpy as np
+import pandas as pd
+import pytest
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
-    from pymarxan.objectives import ...  # existing names, unchanged
+    from pymarxan.objectives.base import Objective, ZonalObjective
+    from pymarxan.objectives.max_coverage import MaxCoverageObjective
+    from pymarxan.objectives.max_utility import MaxUtilityObjective
+    from pymarxan.objectives.min_shortfall import MinShortfallObjective
+    from pymarxan.objectives.minset import MinSetObjective
 ```
 
 In the `objective_selector.py` module docstring, add: "The selected objective is stored in `cfg['objective_type']` but no solver reads it yet (known gap; wiring planned in the Shiny follow-ups)."
+
+`make docs` (pdoc imports every module, `pymarxan.objectives` included) prints this DeprecationWarning once during the build; that is noise, not a failure.
 
 - [ ] **Step 4: Run the tests**
 
@@ -3011,6 +3160,8 @@ Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/objectives tests/pyma
 Expected: pass.
 
 - [ ] **Step 5: CHANGELOG and commit**
+
+Create `### Deprecated` between `### Changed` and `### Fixed`:
 
 ```markdown
 ### Deprecated
@@ -3148,6 +3299,8 @@ Expected: 20 passed. It is a new test over code already built, so it passes imme
 - [ ] **Step 3: Update the docs**
 
 1. **`docs/TUTORIAL.md` §5 objective table.**
+   - Change the lead sentence (TUTORIAL.md:151-153, "picks from four formulations ... the other three") to: "`MIPSolver(objective=...)` picks from six formulations (`max_n_targets_met` is an accepted alias of `max_features`). `min_set` is the default Marxan problem; the others lift you out of pure minimum-set."
+   - Add the `"max_weighted_features"` row: "Maximise the SPF-weighted count of feature targets met under a cost cap | `COSTBUDGET`" (on `MIPSolver` since v0.38, never listed).
    - Add the `"min_shortfall"` row: "Minimise SPF-weighted **relative** shortfall | `COSTBUDGET`".
    - Change `"min_largest_shortfall"` to "Minimax over **relative** shortfall (`shortfall="absolute"` for v0.38 behaviour)".
    - Change `"min_penalties"` to "Exact lexicographic: SPF-weighted shortfall first, cost second (not prioritizr's `add_min_penalties_objective`)".
@@ -3165,13 +3318,19 @@ Expected: 20 passed. It is a new test over code already built, so it passes imme
    - ghost features count;
    - a missing zone cost is 0 (prioritizr: NA = forbidden);
    - MANDATORYALLOCATION is a pymarxan key; status 3 wins (prioritizr would be infeasible);
+   - MarZone keeps every PU in one of its zones and its first zone is the do-nothing state: `MANDATORYALLOCATION 1` reproduces MarZone only when the project's zones include that available zone; when pymarxan's zone 0 stands in for it, leave the key at 0 (no AVAILABLEZONE key exists at 85082e3) (spec §2 MarZone note);
    - single-zone problems are allowed (prioritizr refuses);
    - SA never leaves a free PU unassigned even with the parameter off;
    - II at ITIMPTYPE 0/1 only reproduces its seed for must-assign PUs;
    - presolve differs from prioritizr (absolute vs ratio thresholds, opt-in);
    - core `min_penalties` is two-pass.
 
-3. **The roadmap.** Mark Stage 1 shipped (v0.39). Record "remove `pymarxan.objectives` in v0.42" and "wire Shiny `objective_selector`" as follow-ups, and remove "min shortfall already at parity".
+3. **The roadmap.** Mark Stage 1 shipped (v0.39). Record "remove `pymarxan.objectives` in v0.42" and "wire Shiny `objective_selector`" as follow-ups, and remove "min shortfall already at parity". Prepend an "As shipped (v0.39.0)" paragraph to the Stage 1 section so its pre-design Scope text (bullets 2 and 4) does not contradict what shipped: mandatory allocation is the `MANDATORYALLOCATION` parameter honoured via `pu_zone_rules()` (there is no `mandatory_allocation=` kwarg), the presolve flag is `presolve_check=True | "strict"` (not `check=True`), `max_weighted_features` is included, and zone `min_penalties` is deferred.
+
+4. **Deprecation references** (after Task 11 these would still present `objectives/` as a live subpackage):
+   - `README.md:75` -> `│   ├── objectives/        Deprecated (v0.39, removal v0.42): use MIPSolver(objective=...)`.
+   - `.github/copilot-instructions.md:42` -> `| \`objectives/\` | **Deprecated v0.39, removal v0.42** — objectives live on `MIPSolver(objective=...)` / `ZoneMIPSolver(objective=...)` (`solvers/_mip_objectives.py`) |`.
+   - `docs/USER_MANUAL.md:548` -> `| **Objective** | The MIP objective: `min_set` (default), `max_features`, `max_weighted_features`, `min_shortfall`, `min_largest_shortfall`, `min_penalties` (core only); the Shiny selector does not yet drive it |` (only `min_penalties` is core-only; `max_weighted_features` is on both solvers).
 
 - [ ] **Step 4: Run the full gate**
 
@@ -3185,13 +3344,13 @@ Expected:
 - the parity script reports MIP 35.0;
 - `test_zone_golden_v037.py` and `test_stage1_golden_v038.py` are green.
 
-Then run `make bench` once and compare against main. The only expected change is the zone-MIP model build, and `min_set` is unchanged.
+Then run `make bench` once and confirm `tests/benchmarks/bench_zone_pu_restrictions.py` is unchanged against main (it calls `pu_zone_rules()`, which Task 8 touches); no bench exercises either MIP solver, so nothing else is expected to move.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 ruff check tests/pymarxan/zones/test_zone_mip_random_oracle.py
-git add tests/pymarxan/zones/test_zone_mip_random_oracle.py docs/TUTORIAL.md docs/VALIDATION.md docs/plans/2026-10-11-prioritizr-parity-roadmap.md
+git add tests/pymarxan/zones/test_zone_mip_random_oracle.py docs/TUTORIAL.md docs/VALIDATION.md docs/USER_MANUAL.md README.md .github/copilot-instructions.md docs/plans/2026-10-11-prioritizr-parity-roadmap.md
 git commit -m "test(stage1): random-instance zone-MIP oracle; docs for v0.39 objectives
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
@@ -3218,10 +3377,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 | §3 build/solve split; write_problem | 4, 7, 9 |
 | §4 P0–P11, model scan P10, flag, lazy exports, import test | 10 |
 | §5 deprecation | 11 |
-| Testing 1–3, 6, 7 | 7 |
+| Testing 1–3, 6, 7 | 7 (Testing 1's "PU4 variant" is not defined in the spec and is not built; breadth is covered by Task 12's random-instance oracle instead) |
 | Testing 4 (golden) | 1, then re-checked in 4, 7, 8 |
 | Testing 5 | 1, 5 |
-| Testing 8 | 8 |
+| Testing 8 | 8 (incl. the II ITIMPTYPE 1 removal-pass detection case in `test_every_solver_respects_rules`) |
 | Testing 9 | 9; stacklevel: 4 (large-MIP), 8 (ZoneLockWarning), 10 (PresolveWarning, both solvers) |
 | Testing 10, 14 | 10 |
 | Testing 11 (random oracle) | 12 |
@@ -3236,3 +3395,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - The deprecation uses `skip_file_prefixes`, not `stacklevel=2` (executed during planning).
 - `skip_file_prefixes` is Python 3.12+; guarded by `sys.version_info` because pyproject's floor is 3.11 (mypy `python_version = "3.11"`, CI lint/types on 3.11). The 3.11 branch keeps `stacklevel=2`; both `_count(...)` probes pass on either branch since they count by category and message, not filename.
 - P11's ceiling is Σ of the **most expensive** allowed option per PU, not the cheapest. Only that bound means the budget truly cannot bind.
+- Objective names are validated with `resolve_objective` (alias-aware), not `_validate_mip_strategy`; same `ValueError` shape. The lexicographic helper is the public `solve_lexicographic` (spec: `_solve_lexicographic`).
+- P1 messages report counts and values (`P1: 1 negative cost(s): -3`, `P1: amount has 1 non-finite value(s)`) rather than naming each PU / feature; P5 and P6 name the feature.
+- The presolve check runs directly after `_build` (not in the pre-`_build` preamble that spec §3 lists), because the P10 model scan (§4) needs the built model. A `_build` exception (missing COSTBUDGET, strategy gating) therefore preempts `presolve_check=True | "strict"`.
+- The boundary-ignored warning requires a boundary table: without one neither BLM nor zone boundary costs enter any objective, so there is nothing to ignore (spec §1 keys the warning on BLM / zone boundary costs alone).
