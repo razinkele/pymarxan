@@ -48,7 +48,7 @@
 2. **Every target is 0, so there are no terms.** `max_features` must return value 0 and `min_shortfall` value 0 with a feasible plan, not fail on an empty objective. Test: Task 7 `test_budgeted_no_terms`.
 3. **Non-contiguous zone ids `{5, 9}` with `MANDATORYALLOCATION 1` and a budget.** Every eligible PU lands in 5 or 9, and the budget-floor message names the right cost. Test: Task 8 `test_mandatory_non_contiguous_zone_ids`.
 4. **A NaN amount in `pu_vs_features`, or an `inf` cost.** `presolve_check` must report P1 (or P0 when `validate()` already rejects it) and must never raise. Test: Task 10 `test_presolve_nan_amount_never_raises`.
-5. **One solver instance reused:** `build_model(p1)`, then `solve(p2)`, then `solve(p1)` with different objectives in the data. No state leaks; the results equal fresh-instance results. Test: Task 7 `test_reused_instance_no_state_leak`.
+5. **One solver instance reused:** `build_model(p1)`, then `solve(p2)`, then `solve(p1)` with different objectives in the data. No state leaks; the results equal fresh-instance results. Tests: Task 5 `test_core_reused_instance_no_state_leak` (core) and Task 7 `test_reused_instance_no_state_leak` (zone).
 
 ---
 
@@ -1063,6 +1063,27 @@ def test_min_shortfall_values() -> None:
     assert ab.metadata["mip_objective_value"] == pytest.approx(50.0)
 
 
+def test_absolute_min_shortfall_is_spf_weighted() -> None:
+    # spf b = 3: PU1 -> 40 + 3 * 10 = 70 (unweighted would report 50).
+    w = make_relabs_problem()
+    w = w.copy_with(features=w.features.assign(spf=[1.0, 3.0]))
+    sol = MIPSolver(objective="min_shortfall", shortfall="absolute").solve(w, ONE)[0]
+    assert sol.selected.tolist() == [True, False, False]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(70.0)
+
+
+def test_core_reused_instance_no_state_leak() -> None:
+    # Review Focus 5 (core): a _build that caches terms on self would return p1's 0.7 for p2.
+    solver = MIPSolver(objective="min_largest_shortfall")
+    p1 = make_relabs_problem()
+    p2 = p1.copy_with(features=p1.features.assign(target=[40.0, 10.0]))  # PU3 -> 0.5
+    solver.build_model(p1)
+    a = solver.solve(p2, ONE)[0].metadata["mip_objective_value"]
+    b = solver.solve(p1, ONE)[0].metadata["mip_objective_value"]
+    assert a == pytest.approx(0.5)
+    assert b == pytest.approx(0.7)
+
+
 def test_min_shortfall_requires_budget() -> None:
     p = make_relabs_problem()
     p = p.copy_with(parameters={"BLM": 0.0})
@@ -1257,12 +1278,13 @@ def test_min_penalties_objective_is_spf_weighted_and_cap_is_tight() -> None:
     sol = MIPSolver(objective="min_penalties").solve(_with_ghost(1.0), ONE)[0]
     assert sol.metadata["mip_objective_value"] == pytest.approx(35.0)
     assert sol.selected.tolist() == [True, False]
-    # Cap tightness: with spf 1e-5 on feature 1, dropping PU1 (cost 1) adds only 1e-5 of
-    # weighted shortfall, so any pass-2 cap looser than 35 * (1 + 2.9e-7) lets cost win
-    # and returns [False, False]; the spec's rel_tol = abs_tol = 1e-9 keeps PU1.
+    # Cap tightness: with spf 1e-6 on feature 1, dropping PU1 (cost 1) adds only 1e-6 of
+    # weighted shortfall, so any pass-2 cap looser than 35 * (1 + 2.9e-8) (or abs_tol
+    # >= 1e-6) lets cost win and returns [False, False]; the spec's rel_tol = abs_tol = 1e-9
+    # keeps PU1.
     pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
     feat = pd.DataFrame({
-        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [1e-5, 7.0],
+        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [1e-6, 7.0],
     })
     pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
     tight = ConservationProblem(
@@ -1605,6 +1627,19 @@ def test_zone_target_term_uses_misslevel() -> None:
     p = _with_budget(p.copy_with(zone_targets=p.zone_targets.assign(target=15.0)), 1)
     s = ZoneMIPSolver(objective="max_features").solve(p, ONE)[0]
     assert s.metadata["mip_objective_value"] == pytest.approx(1.0)
+
+
+def test_zone_shortfall_absolute_differs_and_is_recorded() -> None:
+    # Budget 1: one PU in zone 2 meets the zone target; overall falls short by 11 of 15.
+    p = _with_budget(make_anchor_problem(), 1)
+    rel = ZoneMIPSolver(objective="min_largest_shortfall").solve(p, ONE)[0]
+    ab = ZoneMIPSolver(objective="min_largest_shortfall", shortfall="absolute").solve(
+        p, ONE,
+    )[0]
+    assert rel.metadata["shortfall"] == "relative"
+    assert rel.metadata["mip_objective_value"] == pytest.approx(11 / 15)
+    assert ab.metadata["shortfall"] == "absolute"
+    assert ab.metadata["mip_objective_value"] == pytest.approx(11.0)
 ```
 
 `test_zone_target_term_uses_misslevel` (M43) is the only test that reaches the zone-target `TargetTerm` with MISSLEVEL != 1. After Step 3, confirm it goes RED when `* misslevel` is temporarily dropped from the zone term in `_zone_target_terms`, then restore it.
