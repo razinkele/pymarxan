@@ -763,7 +763,7 @@ def _with_ghost(budget: float) -> ConservationProblem:
     """Feature 1 in PU1; feature 2 (target 5) has no pu_vs_features rows."""
     pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
     feat = pd.DataFrame({
-        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [1.0, 7.0],
+        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [3.0, 7.0],
     })
     pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
     return ConservationProblem(
@@ -782,7 +782,8 @@ def test_zero_cost_featureless_pu_still_solves() -> None:
 @pytest.mark.parametrize("objective", ["max_features", "max_weighted_features"])
 def test_ghost_feature_not_counted_as_met(objective: str) -> None:
     sol = MIPSolver(objective=objective).solve(_with_ghost(1.0), ONE)[0]
-    expected = 1.0  # only feature 1 (spf 1); v0.38 gave 2 / 8 (ghost met for free)
+    expected = 3.0 if objective == "max_weighted_features" else 1.0
+    # feature 1 (spf 3) only; v0.38 gave 2 / 10 (ghost met for free)
     assert sol.metadata["mip_objective_value"] == pytest.approx(expected)
 
 
@@ -1239,6 +1240,15 @@ def test_min_penalties_build_model_is_pass1() -> None:
     m = MIPSolver(objective="min_penalties").build_model(_two_pu(1.0))
     assert "lex_primary_cap" not in m.constraints
     assert {v.name for v, _ in m.objective.items()} == {"s_f1"}
+
+
+def test_min_penalties_objective_is_spf_weighted_and_cap_is_tight() -> None:
+    # The ghost (target 5, spf 7) is unmeetable: pass 1 = 7 * 5 = 35, not 5. A loose
+    # pass-2 cap would then drop PU1 (cost 1) for +3 weighted shortfall
+    # (38 <= 35 * (1 + rel_tol) with rel_tol >= 0.09).
+    sol = MIPSolver(objective="min_penalties").solve(_with_ghost(1.0), ONE)[0]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(35.0)
+    assert sol.selected.tolist() == [True, False]
 ```
 
 The v0.38 integral-data guard is `test_core_min_penalties_integral_selection_unchanged` in the golden file.
@@ -1729,7 +1739,7 @@ def _zone_target_terms(
 
    The min_set path also switches its inline `zc_lookup` loop (lines 139–144) to `_zone_cost_lookup(problem)`. The dict is the same, so the canonical model is unchanged.
 
-8. `_warn_no_solution(problem, status, objective)`: add the budget branch first.
+8. `def _warn_no_solution(problem: ZonalProblem, status: int, objective: str = "min_set") -> None:` — the `objective` parameter defaults to `"min_set"` so the two-argument calls in `tests/pymarxan/zones/test_zone_diagnostics.py:167, :177, :189` keep their v0.38 path (the budget branch runs only when `objective != "min_set"`; the `diagnose_zone_infeasibility` monkeypatch at :186 is unaffected). Add the budget branch first; otherwise the existing body is unchanged.
 
 ```python
     if objective != "min_set" and status == pulp.constants.LpStatusInfeasible:
@@ -1833,7 +1843,10 @@ def _on(p: ZonalProblem, value: object = 1) -> ZonalProblem:
 
 
 def _six_pu() -> ZonalProblem:
-    """Anchor + PU4 (status 0), PU5 (status 3), PU6 (status 1); zone costs z1 = 8, z2 = 1.5."""
+    """Anchor + PU4 (status 0), PU5 (status 3), PU6 (status 1); zone costs z1 = 8, z2 = 1.5.
+
+    Mandatory optimum: 10.0 at (1, 2, 2, 2, 0, 2) = anchor 7 + PU4 and PU6 in zone 2.
+    """
     p = make_anchor_problem()
     pu = pd.concat([
         p.planning_units,
@@ -1873,7 +1886,7 @@ def test_mip_optimum_matches_enumeration() -> None:
     p = _on(_six_pu())
     sol = ZoneMIPSolver().solve(p, ONE)[0]
     assert tuple(int(z) for z in sol.zone_assignment) == (1, 2, 2, 2, 0, 2)
-    assert sol.cost == pytest.approx(10.5)
+    assert sol.cost == pytest.approx(10.0)  # 7 (anchor) + 1.5 + 1.5 (PU4, PU6 in zone 2)
 
 
 def test_every_solver_respects_rules() -> None:
@@ -1888,7 +1901,9 @@ def test_every_solver_respects_rules() -> None:
     for solver in solvers:
         cases = [2, 3] if isinstance(solver, ZoneIISolver) else [None]
         for itimp in cases:
-            q = p if itimp is None else p.copy_with(parameters={**p.parameters, "ITIMPTYPE": itimp})
+            q = p
+            if itimp is not None:
+                q = p.copy_with(parameters={**p.parameters, "ITIMPTYPE": itimp})
             for s in solver.solve(q, SolverConfig(num_solutions=1, seed=42)):
                 assert rule_violations(rules, s.zone_assignment) == []
                 zero = [k for k, z in enumerate(s.zone_assignment) if z == 0]
@@ -1918,12 +1933,13 @@ def test_mip_zero_target_assigns_cheapest_zone() -> None:
 def test_status3_warning_without_lock_tables_once() -> None:
     p = _on(_six_pu())
     assert p.pu_locks is None and p.pu_zones is None
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        ZoneMIPSolver().solve(p, ONE)
-    hits = [x for x in w if issubclass(x.category, ZoneLockWarning)]
-    assert len(hits) == 1
-    assert "locked out (status 3) while MANDATORYALLOCATION is 1" in str(hits[0].message)
+    for call in (ZoneMIPSolver().solve, ZoneMIPSolver().build_model):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            call(p)
+        hits = [x for x in w if issubclass(x.category, ZoneLockWarning)]
+        assert len(hits) == 1 and hits[0].filename == __file__
+        assert "locked out (status 3) while MANDATORYALLOCATION is 1" in str(hits[0].message)
     assert p.validate() == []  # a warning, not an error
 
 
@@ -1978,7 +1994,7 @@ def test_off_matches_enumerated_unassigned_optimum() -> None:
     assert len(list(itertools.product([0, 1, 2], repeat=3))) == 27
 ```
 
-`write_input_dat(params, path)` and the module-level `rule_violations(rules, assignment)` were verified while planning. The expected 10.5 at `(1, 2, 2, 2, 0, 2)` is quoted from spec Testing 8, which was enumerated in the first review. If the MIP disagrees, stop and report; do not edit the expected value.
+`write_input_dat(params, path)` and the module-level `rule_violations(rules, assignment)` were verified while planning. The expected 10.0 at `(1, 2, 2, 2, 0, 2)` was enumerated over {1,2}^5 x {0} during plan review (spec Testing 8 quoted 10.5 for a different zone-2 cost; PU5 is status 3 and stays unassigned). If the MIP disagrees, stop and report.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -2104,6 +2120,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import warnings
 from pathlib import Path
 
 import pulp
@@ -2113,6 +2130,7 @@ from pymarxan.io.readers import load_project
 from pymarxan.solvers import HeuristicSolver, MIPSolver, write_problem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones import ZoneMIPSolver
+from tests.pymarxan.solvers.test_stage1_golden_v038 import make_relabs_problem
 from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
 
 SIMPLE = Path(__file__).parent.parent.parent / "data" / "simple"
@@ -2156,11 +2174,14 @@ def test_simple_round_trip_blm1_matches_in_process(tmp_path: Path) -> None:
 
 def test_zone_round_trip_and_bound_survives(tmp_path: Path) -> None:
     import pandas as pd
-    p = make_anchor_problem().copy_with(pu_zones=pd.DataFrame({"pu": [1], "zone": [1]}))
-    path = write_problem(p, tmp_path / "z.mps")
-    assert _solve_mps(path) == pytest.approx(7.0)
-    text = path.read_text()
-    assert "x_1_2" in text  # PU1 zone 2 forced to 0: an upper bound row in BOUNDS
+    # PU1 forced into zone 2 moves the optimum from 7 (1,2,2) to 8; x_1_1 is fixed at 0.
+    p = make_anchor_problem().copy_with(pu_zones=pd.DataFrame({"pu": [1], "zone": [2]}))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # single-zone puzone ZoneLockWarning
+        path = write_problem(p, tmp_path / "z.mps")
+    assert _solve_mps(path) == pytest.approx(8.0)
+    _, model = pulp.LpProblem.fromMPS(str(path))
+    assert {v.name: v for v in model.variables()}["x_1_1"].upBound == 0
 
 
 def test_errors(tmp_path: Path) -> None:
@@ -2177,6 +2198,14 @@ def test_errors(tmp_path: Path) -> None:
 def test_default_solver_picks_by_problem_type(tmp_path: Path) -> None:
     assert write_problem(make_anchor_problem(), tmp_path / "z.lp").exists()
     assert write_problem(_simple(0.0), tmp_path / "c.lp").exists()
+
+
+def test_write_problem_exports_the_given_solver_objective(tmp_path: Path) -> None:
+    p = make_relabs_problem()  # COSTBUDGET 1: no target is meetable, so max_features = 0
+    path = write_problem(p, tmp_path / "w.mps", solver=MIPSolver(objective="max_features"))
+    assert _solve_mps(path) == pytest.approx(0.0)
+    _, model = pulp.LpProblem.fromMPS(str(path))
+    assert "cost_budget" in model.constraints
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -2259,7 +2288,7 @@ Wrap the long f-string to 99 columns. Export it from `pymarxan.solvers.__init__`
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_write_problem.py -v`
 
-Expected: 7 passed. If `test_zone_round_trip_and_bound_survives` fails only on the `"x_1_2"` text check, the MPS writer may have dropped a variable with `upBound 0` because it appears in no constraint. Check with `grep x_1_2` on the file. That variable does appear in `assign_1`, so it should be written. Report the finding rather than weakening the assertion.
+Expected: 7 passed. If `test_zone_round_trip_and_bound_survives` gives 7.0, the MPS writer dropped the `upBound 0` on `x_1_1`; report the finding rather than weakening the assertion.
 
 - [ ] **Step 5: CHANGELOG and commit**
 
@@ -2441,6 +2470,22 @@ def test_flag_strict_raises_and_off_silent() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", PresolveWarning)
         MIPSolver().solve(p, ONE)
+
+
+def test_zone_flag_warns_once_at_caller_and_strict_raises() -> None:
+    p = make_anchor_problem().copy_with(
+        parameters={"BLM": 0.0, "MANDATORYALLOCATION": 1, "COSTBUDGET": 2.0},  # floor 3 > 2: P9a
+    )
+    for call in (ZoneMIPSolver(objective="max_features", presolve_check=True).solve,
+                 ZoneMIPSolver(objective="max_features", presolve_check=True).build_model):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            call(p)
+        hits = [x for x in w if issubclass(x.category, PresolveWarning)]
+        assert len(hits) == 1 and hits[0].filename == __file__
+        assert "P9a" in str(hits[0].message)
+    with pytest.raises(ValueError, match="P9a"):
+        ZoneMIPSolver(objective="max_features", presolve_check="strict").solve(p, ONE)
 
 
 def test_model_scan_p10_tiny_relative_target() -> None:
@@ -2834,22 +2879,49 @@ Expected: `test_objectives_import_warns_once` fails, `assert 0 == 1`.
 
 - [ ] **Step 3: Implement**
 
-At the top of `src/pymarxan/objectives/__init__.py`, after the docstring and the `__future__` import:
+In `src/pymarxan/objectives/__init__.py`, after the five `from pymarxan.objectives.* import` lines and before `__all__` (add `import sys` / `import warnings` to the stdlib import block above them, and `import os` inside the 3.12 branch), so no import follows the `warnings.warn(...)` call. The whole file becomes:
 
 ```python
-import os
+"""Objective types for conservation planning optimization."""
+
+from __future__ import annotations
+
+import sys
 import warnings
 
-warnings.warn(
+from pymarxan.objectives.base import Objective, ZonalObjective
+from pymarxan.objectives.max_coverage import MaxCoverageObjective
+from pymarxan.objectives.max_utility import MaxUtilityObjective
+from pymarxan.objectives.min_shortfall import MinShortfallObjective
+from pymarxan.objectives.minset import MinSetObjective
+
+_DEPRECATION = (
     "pymarxan.objectives is deprecated and will be removed in v0.42; use "
-    "MIPSolver(objective=...) / ZoneMIPSolver(objective=...)",
-    DeprecationWarning,
-    # Attribute to the importer's line (stacklevel would land in importlib frames).
-    skip_file_prefixes=(os.path.dirname(__file__), "<frozen importlib"),
+    "MIPSolver(objective=...) / ZoneMIPSolver(objective=...)"
 )
+if sys.version_info >= (3, 12):
+    import os
+
+    # Attribute to the importer's line (stacklevel would land in importlib frames).
+    warnings.warn(
+        _DEPRECATION,
+        DeprecationWarning,
+        skip_file_prefixes=(os.path.dirname(__file__), "<frozen importlib"),
+    )
+else:  # 3.11: skip_file_prefixes does not exist; the importlib frame is acceptable
+    warnings.warn(_DEPRECATION, DeprecationWarning, stacklevel=2)
+
+__all__ = [
+    "Objective",
+    "ZonalObjective",
+    "MinSetObjective",
+    "MaxCoverageObjective",
+    "MaxUtilityObjective",
+    "MinShortfallObjective",
+]
 ```
 
-This is a deviation from spec §5, which says `stacklevel=2`. The planning prototype showed that `skip_file_prefixes` attributes the warning to the importer's frame, so Python's default filter shows it. `stacklevel=2` points at importlib instead.
+This is a deviation from spec §5, which says `stacklevel=2`. The planning prototype showed that `skip_file_prefixes` attributes the warning to the importer's frame, so Python's default filter shows it; `stacklevel=2` points at importlib instead. `skip_file_prefixes` is Python 3.12+ and pyproject's floor is 3.11 (mypy `python_version = "3.11"`, CI lint/types on 3.11), hence the `sys.version_info` guard: the 3.11 branch keeps the spec's `stacklevel=2`. The `_count(...)` probes pass on either branch because they count by category and message, not filename. The `warnings.warn` call must stay below every module-level import (ruff E402).
 
 In `tests/pymarxan/objectives/test_objectives.py`, wrap the package import:
 
@@ -2880,6 +2952,7 @@ Expected: pass.
 
 ```bash
 ruff check src/pymarxan/objectives/__init__.py tests/pymarxan/objectives/
+/home/razinka/marxan/.venv/bin/mypy src/pymarxan/objectives/__init__.py --ignore-missing-imports
 git add src/pymarxan/objectives/__init__.py src/pymarxan_shiny/modules/solver_config/objective_selector.py tests/pymarxan/objectives/ CHANGELOG.md
 git commit -m "chore(stage1): deprecate pymarxan.objectives
 
@@ -2924,7 +2997,9 @@ def _instance(seed: int, mandatory: int) -> tuple[ZonalProblem, dict[str, np.nda
     target = rng.integers(1, 12, size=N_F).astype(float)
     spf = rng.choice([1.0, 2.0, 5.0], size=N_F)
     ztarget = rng.integers(1, 8)  # one zone target: zone 2, feature 1
-    budget = float(rng.uniform(cost.min(), cost.max(axis=1).sum()))
+    # mandatory == 1: never draw below the forced floor (every PU pays its cheapest zone).
+    low = cost.min(axis=1).sum() if mandatory else cost.min()
+    budget = float(rng.uniform(low, cost.max(axis=1).sum()))
     pu = pd.DataFrame({"id": range(1, N_PU + 1), "cost": 0.0, "status": 0})
     pvf = pd.DataFrame([
         {"species": f + 1, "pu": i + 1, "amount": amount[i, f]}
@@ -2993,7 +3068,7 @@ def test_zone_mip_matches_enumeration(seed: int, mandatory: int) -> None:
         )
 ```
 
-The budget is drawn from at least the minimum single-cell cost, but with mandatory allocation an infeasible draw is possible. If a `(seed, mandatory)` case returns `[]`, it is a fixture problem, not a solver bug. In that case, raise the lower bound to the mandatory floor (`cost.min(axis=1).sum()`) for `mandatory == 1`, and record that in the commit message.
+With MANDATORYALLOCATION 1 every PU must pay at least its cheapest zone, so the budget is drawn from at least `cost.min(axis=1).sum()`; otherwise `_best` would raise `ValueError: max() iterable argument is empty` on an infeasible draw (seeds 4-8 with the plain `cost.min()` bound). Every instance is therefore feasible; an empty `values` in `_best` or `[]` from the solver is a fixture bug, not a solver bug.
 
 - [ ] **Step 2: Run it**
 
@@ -3078,7 +3153,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 | Testing 4 (golden) | 1, then re-checked in 4, 7, 8 |
 | Testing 5 | 1, 5 |
 | Testing 8 | 8 |
-| Testing 9 | 9 |
+| Testing 9 | 9; stacklevel: 4 (large-MIP), 8 (ZoneLockWarning), 10 (PresolveWarning, both solvers) |
 | Testing 10, 14 | 10 |
 | Testing 11 (random oracle) | 12 |
 | Testing 12 | 2, 6 |
@@ -3090,4 +3165,5 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Presolve messages carry their code prefix (`P0`–`P11`).
 - `_BuiltModel` carries the probmode / TARGET2 / sep flags rather than having `solve()` recompute them.
 - The deprecation uses `skip_file_prefixes`, not `stacklevel=2` (executed during planning).
+- `skip_file_prefixes` is Python 3.12+; guarded by `sys.version_info` because pyproject's floor is 3.11 (mypy `python_version = "3.11"`, CI lint/types on 3.11). The 3.11 branch keeps `stacklevel=2`; both `_count(...)` probes pass on either branch since they count by category and message, not filename.
 - P11's ceiling is Σ of the **most expensive** allowed option per PU, not the cheapest. Only that bound means the budget truly cannot bind.

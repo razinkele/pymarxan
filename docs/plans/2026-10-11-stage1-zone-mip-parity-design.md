@@ -318,8 +318,8 @@ enumeration).
 8. **Mandatory allocation.** Use a 6-PU fixture: the anchor plus PU4 (status 0), PU5 (status 3)
    and PU6 (status 1).
    - With the parameter on, every solver (II at ITIMPTYPE 2 and 3) gives
-     `rule_violations == []`, and only PU5 is in zone 0. The MIP optimum = enumerated 10.5 at
-     (1,2,2,2,0,2).
+     `rule_violations == []`, and only PU5 is in zone 0. The MIP optimum = enumerated 10.0 at
+     (1,2,2,2,0,2) (PU4-6 zone costs z1 = 8, z2 = 1.5; plan review round 1).
    - Detection tests:
      - heuristic on `tests/data/zones`: today's all-zero seed becomes all non-zero;
      - II ITIMPTYPE 1: the removal pass must not unassign;
