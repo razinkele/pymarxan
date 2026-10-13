@@ -39,7 +39,7 @@
 - **Presolve messages.** `presolve_check(problem) -> list[str]` never raises. Every message starts with its code: `"P1: "` … `"P11: "`, and `"P0: "` for the `validate()` short-circuit. This prefix is a plan-level addition: it gives tests stable codes (first review, LOW).
 - **Presolve flag.** `presolve_check` accepts only `True`, `False` or `"strict"`, checked by identity. `0` and `1` are rejected with `ValueError` at construction.
 - **Metadata.** Both MIPs record `metadata["mip_objective_value"]` (natural sign: a count for `max_*`) and `metadata["shortfall"]`. The zone MIP also records `metadata["objective"]` (the canonical name).
-- **Commits.** Messages reference `(stage1)` and end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Commits.** Messages reference `(stage1)` and end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - **Benches.** Bench assertions are comparative, never absolute wall-clock.
 
 ## Review Focus
@@ -323,7 +323,7 @@ ruff check tests/pymarxan/lp_canon.py tests/pymarxan/solvers/test_stage1_golden_
 git add tests/pymarxan/lp_canon.py tests/pymarxan/solvers/test_stage1_golden_v038.py tests/data/golden/stage1_v038.json
 git commit -m "test(stage1): record v0.38 MIP model/selection goldens before any change
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -714,7 +714,7 @@ ruff check src/pymarxan/solvers/_mip_objectives.py tests/pymarxan/solvers/test_m
 git add src/pymarxan/solvers/_mip_objectives.py tests/pymarxan/solvers/test_mip_objectives_module.py
 git commit -m "feat(stage1): solver-agnostic MIP objective builders and lexicographic solve
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -866,7 +866,7 @@ ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_st
 git add -A src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py CHANGELOG.md
 git commit -m "fix(stage1): MIPSolver zero-cost featureless PU, ghost feat_met, spf default
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1005,7 +1005,7 @@ ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_st
 git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py
 git commit -m "refactor(stage1): MIPSolver _build/build_model/solve split (no behaviour change)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1198,7 +1198,7 @@ ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_st
 git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py CHANGELOG.md
 git commit -m "feat(stage1): MIPSolver min_shortfall, relative min_largest_shortfall, shortfall= kw
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1302,7 +1302,7 @@ ruff check src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_st
 git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_stage1.py CHANGELOG.md
 git commit -m "fix(stage1): exact two-pass lexicographic min_penalties
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1777,7 +1777,7 @@ ruff check src/pymarxan/zones/ tests/pymarxan/zones/test_zone_mip_objectives.py
 git add src/pymarxan/zones/mip_solver.py src/pymarxan/zones/diagnostics.py tests/pymarxan/zones/test_zone_mip_objectives.py CHANGELOG.md
 git commit -m "feat(stage1): ZoneMIPSolver budgeted objectives, build_model, budget-floor message
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2079,7 +2079,7 @@ ruff check src/pymarxan/zones/model.py tests/pymarxan/zones/test_mandatory_alloc
 git add src/pymarxan/zones/model.py tests/pymarxan/zones/test_mandatory_allocation.py CHANGELOG.md
 git commit -m "feat(stage1): MANDATORYALLOCATION via pu_zone_rules
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2274,7 +2274,7 @@ ruff check src/pymarxan/solvers/export.py tests/pymarxan/solvers/test_write_prob
 git add src/pymarxan/solvers/export.py src/pymarxan/solvers/__init__.py tests/pymarxan/solvers/test_write_problem.py CHANGELOG.md
 git commit -m "feat(stage1): write_problem (.lp/.mps) for both MIP solvers
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2774,7 +2774,7 @@ ruff check src/pymarxan/solvers/presolve.py src/pymarxan/__init__.py tests/pymar
 git add src/pymarxan/solvers/presolve.py src/pymarxan/solvers/__init__.py src/pymarxan/__init__.py src/pymarxan/solvers/mip_solver.py src/pymarxan/zones/mip_solver.py tests/pymarxan/solvers/test_presolve.py CHANGELOG.md
 git commit -m "feat(stage1): presolve_check, solver presolve flag and model scan
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2883,7 +2883,7 @@ ruff check src/pymarxan/objectives/__init__.py tests/pymarxan/objectives/
 git add src/pymarxan/objectives/__init__.py src/pymarxan_shiny/modules/solver_config/objective_selector.py tests/pymarxan/objectives/ CHANGELOG.md
 git commit -m "chore(stage1): deprecate pymarxan.objectives
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
@@ -3050,7 +3050,7 @@ ruff check tests/pymarxan/zones/test_zone_mip_random_oracle.py
 git add tests/pymarxan/zones/test_zone_mip_random_oracle.py docs/TUTORIAL.md docs/VALIDATION.md docs/plans/2026-10-11-prioritizr-parity-roadmap.md
 git commit -m "test(stage1): random-instance zone-MIP oracle; docs for v0.39 objectives
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
