@@ -595,6 +595,11 @@ class MIPSolver(Solver):
         # automatically when PROBMODE==3. Under the 'drop' strategy, the
         # MIP solved the deterministic relaxation; the chance-constraint
         # gap is what build_solution reports post-hoc.
+        # pulp.value() is None when any variable in the expression has no value (zero-cost
+        # x never written to the LP); evaluate the objective reading those as 0.
+        obj_value = float(model.objective.constant or 0.0) + sum(
+            float(coef) * float(v.varValue or 0.0) for v, coef in model.objective.items()
+        )
         meta = {
             "solver": self.name(),
             "status": pulp.LpStatus[model.status],
@@ -602,9 +607,9 @@ class MIPSolver(Solver):
             "objective": self.objective,
             # Stub; Task 5 replaces it with built.objective_expr.
             "mip_objective_value": (
-                -float(pulp.value(model.objective))
+                -obj_value
                 if self.objective in ("max_features", "max_weighted_features")
-                else float(pulp.value(model.objective))
+                else obj_value
             ),
         }
         if probmode == 3:

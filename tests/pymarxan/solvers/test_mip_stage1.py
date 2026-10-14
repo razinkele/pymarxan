@@ -56,3 +56,17 @@ def test_max_weighted_features_without_spf_column() -> None:
     p = p.copy_with(features=p.features.drop(columns=["spf"]))
     sol = MIPSolver(objective="max_weighted_features").solve(p, ONE)[0]
     assert sol.metadata["mip_objective_value"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("target", [1.0, 0.0])
+def test_all_zero_cost_min_set_solves(target: float) -> None:
+    pu = pd.DataFrame({"id": [1, 2], "cost": [0.0, 0.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [target], "spf": [1.0]})
+    pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
+    p = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pvf, parameters={"BLM": 0.0},
+    )
+    sols = MIPSolver().solve(p, ONE)
+    assert len(sols) == 1
+    assert sols[0].selected.tolist() == ([True, False] if target > 0 else [False, False])
+    assert sols[0].metadata["mip_objective_value"] == 0.0
