@@ -29,6 +29,15 @@ def _fmt_id(value: object) -> object:
     return value
 
 
+def _mandatory_value(raw: object) -> int | None:
+    """0 or 1 for an accepted MANDATORYALLOCATION value (int/float 0 or 1, numpy included)."""
+    if isinstance(raw, bool | str) or not isinstance(
+        raw, int | float | np.integer | np.floating
+    ):
+        return None
+    return int(raw) if raw in (0, 1) else None
+
+
 def _known_id(value: object, known: set[int]) -> int | None:
     """The integer id ``value`` names when it is integral and in ``known``; else ``None``.
 
@@ -262,6 +271,7 @@ class ZonalProblem(ConservationProblem):
         that interprets status, pu_locks and pu_zones (spec §2 table, first match wins)."""
         every = frozenset(int(z) for z in self.zone_ids)
         first = min(every) if every else None
+        mandatory = self.mandatory_allocation()
         locks = self.pu_lock_lookup()
         restrict = self.pu_zone_lookup()
         pu = self.planning_units
@@ -284,7 +294,9 @@ class ZonalProblem(ConservationProblem):
                 rule = PUZoneRule(allowed=frozenset({first}), may_be_unassigned=False, start=first)
             else:
                 start = first if s == STATUS_INITIAL_INCLUDE else None
-                rule = PUZoneRule(allowed=every, may_be_unassigned=True, start=start)
+                rule = PUZoneRule(
+                    allowed=every, may_be_unassigned=not (mandatory and every), start=start,
+                )
             rules.append(rule)
         if any(not r.allowed and not r.may_be_unassigned for r in rules):
             raise AssertionError("pu_zone_rules: a PU with no zone that must be assigned")
@@ -293,6 +305,23 @@ class ZonalProblem(ConservationProblem):
     def _pu_lock_issue_list(self) -> list[tuple[str, bool]]:
         """(message, is_validate_error) per issue class — spec §3 table."""
         out: list[tuple[str, bool]] = []
+        if self.mandatory_allocation() and "status" in self.planning_units.columns:
+            locks = self.pu_lock_lookup()
+            n_out = sum(
+                1
+                for p, s in zip(
+                    self.planning_units["id"].values,
+                    self.planning_units["status"].values,
+                    strict=True,
+                )
+                if _known_id(s, {0, 1, 2, 3}) == STATUS_LOCKED_OUT and int(p) not in locks
+            )
+            if n_out:
+                out.append((
+                    f"{n_out} planning unit(s) are locked out (status 3) while "
+                    "MANDATORYALLOCATION is 1; they stay unassigned",
+                    False,
+                ))
         if self.pu_locks is None and self.pu_zones is None:
             return out  # v0.37 problems: no scan, no status cast
         pu = self.planning_units
@@ -458,6 +487,16 @@ class ZonalProblem(ConservationProblem):
             )
         return int(raw)
 
+    def mandatory_allocation(self) -> bool:
+        """``MANDATORYALLOCATION`` = 1: every PU not locked out must take a zone.
+
+        A pymarxan key (MarZone does not read it; prioritizr
+        ``add_mandatory_allocation_constraints``). Use 1 only when the project's zones include
+        MarZone's "available" zone; when pymarxan's zone 0 stands in for it, leave it 0.
+        Invalid values are a ``validate()`` error and read as off.
+        """
+        return _mandatory_value(self.parameters.get("MANDATORYALLOCATION", 0)) == 1
+
     def zone_target_weight_matrix(self) -> np.ndarray:
         """Weight applied to amounts when accumulating zone targets.
 
@@ -570,6 +609,12 @@ class ZonalProblem(ConservationProblem):
             self.zone_target_contrib()
         except ValueError as exc:
             errors.append(str(exc))
+
+        if _mandatory_value(self.parameters.get("MANDATORYALLOCATION", 0)) is None:
+            errors.append(
+                "MANDATORYALLOCATION must be 0 or 1 (int or float); got "
+                f"{self.parameters.get('MANDATORYALLOCATION')!r}"
+            )
 
         if self.zone_targets is not None and "targettype" in self.zone_targets.columns:
             bad = self.zone_targets["targettype"].fillna(0).astype(int) != 0
