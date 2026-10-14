@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MANDATORYALLOCATION` (pymarxan key; prioritizr `add_mandatory_allocation_constraints`):
   1 forces every planning unit not locked out into a zone in all four zone solvers. Status-3
   units stay unassigned (one `ZoneLockWarning`). MarZone does not read this key. (stage1)
+- `pymarxan.solvers.write_problem(problem, path, solver=None)` — write the MIP model to
+  `.lp` / `.mps` (prioritizr `write_problem`); `MIPSolver.build_model` /
+  `ZoneMIPSolver.build_model`. (stage1)
 
 ### Changed
 - `MIPSolver(objective="min_largest_shortfall")` now minimises the largest **relative**
