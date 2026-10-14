@@ -19,7 +19,11 @@ from pymarxan.solvers._mip_objectives import (
     validate_shortfall,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.presolve import _emit_presolve, _validate_presolve_flag
+from pymarxan.solvers.presolve import (
+    _emit_presolve,
+    _presolve_data,
+    _validate_presolve_flag,
+)
 from pymarxan.zones.diagnostics import (
     ZoneMIPNoSolutionWarning,
     _feature_groups,
@@ -83,12 +87,14 @@ class ZoneMIPSolver(Solver):
     ``shortfall="absolute"`` uses raw units. Budgeted objectives drop the hard targets and
     the boundary terms (one ``UserWarning`` when BLM / zone boundary costs would apply).
     ``Solution.metadata`` records ``objective``, ``shortfall`` and ``mip_objective_value``
-    (natural sign: a count for ``max_*``).
+    (natural sign: a count for ``max_*``). ``shortfall`` is the configured units, recorded for
+    every objective but meaningful only for the two shortfall objectives.
 
     ``presolve_check`` (default ``False``): ``True`` runs
     :func:`~pymarxan.solvers.presolve.presolve_check` plus a scan of the built model (P10)
     in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
-    ``ValueError`` instead.
+    ``ValueError`` instead. The data checks run before the model is built: a non-finite
+    value (P1) raises ``ValueError`` under both, since PuLP cannot build the model.
     """
 
     def __init__(
@@ -259,8 +265,9 @@ class ZoneMIPSolver(Solver):
         problem = self._check(problem)
         warn_zone_input_issues(problem, "ZoneMIPSolver")
         self._warn_boundary_ignored(problem)
+        data = _presolve_data(self.presolve_check, problem, self.name())
         built = self._build(problem, config or SolverConfig())
-        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         return built.model
 
     def solve(  # type: ignore[override]
@@ -271,8 +278,9 @@ class ZoneMIPSolver(Solver):
         self._warn_boundary_ignored(problem)
         if config is None:
             config = SolverConfig()
+        data = _presolve_data(self.presolve_check, problem, self.name())
         built = self._build(problem, config)
-        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         model, x, pu_ids, zone_ids = built.model, built.x, built.pu_ids, built.zone_ids
 
         # Solve via the Phase 21 backend factory.

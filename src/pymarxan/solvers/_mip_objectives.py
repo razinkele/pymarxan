@@ -34,7 +34,7 @@ def validate_shortfall(value: str) -> str:
     return value
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)  # holds an LpAffineExpression (a dict): no __eq__/hash
 class TargetTerm:
     """One target: ``achieved`` A(x) must reach ``required`` R (target × MISSLEVEL)."""
 

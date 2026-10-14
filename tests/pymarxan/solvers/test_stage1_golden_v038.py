@@ -76,7 +76,7 @@ def record() -> dict[str, Any]:
     out["zone_min_set_anchor"], _ = _model_and_selection(ZoneMIPSolver(), make_anchor_problem())
     out["zone_min_set_zones"], _ = _model_and_selection(ZoneMIPSolver(), _zones_problem())
     out["core_min_set_simple"], _ = _model_and_selection(MIPSolver(), simple)
-    mls = MIPSolver(objective="min_largest_shortfall")
+    mls = MIPSolver(objective="min_largest_shortfall", shortfall="absolute")
     out["core_mls_abs_relabs"], out["core_mls_abs_relabs_selected"] = _model_and_selection(
         mls, make_relabs_problem(),
     )

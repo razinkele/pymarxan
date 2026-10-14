@@ -230,3 +230,76 @@ def test_p1_truncates_with_total_count() -> None:
     (neg,) = [m for m in presolve_check(p) if "negative" in m]
     assert neg.startswith(f"P1: {n} negative cost(s)") and "(+3 more)" in neg
     assert "PU 5" in neg and "PU 6" not in neg
+
+
+_INF_COST = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, np.inf, 3.0], "status": [0, 0, 0]})
+
+
+@pytest.mark.parametrize("flag", [True, "strict"])
+def test_flag_nonfinite_raises_before_build_core(flag: object) -> None:
+    # I1: P1 non-finite data makes PuLP raise inside _build; the flag must report it first.
+    p = _core(planning_units=_INF_COST)
+    for call in (MIPSolver(presolve_check=flag).solve,  # type: ignore[arg-type]
+                 MIPSolver(presolve_check=flag).build_model):  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=r"P1: .*non-finite cost.*PU 2"):
+            call(p)
+
+
+@pytest.mark.parametrize("flag", [True, "strict"])
+def test_flag_nonfinite_raises_before_build_zone(flag: object) -> None:
+    p = make_anchor_problem()
+    zc = p.zone_costs.copy()
+    zc.loc[(zc["pu"] == 1) & (zc["zone"] == 1), "cost"] = np.inf
+    p = p.copy_with(zone_costs=zc)
+    solver = ZoneMIPSolver(presolve_check=flag)  # type: ignore[arg-type]
+    for call in (solver.solve, solver.build_model):
+        with pytest.raises(ValueError, match=r"P1: .*PU 1 zone 1"):
+            call(p)
+
+
+def test_flag_negative_cost_does_not_preempt_build() -> None:
+    # A negative cost is P1 too but PuLP accepts it: keep warn-after-build semantics.
+    p = _core(planning_units=pd.DataFrame(
+        {"id": [1, 2, 3], "cost": [1.0, -2.0, 3.0], "status": [0, 0, 0]}))
+    with pytest.warns(PresolveWarning, match="negative cost"):
+        assert len(MIPSolver(presolve_check=True).solve(p, ONE)) == 1
+
+
+def test_p1_nan_spf_and_misslevel() -> None:
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [2.0], "spf": [np.nan]})
+    msgs = presolve_check(_core(features=feat))
+    assert any(m.startswith("P1: ") and "spf" in m and "feature 1" in m for m in msgs), msgs
+    msgs = presolve_check(_core(parameters={"BLM": 0.0, "MISSLEVEL": float("nan")}))
+    assert any(m.startswith("P1: ") and "MISSLEVEL" in m for m in msgs), msgs
+    with pytest.raises(ValueError, match="MISSLEVEL"):
+        MIPSolver(presolve_check=True).solve(
+            _core(parameters={"BLM": 0.0, "MISSLEVEL": float("nan")}), ONE)
+
+
+def test_flag_strict_via_build_model() -> None:
+    with pytest.raises(ValueError, match="P8"):
+        MIPSolver(presolve_check="strict").build_model(_core(parameters={"BLM": 1e8}))
+    p = make_anchor_problem().copy_with(
+        parameters={"BLM": 0.0, "MANDATORYALLOCATION": 1, "COSTBUDGET": 2.0},
+    )
+    with pytest.raises(ValueError, match="P9a"):
+        ZoneMIPSolver(objective="max_features", presolve_check="strict").build_model(p)
+
+
+def test_flag_off_is_silent_and_does_no_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pymarxan.solvers.presolve as presolve_mod
+
+    def boom(*args: object, **kwargs: object) -> list[str]:
+        raise AssertionError("presolve ran with the flag off")
+
+    monkeypatch.setattr(presolve_mod, "presolve_check", boom)
+    monkeypatch.setattr(presolve_mod, "scan_model", boom)
+    p = make_anchor_problem().copy_with(
+        parameters={"BLM": 0.0, "MANDATORYALLOCATION": 1, "COSTBUDGET": 2.0},  # P9a data
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # ZoneMIPNoSolutionWarning (P9a)
+        warnings.simplefilter("error", PresolveWarning)  # inserted first: wins
+        ZoneMIPSolver(objective="max_features").solve(p, ONE)
+        ZoneMIPSolver(objective="max_features").build_model(p)
+        MIPSolver().solve(_core(parameters={"BLM": 1e8}), ONE)

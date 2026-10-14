@@ -38,22 +38,47 @@ def _validate_presolve_flag(value: object) -> bool | str:
     raise ValueError(f"presolve_check must be True, False or 'strict', got {value!r}")
 
 
+def _is_nonfinite(message: str) -> bool:
+    """A P1 non-finite finding: PuLP refuses such data, so no model can be built."""
+    return message.startswith("P1: ") and " non-finite " in message
+
+
+def _presolve_data(
+    flag: bool | str, problem: ConservationProblem, solver_name: str,
+) -> list[str]:
+    """Data checks, run before the model is built (flag off: no work, ``[]``).
+
+    A non-finite P1 finding raises ``ValueError`` under both ``True`` and ``"strict"``:
+    PuLP would raise an opaque ``PulpError`` while building the model anyway. Every other
+    finding is returned for :func:`_emit_presolve` to report together with the model scan.
+    """
+    if not flag:
+        return []
+    messages = presolve_check(problem)
+    if any(_is_nonfinite(m) for m in messages):
+        raise ValueError(
+            f"{solver_name}: presolve check: " + " | ".join(messages)
+            + " (non-finite data: the model cannot be built)"
+        )
+    return messages
+
+
 def _emit_presolve(
     flag: bool | str,
-    problem: ConservationProblem,
+    data: list[str],
     model: pulp.LpProblem,
     solver_name: str,
     *,
     stacklevel: int,
 ) -> None:
-    """Run the data checks plus the model scan and report them per ``flag``.
+    """Report the data findings (from :func:`_presolve_data`) plus the model scan per ``flag``.
 
     ``stacklevel`` is counted from this function, so a solver method called directly by
     the user passes 3 (this helper <- solve()/build_model() <- the user's frame).
     """
     if not flag:
         return
-    messages = presolve_check(problem) + scan_model(model)
+    messages = data + scan_model(model)
     if not messages:
         return
     text = f"{solver_name}: presolve check: " + " | ".join(messages)
@@ -155,7 +180,12 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
     median cost outside [1e-6, 1e6]; P9a COSTBUDGET below the forced cost; P9b below the
     cheapest selectable option; P11 COSTBUDGET at or above the total cost. P10 (model
     coefficients) needs a built model and is only reported through a solver's
-    ``presolve_check=`` flag.
+    ``presolve_check=`` flag. Zone problems check ``zone_costs`` (what the zone solvers
+    optimise), not ``planning_units.cost``.
+
+    Through a solver's flag, a non-finite P1 value (cost, amount, target, boundary, spf,
+    BLM, MISSLEVEL, COSTBUDGET, zone contribution) raises ``ValueError`` even under
+    ``True``, because PuLP cannot build a model from it.
     """
     try:
         errors = problem.validate()
@@ -198,7 +228,11 @@ def _common(problem: ConservationProblem, costs: Any, cost_label: Label,
         ("target", targets, _labeller(("feature",), feats["id"])),
         ("boundary", bnd, lambda i: f"boundary {_fmt_id(id1[i])}-{_fmt_id(id2[i])}"),
         ("BLM", [blm], lambda i: "BLM"),
+        ("MISSLEVEL", [float(params.get("MISSLEVEL", 1.0))], lambda i: "MISSLEVEL"),
     ]
+    if "spf" in feats.columns:
+        named.append(("spf", feats["spf"].to_numpy(dtype=float),
+                      _labeller(("feature",), feats["id"])))
     if budget is not None:
         named.append(("COSTBUDGET", [budget], lambda i: "COSTBUDGET"))
     out = _nonfinite("P1", named + named_extra)

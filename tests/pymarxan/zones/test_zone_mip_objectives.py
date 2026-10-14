@@ -144,6 +144,36 @@ def test_boundary_ignored_warning_once() -> None:
         assert hits[0].filename == __file__
 
 
+def _boundary_hits(solver: ZoneMIPSolver, p: ZonalProblem) -> int:
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        solver.solve(p, ONE)
+        solver.build_model(p)
+    return sum("ignores boundary penalties" in str(x.message) for x in w)
+
+
+def test_boundary_ignored_warning_negative_cases() -> None:
+    bnd = pd.DataFrame({"id1": [1], "id2": [2], "boundary": [1.0]})
+    quiet = _with_budget(make_anchor_problem(blm=0.0), 7).copy_with(boundary=bnd)
+    # Budgeted, BLM 0, no zone boundary costs: nothing is ignored -> no warning.
+    assert _boundary_hits(ZoneMIPSolver(objective="min_shortfall"), quiet) == 0
+    zero_zbc = quiet.copy_with(zone_boundary_costs=pd.DataFrame(
+        {"zone1": [1], "zone2": [2], "cost": [0.0]}))
+    assert _boundary_hits(ZoneMIPSolver(objective="max_features"), zero_zbc) == 0
+    # min_set applies the boundary terms: never warns, even with BLM > 0.
+    loud = _with_budget(make_anchor_problem(blm=2.0), 7).copy_with(boundary=bnd)
+    assert _boundary_hits(ZoneMIPSolver(), loud) == 0
+
+
+def test_boundary_ignored_warning_zone_boundary_cost_only() -> None:
+    bnd = pd.DataFrame({"id1": [1], "id2": [2], "boundary": [1.0]})
+    p = _with_budget(make_anchor_problem(blm=0.0), 7).copy_with(
+        boundary=bnd,
+        zone_boundary_costs=pd.DataFrame({"zone1": [1], "zone2": [2], "cost": [3.0]}),
+    )
+    assert _boundary_hits(ZoneMIPSolver(objective="min_shortfall"), p) == 2  # solve + build
+
+
 def test_budget_floor_message() -> None:
     p = make_anchor_problem()
     p = p.copy_with(planning_units=p.planning_units.assign(status=[2, 0, 0]))  # PU1 -> zone 1
@@ -182,13 +212,27 @@ def _as_one_zone(p: ConservationProblem) -> ZonalProblem:
     )
 
 
-@pytest.mark.parametrize("objective", ["max_features", "min_shortfall", "min_largest_shortfall"])
+def _with_target_zero_feature(p: ConservationProblem) -> ConservationProblem:
+    """Add feature 4 (target 0, held by PU 1): always met, so it is no term (spec §1)."""
+    feat = pd.concat([p.features, pd.DataFrame({
+        "id": [4], "name": ["z"], "target": [0.0], "spf": [5.0],
+    })], ignore_index=True)
+    pvf = pd.concat([p.pu_vs_features, pd.DataFrame({
+        "species": [4], "pu": [1], "amount": [2.0],
+    })], ignore_index=True)
+    return p.copy_with(features=feat, pu_vs_features=pvf)
+
+
+@pytest.mark.parametrize("objective", BUDGETED)
 @pytest.mark.parametrize("ghost", [False, True])
-@pytest.mark.parametrize("misslevel", [1.0, 0.9])
-def test_cross_solver_oracle(objective: str, ghost: bool, misslevel: float) -> None:
+@pytest.mark.parametrize("zero", [False, True])
+@pytest.mark.parametrize("misslevel", [1.0, 0.9, 0.0])
+def test_cross_solver_oracle(objective: str, ghost: bool, zero: bool, misslevel: float) -> None:
     p = _core_problem()
     if not ghost:
         p = p.copy_with(features=p.features[p.features["id"] != 3].reset_index(drop=True))
+    if zero:
+        p = _with_target_zero_feature(p)
     p = p.copy_with(parameters={**p.parameters, "MISSLEVEL": misslevel})
     core = MIPSolver(objective=objective).solve(p, ONE)[0]
     zone = ZoneMIPSolver(objective=objective).solve(_as_one_zone(p), ONE)[0]
@@ -223,7 +267,7 @@ def test_budgeted_no_terms() -> None:
     p = _with_budget(
         p.copy_with(features=p.features.assign(target=0.0), zone_targets=None), 3,
     )
-    for obj in ("max_features", "min_shortfall"):
+    for obj in BUDGETED:
         s = ZoneMIPSolver(objective=obj).solve(p, ONE)
         assert len(s) == 1
         assert s[0].metadata["mip_objective_value"] == pytest.approx(0.0)

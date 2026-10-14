@@ -32,7 +32,11 @@ from pymarxan.solvers._mip_objectives import (
     validate_shortfall,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.presolve import _emit_presolve, _validate_presolve_flag
+from pymarxan.solvers.presolve import (
+    _emit_presolve,
+    _presolve_data,
+    _validate_presolve_flag,
+)
 from pymarxan.solvers.utils import build_solution
 
 
@@ -88,6 +92,18 @@ def _core_spf(problem: ConservationProblem) -> dict[int, float]:
     return {
         int(f): float(s)
         for f, s in zip(ids, problem.features["spf"].values.astype(float), strict=True)
+    }
+
+
+def _feat_met_vars(problem: ConservationProblem) -> dict[int, pulp.LpVariable]:
+    """Binary met-indicator per feature with raw target > 0 (spec §1; as the zone
+    solver's ``_zone_target_terms``): a target-0 feature is no term and is not counted."""
+    ids = problem.features["id"].values
+    targets = problem.features["target"].values.astype(float)
+    return {
+        int(f): pulp.LpVariable(f"feat_met_{int(f)}", cat="Binary")
+        for f, t in zip(ids, targets, strict=True)
+        if t > 0
     }
 
 
@@ -200,7 +216,9 @@ class MIPSolver(Solver):
     two-pass lexicographic solve (pass 1 minimises Σ SPF·shortfall; pass 2 minimises cost
     with that optimum capped); it differs from prioritizr's ``add_min_penalties_objective``,
     which minimises penalties subject to hard targets (and an optional budget); here targets
-    are soft and their shortfall is penalised by SPF, Marxan-style.
+    are soft and their shortfall is penalised by SPF, Marxan-style. ``MIP_TIME_LIMIT``
+    applies to each pass. Like v0.38, ``min_penalties`` ignores the BLM / connectivity /
+    probability terms (as do the budgeted objectives).
 
     ``shortfall`` sets the units of the two shortfall objectives: ``"relative"`` (default,
     shortfall / (target × MISSLEVEL), as prioritizr) or ``"absolute"`` (the v0.38 behaviour
@@ -208,10 +226,16 @@ class MIPSolver(Solver):
     ``pu_vs_features`` rows has full shortfall and pins the minimax at 1.0
     (``presolve_check`` P5 flags it).
 
+    ``Solution.metadata`` records ``objective``, ``mip_objective_value`` (natural sign: a
+    count for ``max_*``) and ``shortfall`` — the configured units, recorded for every
+    objective but meaningful only for the two shortfall objectives. ``max_features`` /
+    ``max_weighted_features`` count only features with target > 0.
+
     ``presolve_check`` (default ``False``): ``True`` runs
     :func:`~pymarxan.solvers.presolve.presolve_check` plus a scan of the built model (P10)
     in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
-    ``ValueError`` instead.
+    ``ValueError`` instead. The data checks run before the model is built: a non-finite
+    value (P1) raises ``ValueError`` under both, since PuLP cannot build the model.
     """
 
     def __init__(
@@ -500,9 +524,7 @@ class MIPSolver(Solver):
                     "feature target is trivially met by selecting all PUs."
                 )
             cost_budget = float(cost_budget)
-            for fi in range(len(feat_ids_init)):
-                fid = int(feat_ids_init[fi])
-                feat_met[fid] = pulp.LpVariable(f"feat_met_{fid}", cat="Binary")
+            feat_met = _feat_met_vars(problem)
             model += (
                 -pulp.lpSum(feat_met[fid] for fid in feat_met),
                 "objective",
@@ -528,9 +550,7 @@ class MIPSolver(Solver):
                 )
             cost_budget = float(cost_budget)
             spf_by_id = _core_spf(problem)
-            for fi in range(len(feat_ids_init)):
-                fid = int(feat_ids_init[fi])
-                feat_met[fid] = pulp.LpVariable(f"feat_met_{fid}", cat="Binary")
+            feat_met = _feat_met_vars(problem)
             model += (
                 -pulp.lpSum(spf_by_id[fid] * feat_met[fid] for fid in feat_met),
                 "objective",
@@ -589,6 +609,8 @@ class MIPSolver(Solver):
             ):
                 amount_expr = amount_exprs[fid]
                 if self.objective in ("max_features", "max_weighted_features"):
+                    if fid not in feat_met:
+                        continue  # target 0: no term (spec §1), no row
                     # Relaxed target: only enforced when feat_met_j = 1.
                     # Maximising Σ (weight·)feat_met_j therefore picks as many
                     # (weighted) features as the cost budget will pay for.
@@ -610,9 +632,17 @@ class MIPSolver(Solver):
         if feat_met:
             # Ghost features (target > 0, no pu_vs_features rows) can never be met; v0.38
             # left feat_met unconstrained so the maximiser counted them for free.
+            # feat_met exists for raw target > 0 (spec §1), but a ghost is forced to 0 only
+            # when target × MISSLEVEL > 0: at MISSLEVEL 0 the required amount is 0, so the
+            # term is met (the zone solver's 0 >= 0·y agrees) and the two conditions differ
+            # deliberately.
             for fi in range(len(feat_ids)):
                 fid = int(feat_ids[fi])
-                if fid not in feat_groups.groups and float(feat_targets[fi]) * misslevel > 0:
+                if (
+                    fid in feat_met
+                    and fid not in feat_groups.groups
+                    and float(feat_targets[fi]) * misslevel > 0
+                ):
                     feat_met[fid].upBound = 0
 
         # Phase 25: no-good cuts for portfolio generation. Each forbidden
@@ -656,8 +686,9 @@ class MIPSolver(Solver):
         if config is None:
             config = SolverConfig()
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
+        data = _presolve_data(self.presolve_check, problem, self.name())
         built = self._build(problem, config)
-        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         return built.model
 
     def solve(
@@ -667,8 +698,9 @@ class MIPSolver(Solver):
             config = SolverConfig()
         # S3b: heads-up before building the model when the MILP is likely too large.
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
+        data = _presolve_data(self.presolve_check, problem, self.name())
         built = self._build(problem, config)
-        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         model, x, pu_ids = built.model, built.x, built.pu_ids
         probmode, has_target2 = built.probmode, built.has_target2
         has_sep_active, blm = built.has_sep_active, built.blm

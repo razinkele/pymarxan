@@ -1,7 +1,6 @@
 """MANDATORYALLOCATION (spec §2, Testing 8; Review Focus 3)."""
 from __future__ import annotations
 
-import itertools
 import warnings
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from pymarxan.zones import (
 )
 from pymarxan.zones.diagnostics import min_forced_cost
 from pymarxan.zones.model import rule_violations
-from tests.pymarxan.zones.marzone_anchor import make_anchor_problem
+from tests.pymarxan.zones.marzone_anchor import all_assignments, make_anchor_problem, oracle
 
 ONE = SolverConfig(num_solutions=1)
 ZONES_DIR = Path(__file__).parent.parent.parent / "data" / "zones"
@@ -185,4 +184,7 @@ def test_input_dat_round_trip(tmp_path: Path) -> None:
 def test_off_matches_enumerated_unassigned_optimum() -> None:
     # With the parameter off, the anchor still prefers (1, 2, 2) at 7; unassigned allowed.
     assert tuple(ZoneMIPSolver().solve(make_anchor_problem(), ONE)[0].zone_assignment) == (1, 2, 2)
-    assert len(list(itertools.product([0, 1, 2], repeat=3))) == 27
+    hard = [a for a in all_assignments() if oracle(a)["feasible"]]
+    assert len(all_assignments()) == 27 and (0, 0, 0) in all_assignments()
+    assert min(hard, key=lambda a: oracle(a)["cost"]) == (1, 2, 2)
+    assert oracle((1, 2, 2))["cost"] == pytest.approx(7.0)

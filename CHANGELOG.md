@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MIPSolver(objective="min_shortfall")` — minimise the SPF-weighted shortfall under
   `COSTBUDGET` (prioritizr `add_min_shortfall_objective`). `objective="max_n_targets_met"` is
   accepted as an alias of `max_features` (prioritizr ≥ 9 name). (stage1)
-- `MIPSolver(shortfall="relative" | "absolute")`.
+- `MIPSolver(shortfall="relative" | "absolute")`. (stage1)
+- `MIPSolver` `Solution.metadata` now also records `mip_objective_value` (the solved
+  objective in natural sign: a count for `max_*`) and `shortfall` (the configured units;
+  meaningful only for the two shortfall objectives). (stage1)
 - `ZoneMIPSolver(objective=...)`: `max_features` (alias `max_n_targets_met`),
   `max_weighted_features`, `min_shortfall`, `min_largest_shortfall` under `COSTBUDGET` — each
   zone target and each overall target is its own term (prioritizr zones); relative shortfall
@@ -27,12 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ZoneMIPSolver.build_model`. (stage1)
 - `presolve_check(problem)` (also `pymarxan.presolve_check`) and `presolve_check=True |
   "strict"` on both MIP solvers — data and model-coefficient checks before solving, inspired by
-  prioritizr's `presolve_check` (checks differ; opt-in). `PresolveWarning`. (stage1)
+  prioritizr's `presolve_check` (checks differ; opt-in). `PresolveWarning`. Through the
+  solver flag the data checks run before the model is built, and a non-finite value (cost,
+  amount, target, boundary, spf, BLM, MISSLEVEL, COSTBUDGET, zone contribution) raises
+  `ValueError` under both `True` and `"strict"` instead of an opaque PuLP error. (stage1)
 
 ### Changed
 - `MIPSolver(objective="min_largest_shortfall")` now minimises the largest **relative**
   shortfall (shortfall / (target × MISSLEVEL), as prioritizr) and counts features with no
   occurrences. Pass `shortfall="absolute"` for the v0.38 behaviour. (stage1)
+- `MIPSolver(objective="min_penalties")`: `MIP_TIME_LIMIT` applies to each of its two passes,
+  so the worst-case wall-clock doubles. (stage1, S2)
+- `ZonalProblem.validate()` rejects a `MANDATORYALLOCATION` value other than 0 or 1. (stage1)
 
 ### Deprecated
 - `pymarxan.objectives` (unused `Objective` classes; their zone builders were incomplete and
@@ -44,7 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable never entered the model) (stage1, S9).
 - `MIPSolver` `max_features` / `max_weighted_features` counted a feature with a target but no
   `pu_vs_features` rows as met for free; it is now never met. `max_weighted_features` no
-  longer needs an `spf` column (defaults to 1.0).
+  longer needs an `spf` column (defaults to 1.0). (stage1)
+- `MIPSolver` `max_features` / `max_weighted_features` counted a target-0 feature as met
+  (e.g. every target-0 phylogenetic branch); only features with target > 0 are terms now, as
+  in `ZoneMIPSolver`, so `mip_objective_value` agrees across the two solvers. The selected
+  reserve is unchanged. (stage1)
 - `MIPSolver(objective="min_penalties")` could trade target shortfall for cost on fractional
   data (its big-M only dominated when SPF·Δshortfall ≥ 1); it is now an exact two-pass
   lexicographic solve. A feature with a target but no `pu_vs_features` rows now carries its

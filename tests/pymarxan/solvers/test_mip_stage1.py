@@ -59,6 +59,29 @@ def test_ghost_feature_not_counted_as_met(objective: str) -> None:
     assert sol.metadata["mip_objective_value"] == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("objective", ["max_features", "max_weighted_features"])
+def test_max_objectives_target_zero_is_no_term(objective: str) -> None:
+    # Spec §1: one term per feature with target > 0 (as the zone solver). v0.38/early v0.39
+    # created feat_met for a target-0 feature too and counted it as met for free.
+    p = _with_ghost(1.0)
+    p = p.copy_with(features=p.features.assign(target=[1.0, 0.0]),
+                    pu_vs_features=pd.DataFrame(
+                        {"species": [1, 2], "pu": [1, 2], "amount": [1.0, 1.0]}))
+    sol = MIPSolver(objective=objective).solve(p, ONE)[0]
+    expected = 3.0 if objective == "max_weighted_features" else 1.0
+    assert sol.metadata["mip_objective_value"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("objective", ["max_features", "max_weighted_features"])
+def test_max_objectives_no_terms(objective: str) -> None:
+    # Review Focus 2 on the core solver: every target 0 -> empty objective, value 0.
+    p = _with_ghost(1.0)
+    p = p.copy_with(features=p.features.assign(target=0.0))
+    sols = MIPSolver(objective=objective).solve(p, ONE)
+    assert len(sols) == 1
+    assert sols[0].metadata["mip_objective_value"] == pytest.approx(0.0)
+
+
 def test_max_weighted_features_without_spf_column() -> None:
     p = _with_ghost(1.0)
     p = p.copy_with(features=p.features.drop(columns=["spf"]))
