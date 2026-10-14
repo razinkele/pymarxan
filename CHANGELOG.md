@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `COSTBUDGET` (prioritizr `add_min_shortfall_objective`). `objective="max_n_targets_met"` is
   accepted as an alias of `max_features` (prioritizr ≥ 9 name). (stage1)
 - `MIPSolver(shortfall="relative" | "absolute")`.
+- `ZoneMIPSolver(objective=...)`: `max_features` (alias `max_n_targets_met`),
+  `max_weighted_features`, `min_shortfall`, `min_largest_shortfall` under `COSTBUDGET` — each
+  zone target and each overall target is its own term (prioritizr zones); relative shortfall
+  by default (`shortfall="absolute"` available). Budgeted objectives drop hard targets and
+  boundary penalties (one warning when BLM / zone boundary costs are set).
+  `Solution.metadata["mip_objective_value"]` reports the objective. `ZoneMIPSolver.build_model`.
+  (stage1)
 
 ### Changed
 - `MIPSolver(objective="min_largest_shortfall")` now minimises the largest **relative**

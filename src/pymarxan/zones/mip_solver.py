@@ -3,19 +3,51 @@ from __future__ import annotations
 
 import copy
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 import pulp
 
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers._mip_objectives import (
+    BUILDERS,
+    NO_SOLUTION_STATUSES,
+    ObjectiveContext,
+    TargetTerm,
+    resolve_objective,
+    set_objective,
+    validate_shortfall,
+)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.zones.diagnostics import (
     ZoneMIPNoSolutionWarning,
     _feature_groups,
+    _fmt,
     _pu_zone_rules,
+    _zone_cost_lookup,
     diagnose_zone_infeasibility,
+    min_forced_cost,
 )
 from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
 from pymarxan.zones.objective import _feature_arrays, build_zone_solution
+
+ZONE_MIP_OBJECTIVES = (
+    "min_set",
+    "max_features",
+    "max_weighted_features",
+    "min_shortfall",
+    "min_largest_shortfall",
+)
+
+
+@dataclass
+class _BuiltZoneModel:
+    model: pulp.LpProblem
+    x: dict[tuple[int, int], pulp.LpVariable]
+    pu_ids: list[int]
+    zone_ids: list[int]
+    blm: float
+    objective_expr: pulp.LpAffineExpression  # natural units (count for max_*)
 
 
 class ZoneMIPSolver(Solver):
@@ -34,13 +66,30 @@ class ZoneMIPSolver(Solver):
         Infeasible / no incumbent → ``[]`` plus one ``ZoneMIPNoSolutionWarning``
             (``diagnose_zone_infeasibility``)
 
-    Objective (minimize):
+    Objective ``min_set`` (default; minimize):
         zone costs + BLM * standard boundary + zone boundary costs + penalty
+
+    Budgeted objectives (require ``COSTBUDGET``; Σ zone cost <= COSTBUDGET):
+        ``max_features``           count of met targets (prioritizr ``max_n_targets_met``;
+                                   the alias ``max_n_targets_met`` is accepted)
+        ``max_weighted_features``  Σ SPF × met (prioritizr ``max_n_targets_met`` +
+                                   ``add_feature_weights`` — **not** ``max_wtd_sum``)
+        ``min_shortfall``          Σ SPF × shortfall
+        ``min_largest_shortfall``  max shortfall (unweighted)
+
+    Each zone target and each overall target (> 0) is its own term (prioritizr zones).
+    Shortfall is relative by default (shortfall / (target × MISSLEVEL));
+    ``shortfall="absolute"`` uses raw units. Budgeted objectives drop the hard targets and
+    the boundary terms (one ``UserWarning`` when BLM / zone boundary costs would apply).
+    ``Solution.metadata`` records ``objective``, ``shortfall`` and ``mip_objective_value``
+    (natural sign: a count for ``max_*``).
     """
 
     def __init__(
         self,
         *,
+        objective: str = "min_set",
+        shortfall: str = "relative",
         mip_clump_strategy: str = "drop",
         mip_sep_strategy: str = "drop",
         mip_backend: str = "auto",
@@ -54,6 +103,8 @@ class ZoneMIPSolver(Solver):
         Phase 21: ``mip_backend`` lets users select between CBC (default),
         HiGHS, and Gurobi (when installed). Same factory as ``MIPSolver``.
         """
+        self.objective = resolve_objective(objective, ZONE_MIP_OBJECTIVES)
+        self.shortfall = validate_shortfall(shortfall)
         # Use the shared MIPSolver validator for consistency.
         from pymarxan.solvers.mip_solver import (
             _MIP_BACKEND_NAMES,
@@ -94,9 +145,7 @@ class ZoneMIPSolver(Solver):
     def available(self) -> bool:
         return True
 
-    def solve(  # type: ignore[override]
-        self, problem: ZonalProblem, config: SolverConfig | None = None
-    ) -> list[Solution]:
+    def _check(self, problem: ConservationProblem) -> ZonalProblem:
         # Liskov: the Solver base takes ConservationProblem; zone solvers
         # specialise to ZonalProblem and verify at runtime. supports_zones()
         # advertises this so dispatchers route correctly.
@@ -106,10 +155,24 @@ class ZoneMIPSolver(Solver):
             )
         from pymarxan.solvers.separation import raise_if_separation_active
         raise_if_separation_active(problem, "ZoneMIPSolver")
-        warn_zone_input_issues(problem, "ZoneMIPSolver")
-        if config is None:
-            config = SolverConfig()
+        return problem
 
+    def _warn_boundary_ignored(self, problem: ZonalProblem) -> None:
+        if self.objective == "min_set":
+            return
+        blm = float(problem.parameters.get("BLM", 0.0))
+        zbc = problem.zone_boundary_costs
+        has_zbc = zbc is not None and bool((zbc["cost"].astype(float) != 0).any())
+        if problem.boundary is not None and (blm > 0 or has_zbc):
+            warnings.warn(
+                f"ZoneMIPSolver: objective {self.objective!r} ignores boundary penalties "
+                "(BLM / zone boundary costs); prioritizr applies them — planned follow-up",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _build(self, problem: ZonalProblem, config: SolverConfig) -> _BuiltZoneModel:
+        """A fresh model and objective context on every call (no state across calls)."""
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
         rules = _pu_zone_rules(problem)
@@ -133,47 +196,73 @@ class ZoneMIPSolver(Solver):
             else:
                 model += assigned == 1, f"assign_{pid}"
 
-        # --- Objective components ---
-
-        # 1. Zone costs
-        zc = problem.zone_costs
-        zc_lookup: dict[tuple[int, int], float] = {}
-        for row_k in range(len(zc)):
-            zc_lookup[
-                (int(zc["pu"].values[row_k]), int(zc["zone"].values[row_k]))
-            ] = float(zc["cost"].values[row_k])
-
+        # Zone costs (a (pu, zone) pair missing from zone_costs costs 0, MarZone)
+        zc_lookup = _zone_cost_lookup(problem)
         cost_expr = pulp.lpSum(
             zc_lookup.get((pid, zid), 0.0) * x[(pid, zid)]
             for pid in pu_ids
             for zid in zone_ids
         )
 
-        # 2. Standard boundary (BLM): penalize perimeter of selected set
-        boundary_expr = _build_standard_boundary_expr(
-            problem, x, pu_ids, zone_ids, model
+        if self.objective == "min_set":
+            # Standard boundary (BLM): penalize perimeter of selected set
+            boundary_expr = _build_standard_boundary_expr(
+                problem, x, pu_ids, zone_ids, model
+            )
+            # Zone boundary costs between adjacent PUs in different zones
+            zone_boundary_expr = _build_zone_boundary_expr(
+                problem, x, pu_ids, zone_ids, model
+            )
+            # Zone-target penalty (slack) and hard constraints share one achieved expression
+            zone_exprs = _zone_achieved_exprs(problem, x)
+            penalty_expr, _ = _build_penalty_expr(problem, zone_exprs, model)
+            model += (
+                cost_expr
+                + blm * boundary_expr
+                + zone_boundary_expr
+                + penalty_expr,
+                "objective",
+            )
+            # Feature target constraints
+            _add_zone_target_constraints(problem, zone_exprs, model)
+            _add_overall_target_constraints(problem, x, zone_ids, model)
+            objective_expr = model.objective
+        else:
+            budget = problem.parameters.get("COSTBUDGET")
+            if budget is None:
+                raise ValueError(
+                    f"objective={self.objective!r} requires a COSTBUDGET parameter "
+                    "(problem.parameters['COSTBUDGET'] = ...); it caps the total zone cost."
+                )
+            ctx = ObjectiveContext(model, cost_expr, _zone_target_terms(problem, x, zone_ids))
+            term = BUILDERS[self.objective](ctx, self.shortfall)
+            set_objective(model, term)
+            model += cost_expr <= float(budget), "cost_budget"
+            objective_expr = term.expr
+        return _BuiltZoneModel(
+            model=model, x=x, pu_ids=pu_ids, zone_ids=zone_ids, blm=blm,
+            objective_expr=objective_expr,
         )
 
-        # 3. Zone boundary costs between adjacent PUs in different zones
-        zone_boundary_expr = _build_zone_boundary_expr(
-            problem, x, pu_ids, zone_ids, model
-        )
+    def build_model(
+        self, problem: ZonalProblem, config: SolverConfig | None = None
+    ) -> pulp.LpProblem:
+        """The PuLP model ``solve`` would hand to the backend (for ``write_problem``)."""
+        problem = self._check(problem)
+        warn_zone_input_issues(problem, "ZoneMIPSolver")
+        self._warn_boundary_ignored(problem)
+        return self._build(problem, config or SolverConfig()).model
 
-        # 4. Zone-target penalty (slack) and hard constraints share one achieved expression
-        zone_exprs = _zone_achieved_exprs(problem, x)
-        penalty_expr, penalty_vars = _build_penalty_expr(problem, zone_exprs, model)
-
-        model += (
-            cost_expr
-            + blm * boundary_expr
-            + zone_boundary_expr
-            + penalty_expr,
-            "objective",
-        )
-
-        # --- Feature target constraints ---
-        _add_zone_target_constraints(problem, zone_exprs, model)
-        _add_overall_target_constraints(problem, x, zone_ids, model)
+    def solve(  # type: ignore[override]
+        self, problem: ZonalProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        problem = self._check(problem)
+        warn_zone_input_issues(problem, "ZoneMIPSolver")
+        self._warn_boundary_ignored(problem)
+        if config is None:
+            config = SolverConfig()
+        built = self._build(problem, config)
+        model, x, pu_ids, zone_ids = built.model, built.x, built.pu_ids, built.zone_ids
 
         # Solve via the Phase 21 backend factory.
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
@@ -193,14 +282,9 @@ class ZoneMIPSolver(Solver):
         # Accept feasible-on-timeout solutions: CBC sets status=NotSolved when
         # the time limit fires before optimality is proved, even though a
         # usable integer incumbent exists. See mip_solver.py for rationale.
-        infeasible_statuses = {
-            pulp.constants.LpStatusInfeasible,
-            pulp.constants.LpStatusUnbounded,
-            pulp.constants.LpStatusUndefined,
-        }
         has_values = any(var.varValue is not None for var in x.values())
-        if model.status in infeasible_statuses or not has_values:
-            _warn_no_solution(problem, model.status)
+        if model.status in NO_SOLUTION_STATUSES or not has_values:
+            _warn_no_solution(problem, model.status, self.objective)
             return []
 
         # Extract zone assignment
@@ -213,13 +297,22 @@ class ZoneMIPSolver(Solver):
                     zone_assignment[k] = zid
                     break
 
-        sol = build_zone_solution(problem, zone_assignment, blm, solver_name=self.name())
+        # pulp.value() is None when any variable has no value (a zero-cost x never written
+        # to the LP); evaluate the objective reading those as 0.
+        obj_expr = built.objective_expr
+        obj_value = float(obj_expr.constant or 0.0) + sum(
+            float(coef) * float(v.varValue or 0.0) for v, coef in obj_expr.items()
+        )
+        sol = build_zone_solution(problem, zone_assignment, built.blm, solver_name=self.name())
         # Merge, don't replace: build_zone_solution already recorded zone_targets_met
         # (issue #1: the old assignment silently discarded it).
         sol.metadata.update(
             {
                 "status": pulp.LpStatus[model.status],
                 "mip_backend": resolved_backend,
+                "objective": self.objective,
+                "shortfall": self.shortfall,
+                "mip_objective_value": obj_value,
             }
         )
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
@@ -409,30 +502,34 @@ def _add_zone_target_constraints(
         model += (exprs[(zid, fid)] >= target * misslevel, f"zone_target_{zid}_{fid}")
 
 
-def _add_overall_target_constraints(
+def _overall_targets(problem: ZonalProblem) -> dict[int, float]:
+    """feature id -> overall target (features order)."""
+    return dict(zip(
+        (int(f) for f in problem.features["id"].values),
+        problem.features["target"].values.astype(float),
+        strict=True,
+    ))
+
+
+def _overall_achieved_exprs(
     problem: ZonalProblem,
     x: dict[tuple[int, int], pulp.LpVariable],
     zone_ids: list[int],
-    model: pulp.LpProblem,
-) -> None:
-    """Hard constraints Σ_i Σ_z amount[i, f] × contribution[f, z] × x[i, z] >= target × MISSLEVEL.
+) -> dict[int, pulp.LpAffineExpression]:
+    """Σ_i Σ_z amount[i, f] × contribution[f, z] × x[i, z] per feature with target > 0.
 
-    Watts et al. 2009 eq. 6; MarZone ``reserve.hpp:158-171``. One constraint per feature with
-    ``target > 0``; a feature with no amounts anywhere makes the model infeasible (the solver
-    then returns ``[]``), which is the honest answer rather than a silently met target.
+    Watts et al. 2009 eq. 6; MarZone ``reserve.hpp:158-171``. Features order. A feature with
+    no amounts anywhere gets ``lpSum([])``: as a hard constraint the model is infeasible (the
+    solver then returns ``[]``), the honest answer rather than a silently met target.
     Contributions come from ``contribution_matrix()`` / ``zone_index()`` / ``feature_index()``
     exactly as ``_zone_achieved_exprs`` does (one convention per module).
     """
     contrib = problem.contribution_matrix()
     zidx = problem.zone_index()
     fidx = problem.feature_index()
-    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     groups = _feature_groups(problem)
-    for fid, target in zip(
-        problem.features["id"].values, problem.features["target"].values, strict=True,
-    ):
-        fid = int(fid)
-        t = float(target)
+    exprs: dict[int, pulp.LpAffineExpression] = {}
+    for fid, t in _overall_targets(problem).items():
         if t <= 0:
             continue
         col = fidx[fid]
@@ -442,12 +539,60 @@ def _add_overall_target_constraints(
                 c = float(contrib[zidx[zid], col])
                 if c != 0.0 and (pid, zid) in x:
                     terms.append(amt * c * x[(pid, zid)])
-        model += (pulp.lpSum(terms) >= t * misslevel, f"overall_target_{fid}")
+        exprs[fid] = pulp.lpSum(terms)
+    return exprs
 
 
-def _warn_no_solution(problem: ZonalProblem, status: int) -> None:
+def _add_overall_target_constraints(
+    problem: ZonalProblem,
+    x: dict[tuple[int, int], pulp.LpVariable],
+    zone_ids: list[int],
+    model: pulp.LpProblem,
+) -> None:
+    """Hard constraints ``_overall_achieved_exprs[f] >= target × MISSLEVEL`` (features order)."""
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    targets = _overall_targets(problem)
+    for fid, expr in _overall_achieved_exprs(problem, x, zone_ids).items():
+        model += (expr >= targets[fid] * misslevel, f"overall_target_{fid}")
+
+
+def _zone_target_terms(
+    problem: ZonalProblem,
+    x: dict[tuple[int, int], pulp.LpVariable],
+    zone_ids: list[int],
+) -> list[TargetTerm]:
+    """One term per (zone, feature) target and one per feature with overall target > 0 (D1)."""
+    spf = _spf_lookup(problem)
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    zone_exprs = _zone_achieved_exprs(problem, x)
+    terms = [
+        TargetTerm(f"z{zid}_f{fid}", "zone", zone_exprs[(zid, fid)], target * misslevel,
+                   spf.get(fid, 1.0))
+        for (zid, fid), target in problem.zone_target_lookup().items()
+    ]
+    targets = _overall_targets(problem)
+    terms += [
+        TargetTerm(f"o_f{fid}", "overall", expr, targets[fid] * misslevel, spf.get(fid, 1.0))
+        for fid, expr in _overall_achieved_exprs(problem, x, zone_ids).items()
+    ]
+    return terms
+
+
+def _warn_no_solution(problem: ZonalProblem, status: int, objective: str = "min_set") -> None:
     """One ZoneMIPNoSolutionWarning explaining an empty result; the return stays []."""
     name = pulp.LpStatus.get(status, str(status))
+    if objective != "min_set" and status == pulp.constants.LpStatusInfeasible:
+        floor = min_forced_cost(problem)
+        budget = float(problem.parameters.get("COSTBUDGET", 0.0))
+        if floor > budget:
+            msg = (
+                f"ZoneMIPSolver: infeasible. The planning units that must be assigned cost "
+                f"at least {_fmt(floor)} > COSTBUDGET {_fmt(budget)}."
+            )
+        else:
+            msg = f"ZoneMIPSolver: objective {objective!r} infeasible (status {name})."
+        warnings.warn(msg, ZoneMIPNoSolutionWarning, stacklevel=3)
+        return
     if status == pulp.constants.LpStatusInfeasible:
         try:
             unreachable = diagnose_zone_infeasibility(problem)

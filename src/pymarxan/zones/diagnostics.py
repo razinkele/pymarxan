@@ -43,6 +43,37 @@ def _fmt(x: float) -> str:
     return f"{x:.6g}"
 
 
+def _zone_cost_lookup(problem: ZonalProblem) -> dict[tuple[int, int], float]:
+    """(pu, zone) -> cost; a missing pair costs 0 (MarZone; prioritizr NA means forbidden)."""
+    zc = problem.zone_costs
+    return {
+        (int(p), int(z)): float(c)
+        for p, z, c in zip(zc["pu"].values, zc["zone"].values, zc["cost"].values, strict=True)
+    }
+
+
+def min_forced_cost(problem: ZonalProblem) -> float:
+    """Least total zone cost any rule-respecting assignment must pay.
+
+    Σ over must-assign PUs of the cheapest allowed zone cost, plus min(0, cheapest) for PUs
+    that may stay unassigned (a negative cost lowers the floor). COSTBUDGET below this is
+    infeasible for every budgeted objective.
+    """
+    lookup = _zone_cost_lookup(problem)
+    total = 0.0
+    for pid, rule in zip(
+        (int(p) for p in problem.planning_units["id"].values),
+        problem.pu_zone_rules(),
+        strict=True,
+    ):
+        costs = [lookup.get((pid, z), 0.0) for z in rule.allowed]
+        if not costs:
+            continue
+        cheapest = min(costs)
+        total += min(0.0, cheapest) if rule.may_be_unassigned else cheapest
+    return total
+
+
 def diagnose_zone_infeasibility(problem: ZonalProblem) -> list[str]:
     """Targets no assignment can meet, each checked on its own (necessary conditions only).
 
