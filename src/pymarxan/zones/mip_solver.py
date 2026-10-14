@@ -19,6 +19,7 @@ from pymarxan.solvers._mip_objectives import (
     validate_shortfall,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.presolve import _emit_presolve, _validate_presolve_flag
 from pymarxan.zones.diagnostics import (
     ZoneMIPNoSolutionWarning,
     _feature_groups,
@@ -83,6 +84,11 @@ class ZoneMIPSolver(Solver):
     the boundary terms (one ``UserWarning`` when BLM / zone boundary costs would apply).
     ``Solution.metadata`` records ``objective``, ``shortfall`` and ``mip_objective_value``
     (natural sign: a count for ``max_*``).
+
+    ``presolve_check`` (default ``False``): ``True`` runs
+    :func:`~pymarxan.solvers.presolve.presolve_check` plus a scan of the built model (P10)
+    in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
+    ``ValueError`` instead.
     """
 
     def __init__(
@@ -93,6 +99,7 @@ class ZoneMIPSolver(Solver):
         mip_clump_strategy: str = "drop",
         mip_sep_strategy: str = "drop",
         mip_backend: str = "auto",
+        presolve_check: bool | str = False,
     ) -> None:
         """Per-zone TARGET2 / SEPNUM are out of scope for v0.2 (see Phase
         19/20 design §"What's NOT in scope"). The kwargs are accepted for
@@ -131,6 +138,7 @@ class ZoneMIPSolver(Solver):
         self.mip_clump_strategy = mip_clump_strategy
         self.mip_sep_strategy = mip_sep_strategy
         self.mip_backend = mip_backend
+        self.presolve_check = _validate_presolve_flag(presolve_check)
 
     def name(self) -> str:
         return "Zone MIP (PuLP)"
@@ -251,7 +259,9 @@ class ZoneMIPSolver(Solver):
         problem = self._check(problem)
         warn_zone_input_issues(problem, "ZoneMIPSolver")
         self._warn_boundary_ignored(problem)
-        return self._build(problem, config or SolverConfig()).model
+        built = self._build(problem, config or SolverConfig())
+        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        return built.model
 
     def solve(  # type: ignore[override]
         self, problem: ZonalProblem, config: SolverConfig | None = None
@@ -262,6 +272,7 @@ class ZoneMIPSolver(Solver):
         if config is None:
             config = SolverConfig()
         built = self._build(problem, config)
+        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
         model, x, pu_ids, zone_ids = built.model, built.x, built.pu_ids, built.zone_ids
 
         # Solve via the Phase 21 backend factory.

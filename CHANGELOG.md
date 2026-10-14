@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pymarxan.solvers.write_problem(problem, path, solver=None)` — write the MIP model to
   `.lp` / `.mps` (prioritizr `write_problem`); `MIPSolver.build_model` /
   `ZoneMIPSolver.build_model`. (stage1)
+- `presolve_check(problem)` (also `pymarxan.presolve_check`) and `presolve_check=True |
+  "strict"` on both MIP solvers — data and model-coefficient checks before solving, inspired by
+  prioritizr's `presolve_check` (checks differ; opt-in). `PresolveWarning`. (stage1)
 
 ### Changed
 - `MIPSolver(objective="min_largest_shortfall")` now minimises the largest **relative**

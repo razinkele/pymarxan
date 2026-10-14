@@ -32,6 +32,7 @@ from pymarxan.solvers._mip_objectives import (
     validate_shortfall,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.presolve import _emit_presolve, _validate_presolve_flag
 from pymarxan.solvers.utils import build_solution
 
 
@@ -206,6 +207,11 @@ class MIPSolver(Solver):
     of ``min_largest_shortfall``). In relative units a feature with a target but no
     ``pu_vs_features`` rows has full shortfall and pins the minimax at 1.0
     (``presolve_check`` P5 flags it).
+
+    ``presolve_check`` (default ``False``): ``True`` runs
+    :func:`~pymarxan.solvers.presolve.presolve_check` plus a scan of the built model (P10)
+    in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
+    ``ValueError`` instead.
     """
 
     def __init__(
@@ -218,6 +224,7 @@ class MIPSolver(Solver):
         objective: str = "min_set",
         shortfall: str = "relative",
         warn_above_pu: int | None = 200_000,
+        presolve_check: bool | str = False,
     ) -> None:
         _validate_mip_strategy(
             "mip_chance_strategy", mip_chance_strategy,
@@ -249,6 +256,7 @@ class MIPSolver(Solver):
         self.objective = resolve_objective(objective, MIP_OBJECTIVES)
         self.shortfall = validate_shortfall(shortfall)
         self.warn_above_pu = warn_above_pu
+        self.presolve_check = _validate_presolve_flag(presolve_check)
 
     def name(self) -> str:
         return "MIP (PuLP)"
@@ -648,7 +656,9 @@ class MIPSolver(Solver):
         if config is None:
             config = SolverConfig()
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
-        return self._build(problem, config).model
+        built = self._build(problem, config)
+        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
+        return built.model
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
@@ -658,6 +668,7 @@ class MIPSolver(Solver):
         # S3b: heads-up before building the model when the MILP is likely too large.
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
         built = self._build(problem, config)
+        _emit_presolve(self.presolve_check, problem, built.model, self.name(), stacklevel=3)
         model, x, pu_ids = built.model, built.x, built.pu_ids
         probmode, has_target2 = built.probmode, built.has_target2
         has_sep_active, blm = built.has_sep_active, built.blm
