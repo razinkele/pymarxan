@@ -80,7 +80,7 @@ The detailed subpackage table, solver matrix, I/O conventions, and Shiny module 
 
 ## Conventions
 
-- Python 3.12+, `from __future__ import annotations` in every file, full type hints maintained.
+- Python 3.11+ (pyproject floor; CI tests 3.11 and 3.12), `from __future__ import annotations` in every file, full type hints maintained. Guard any 3.12-only stdlib API with `sys.version_info`.
 - Domain models are dataclasses. Test layout mirrors `src/` (`tests/pymarxan/{subpackage}/`).
 - Strongly TDD: write the failing test first (`superpowers:test-driven-development`).
 - I/O comes in symmetric `read_*`/`write_*` pairs; `load_project`/`save_project` are the entry points (delimiter auto-detected).

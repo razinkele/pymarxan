@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Docs now state the supported Python floor consistently as 3.11+ (matching `requires-python` and the CI matrix); README badge, user manual, CLAUDE.md and copilot-instructions previously said 3.12+ or 3.10+.
+- Test suite passes on PuLP 3.3.2, which deprecates `LpVariable(...)` and `PULP_CBC_CMD`: a warnings-as-errors test no longer trips on PuLP's own `DeprecationWarning` (v0.39.0 CI was red on this).
+
 ## [0.39.0] — 2026-10-14
 
 ### Added

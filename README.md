@@ -2,7 +2,7 @@
 
 Modular Python toolkit for Marxan conservation planning.
 
-![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-1603%20passing-brightgreen)
 

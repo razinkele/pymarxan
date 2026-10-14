@@ -262,6 +262,9 @@ def test_min_penalties_no_targets_is_min_cost(status: list[int]) -> None:
     p = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pvf)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        # PuLP >= 3.3.2 deprecates its own API (LpVariable(), PULP_CBC_CMD); the pass-2
+        # fallback this test guards against is a UserWarning, so it still errors.
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
         sols = MIPSolver(objective="min_penalties").solve(p, ONE)
     assert len(sols) == 1
     assert sols[0].selected.tolist() == [status[0] == 2, False]

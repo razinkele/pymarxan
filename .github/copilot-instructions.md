@@ -113,7 +113,7 @@ Conventions: file named `{module_name}.py`, functions named `{module_name}_ui()`
 
 ## Key Conventions
 
-- **Python 3.12+** with `from __future__ import annotations` in all files.
+- **Python 3.11+** (CI tests 3.11 and 3.12) with `from __future__ import annotations` in all files.
 - **Ruff** for linting (rules: E, F, I, UP; line length 99).
 - **mypy** with `warn_return_any = true`.
 - **Full type hints** throughout — maintain this when adding code.

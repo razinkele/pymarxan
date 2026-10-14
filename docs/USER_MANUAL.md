@@ -82,7 +82,7 @@ Where:
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Required packages: `shiny`, `pandas`, `numpy`, `pulp`
 - Optional: `geopandas`, `shapely`, `ipyleaflet`, `shinywidgets`, `plotly`, `matplotlib`
 
