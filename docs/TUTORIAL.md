@@ -148,16 +148,18 @@ pd.DataFrame({
 
 ## 5. Alternative MIP objectives (Phase 23)
 
-`MIPSolver(objective=...)` picks from four formulations. `min_set` is
-the default Marxan problem; the other three lift you out of pure
-minimum-set.
+`MIPSolver(objective=...)` picks from six formulations (`max_n_targets_met`
+is an accepted alias of `max_features`). `min_set` is the default Marxan
+problem; the others lift you out of pure minimum-set.
 
 | `objective` | Goal | Required parameters |
 | --- | --- | --- |
 | `"min_set"` | Minimise `cost + BLM·boundary + penalty` | — (default) |
 | `"max_features"` | Maximise count of feature targets met under a cost cap | `COSTBUDGET` |
-| `"min_largest_shortfall"` | Minimax: minimise the worst per-feature shortfall | `COSTBUDGET` |
-| `"min_penalties"` | Hierarchical: minimise SPF-weighted shortfall first, cost second | — |
+| `"max_weighted_features"` | Maximise the SPF-weighted count of feature targets met under a cost cap | `COSTBUDGET` |
+| `"min_shortfall"` | Minimise SPF-weighted **relative** shortfall | `COSTBUDGET` |
+| `"min_largest_shortfall"` | Minimax over **relative** shortfall (`shortfall="absolute"` for v0.38 behaviour) | `COSTBUDGET` |
+| `"min_penalties"` | Exact lexicographic: SPF-weighted shortfall first, cost second (not prioritizr's `add_min_penalties_objective`) | — |
 
 ```python
 problem.parameters["COSTBUDGET"] = 5.0  # tight enough to force trade-offs
@@ -180,6 +182,17 @@ targets you can hit; `min_largest_shortfall` when you want to avoid
 abandoning any one feature (good for endangered-species portfolios);
 `min_penalties` when you'd pay extra to meet every target if at all
 feasible (i.e. a softer min-set).
+
+Zone problems take the same objectives (except `min_penalties`) through
+`ZoneMIPSolver(objective=...)`; the budgeted ones need `COSTBUDGET`. Names
+map to prioritizr (>= 9) as follows:
+
+| pymarxan | prioritizr >= 9 |
+|---|---|
+| `max_features` | `add_max_n_targets_met_objective` |
+| `max_weighted_features` | `add_max_n_targets_met_objective` + `add_feature_weights` (not `max_wtd_sum`) |
+| `min_shortfall` | `add_min_shortfall_objective` |
+| `min_largest_shortfall` | `add_min_largest_shortfall_objective` |
 
 ## 6. Connectivity metrics (Phase 24)
 

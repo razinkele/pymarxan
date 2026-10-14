@@ -545,7 +545,7 @@ Download results as CSV files:
 | **Zone Contribution** | How much a PU in a given zone contributes to a feature's target (0–1 multiplier) |
 | **Zone Boundary Cost** | Penalty for adjacent PUs being in different zone types |
 | **Constraint** | An additional rule beyond targets — contiguity, minimum neighbors, budget caps, etc. |
-| **Objective** | The objective function type: MinSet (default), MaxCoverage, MaxUtility, MinShortfall |
+| **Objective** | The MIP objective: `min_set` (default), `max_features`, `max_weighted_features`, `min_shortfall`, `min_largest_shortfall`, `min_penalties` (core only); the Shiny selector does not yet drive it |
 | **puvspr.dat** | Planning Unit vs. Species file — maps features to PUs with amounts |
 | **bound.dat** | Boundary definition file — pairwise boundary lengths between adjacent PUs |
 | **prob.dat** | Probability file — per-PU habitat persistence probabilities |

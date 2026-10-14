@@ -39,7 +39,7 @@ pymarxan is a three-layer monorepo:
 | `zones/` | `ZonalProblem`, zone SA/heuristic/II/MIP solvers, zone I/O |
 | `connectivity/` | Distance decay functions, connectivity penalties |
 | `constraints/` | ABCs + contiguity, feature contiguity, neighbor, linear, budget constraints |
-| `objectives/` | ABCs + MinSet, MaxCoverage, MaxUtility, MinShortfall objectives |
+| `objectives/` | **Deprecated v0.39, removal v0.42** — objectives live on `MIPSolver(objective=...)` / `ZoneMIPSolver(objective=...)` (`solvers/_mip_objectives.py`) |
 | `spatial/` | Grid generation, feature intersection, boundary generation, GeoPackage export |
 | `io/` | Marxan file readers/writers (binary & zone formats), output controller |
 | `calibration/` | BLM calibration & sensitivity analysis |

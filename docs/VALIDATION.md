@@ -148,6 +148,29 @@ read only the pu.dat `status` column and do not see pulock/puzone rows;
 `tests/pymarxan/zones/test_pu_zone_solvers.py` pins the exact-MIP anchors (lock: `(2, 1, 2)` at
 8.0; must-assign: `(1, 2, 2, 2)` at 9.0) and the rules on every solver's output.
 
+### Stage 1 zone-MIP objectives and mandatory allocation
+
+The v0.39 zone-MIP objectives are checked against brute-force enumeration
+on seeded random instances (`test_zone_mip_random_oracle.py`). Where
+pymarxan deliberately differs from Marxan or prioritizr:
+
+- Relative shortfall uses the divisor R = target x MISSLEVEL (prioritizr has
+  no MISSLEVEL).
+- Ghost features (target > 0, no `pu_vs_features` rows) count as terms that
+  are never met and have full shortfall.
+- A missing zone cost is 0 (prioritizr: NA = forbidden).
+- `MANDATORYALLOCATION` is a pymarxan key; status 3 wins (prioritizr would
+  be infeasible).
+- MarZone keeps every PU in one of its zones and its first zone is the
+  do-nothing state. `MANDATORYALLOCATION 1` reproduces MarZone only when the
+  project's zones include that available zone; when pymarxan's zone 0 stands
+  in for it, leave the key at 0 (no AVAILABLEZONE key exists at 85082e3).
+- Single-zone problems are allowed (prioritizr refuses).
+- SA never leaves a free PU unassigned even with the parameter off.
+- Heuristic II at ITIMPTYPE 0/1 only reproduces its seed for must-assign PUs.
+- Presolve differs from prioritizr (absolute vs ratio thresholds, opt-in).
+- Core `min_penalties` is two-pass (shortfall first, then cost under a cap).
+
 ## Comparing against the Marxan C++ binary
 
 The strongest possible check is a numerical comparison against the

@@ -72,7 +72,7 @@ pymarxan (three-layer monorepo)
 │   ├── connectivity/      Distance decay, penalties, circuit-theory (current-flow), smoothing
 │   ├── rivers/            River-network (DCI) + barrier-removal optimization
 │   ├── constraints/       Contiguity, feature contiguity, neighbor, linear, budget
-│   ├── objectives/        MinSet, MaxCoverage, MaxUtility, MinShortfall
+│   ├── objectives/        Deprecated (v0.39, removal v0.42): use MIPSolver(objective=...)
 │   ├── targets/           Automatic target rules (relative, log-linear, group)
 │   ├── spatial/           Grid generation, feature intersection, boundary, export
 │   ├── io/                Marxan file readers/writers (binary & zone formats)

@@ -24,7 +24,7 @@ whole-branch review → gate → release. Every solver-touching stage keeps the 
 
 ### Already at parity (don't rebuild)
 
-- **Objectives:** min set, max features met (`max_features`), weighted features met, min shortfall, min largest shortfall, min penalties, phylogenetic diversity.
+- **Objectives:** min set, max features met (`max_features`), weighted features met, min largest shortfall, min penalties, phylogenetic diversity.
 - **Constraints:** contiguity, feature contiguity, min-neighbour, linear, budget, locked in/out, zone pulock/puzone.
 - **Penalties:** boundary, symmetric and asymmetric connectivity, Cohon BLM calibration with a Pareto frontier.
 - **Portfolios:** cuts, gap filter, selection frequency.
@@ -33,7 +33,13 @@ whole-branch review → gate → release. Every solver-touching stage keeps the 
 
 ---
 
-## Stage 1 — v0.39.0: Zone-MIP parity + solver tooling
+## Stage 1 — v0.39.0: Zone-MIP parity + solver tooling (SHIPPED, v0.39)
+
+**As shipped (v0.39.0):** mandatory allocation is the `MANDATORYALLOCATION` parameter honoured
+via `pu_zone_rules()` (there is no `mandatory_allocation=` kwarg); the presolve flag is
+`presolve_check=True | "strict"` (not `check=True`); `max_weighted_features` is included; zone
+`min_penalties` is deferred. Follow-ups: remove `pymarxan.objectives` in v0.42; wire the Shiny
+`objective_selector` to the MIP objectives. The scope text below is the pre-design plan.
 
 **Goal:** zone problems get the same exact objectives as single-zone problems, and users can see
 and check the optimisation model before solving.
