@@ -22,6 +22,14 @@ from pymarxan.solvers._backends import (
 from pymarxan.solvers._backends import (
     _make_pulp_solver as _make_pulp_solver,
 )
+from pymarxan.solvers._mip_objectives import (
+    BUILDERS,
+    ObjectiveContext,
+    TargetTerm,
+    resolve_objective,
+    set_objective,
+    validate_shortfall,
+)
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import build_solution
 
@@ -81,6 +89,64 @@ def _core_spf(problem: ConservationProblem) -> dict[int, float]:
     }
 
 
+MIP_OBJECTIVES = (
+    "min_set",
+    "max_features",
+    "max_weighted_features",
+    "min_shortfall",
+    "min_largest_shortfall",
+    "min_penalties",
+)
+
+
+def _core_amount_exprs(
+    problem: ConservationProblem,
+    x: dict[int, pulp.LpVariable],
+    prob_map_m2: dict[int, float],
+) -> dict[int, pulp.LpAffineExpression]:
+    """feature id -> Σ amount·x (PROBMODE 2: × (1 − p)) for features with rows."""
+    out: dict[int, pulp.LpAffineExpression] = {}
+    for fid_raw, feat_data in problem.pu_vs_features.groupby("species"):
+        fid = int(fid_raw)  # type: ignore[arg-type]  # pandas-stubs types the key as a union
+        pus = feat_data["pu"].values
+        amounts = feat_data["amount"].values
+        if prob_map_m2:
+            out[fid] = pulp.lpSum(
+                float(amt) * (1.0 - prob_map_m2.get(int(pu), 0.0)) * x[int(pu)]
+                for pu, amt in zip(pus, amounts)
+            )
+        else:
+            out[fid] = pulp.lpSum(float(amt) * x[int(pu)] for pu, amt in zip(pus, amounts))
+    return out
+
+
+def _core_target_terms(
+    problem: ConservationProblem,
+    x: dict[int, pulp.LpVariable],
+    prob_map_m2: dict[int, float],
+    exprs: dict[int, pulp.LpAffineExpression] | None = None,
+) -> list[TargetTerm]:
+    """One term per feature with target > 0; ghosts get lpSum([]) (spec §1).
+
+    ``exprs`` is the ``_core_amount_exprs`` map when the caller has already built it.
+    """
+    exprs = _core_amount_exprs(problem, x, prob_map_m2) if exprs is None else exprs
+    spf = _core_spf(problem)
+    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+    terms: list[TargetTerm] = []
+    for fid_raw, target in zip(
+        problem.features["id"].values, problem.features["target"].values, strict=True,
+    ):
+        fid, t = int(fid_raw), float(target)
+        if t <= 0:
+            continue
+        terms.append(TargetTerm(
+            key=f"f{fid}", kind="feature", achieved=exprs.get(fid, pulp.lpSum([])),
+            required=t * misslevel, weight=spf[fid],
+        ))
+    return terms
+
+
 @dataclass
 class _BuiltModel:
     """Result of ``MIPSolver._build``: the PuLP model plus what ``solve`` needs."""
@@ -122,6 +188,19 @@ class MIPSolver(Solver):
       in CBC. Deferred to Phase 18.5.
     - ``"socp"``: exact SOCP formulation via Gurobi/CPLEX. Deferred to
       Phase 21.
+
+    ``objective`` selects the formulation (Stage 1): ``"min_set"`` (default, above),
+    ``"max_features"`` / ``"max_weighted_features"`` (count or SPF-weighted count of targets
+    met under ``COSTBUDGET``; ``"max_n_targets_met"`` is an accepted alias of
+    ``"max_features"``), ``"min_shortfall"`` (Σ SPF·shortfall under ``COSTBUDGET``),
+    ``"min_largest_shortfall"`` (minimax shortfall under ``COSTBUDGET``) and
+    ``"min_penalties"`` (Σ SPF·shortfall first, cost second).
+
+    ``shortfall`` sets the units of the two shortfall objectives: ``"relative"`` (default,
+    shortfall / (target × MISSLEVEL), as prioritizr) or ``"absolute"`` (the v0.38 behaviour
+    of ``min_largest_shortfall``). In relative units a feature with a target but no
+    ``pu_vs_features`` rows has full shortfall and pins the minimax at 1.0
+    (``presolve_check`` P5 flags it).
     """
 
     def __init__(
@@ -132,6 +211,7 @@ class MIPSolver(Solver):
         mip_sep_strategy: str = "drop",
         mip_backend: str = "auto",
         objective: str = "min_set",
+        shortfall: str = "relative",
         warn_above_pu: int | None = 200_000,
     ) -> None:
         _validate_mip_strategy(
@@ -157,21 +237,12 @@ class MIPSolver(Solver):
                 f"mip_backend must be one of {_MIP_BACKEND_NAMES}, got "
                 f"{mip_backend!r}."
             )
-        _validate_mip_strategy(
-            "objective", objective,
-            (
-                "min_set",
-                "max_features",
-                "min_largest_shortfall",
-                "min_penalties",
-                "max_weighted_features",
-            ),
-        )
         self.mip_chance_strategy = mip_chance_strategy
         self.mip_clump_strategy = mip_clump_strategy
         self.mip_sep_strategy = mip_sep_strategy
         self.mip_backend = mip_backend
-        self.objective = objective
+        self.objective = resolve_objective(objective, MIP_OBJECTIVES)
+        self.shortfall = validate_shortfall(shortfall)
         self.warn_above_pu = warn_above_pu
 
     def name(self) -> str:
@@ -367,13 +438,43 @@ class MIPSolver(Solver):
                     for k in range(len(pu_id_arr))
                 )
 
+        # Build probability map for Mode 2 (persistence-adjusted amounts)
+        prob_map_m2: dict[int, float] = {}
+        if (
+            problem.probability is not None
+            and prob_mode == 2
+        ):
+            p_pu = problem.probability["pu"].values
+            p_val = problem.probability["probability"].values
+            for pk in range(len(p_pu)):
+                prob_map_m2[int(p_pu[pk])] = float(p_val[pk])
+
+        amount_exprs = _core_amount_exprs(problem, x, prob_map_m2)
+
         # Phase 23: select objective formulation. Default "min_set" preserves
         # pre-Phase-23 behaviour.
         feat_met: dict[int, pulp.LpVariable] = {}
         slack: dict[int, pulp.LpVariable] = {}
         t_var: pulp.LpVariable | None = None
         feat_ids_init = problem.features["id"].values
-        if self.objective == "max_features":
+        builder_path = self.objective == "min_shortfall" or (
+            self.objective == "min_largest_shortfall" and self.shortfall == "relative"
+        )
+        if builder_path:
+            cost_budget = problem.parameters.get("COSTBUDGET")
+            if cost_budget is None:
+                raise ValueError(
+                    f"objective={self.objective!r} requires a COSTBUDGET parameter "
+                    "(problem.parameters['COSTBUDGET'] = ...); without a budget every "
+                    "shortfall is 0 by selecting all planning units."
+                )
+            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
+            ctx = ObjectiveContext(model, cost_expr, terms)
+            term = BUILDERS[self.objective](ctx, self.shortfall)
+            set_objective(model, term)
+            model += cost_expr <= float(cost_budget), "cost_budget"
+            objective_expr = term.expr
+        elif self.objective == "max_features":
             # Binary z_j per feature; relaxed target ≥ target · z_j; cost
             # cap from COSTBUDGET. Maximise Σ z_j (LpMinimize → negate).
             cost_budget = problem.parameters.get("COSTBUDGET")
@@ -467,44 +568,17 @@ class MIPSolver(Solver):
         # Constraints: feature targets
         misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
 
-        # Build probability map for Mode 2 (persistence-adjusted amounts)
-        prob_map_m2: dict[int, float] = {}
-        if (
-            problem.probability is not None
-            and prob_mode == 2
-        ):
-            p_pu = problem.probability["pu"].values
-            p_val = problem.probability["probability"].values
-            for pk in range(len(p_pu)):
-                prob_map_m2[int(p_pu[pk])] = float(p_val[pk])
-
         # Pre-group feature data for O(1) lookup instead of O(R) filtering
         feat_groups = problem.pu_vs_features.groupby("species")
-        
+
         feat_ids = problem.features["id"].values
         feat_targets = problem.features["target"].values.astype(float)
         for fi in range(len(feat_ids)):
             fid = int(feat_ids[fi])
             target = float(feat_targets[fi]) * misslevel
-            
-            if fid in feat_groups.groups:
-                feat_data = feat_groups.get_group(fid)
-                # Optimize iteration using zip instead of iterrows
-                pus = feat_data["pu"].values
-                amounts = feat_data["amount"].values
-                
-                if prob_map_m2:
-                    # Mode 2: effective_amount = amount * (1 - probability)
-                    amount_expr = pulp.lpSum(
-                        float(amt) * (1.0 - prob_map_m2.get(int(pu), 0.0))
-                        * x[int(pu)]
-                        for pu, amt in zip(pus, amounts)
-                    )
-                else:
-                    amount_expr = pulp.lpSum(
-                        float(amt) * x[int(pu)]
-                        for pu, amt in zip(pus, amounts)
-                    )
+
+            if fid in feat_groups.groups and not builder_path:
+                amount_expr = amount_exprs[fid]
                 if self.objective in ("max_features", "max_weighted_features"):
                     # Relaxed target: only enforced when feat_met_j = 1.
                     # Maximising Σ (weight·)feat_met_j therefore picks as many
@@ -649,6 +723,7 @@ class MIPSolver(Solver):
             "mip_backend": resolved_backend,
             "objective": self.objective,
             "mip_objective_value": obj_value,
+            "shortfall": self.shortfall,
         }
         if probmode == 3:
             meta["mip_chance_strategy"] = self.mip_chance_strategy

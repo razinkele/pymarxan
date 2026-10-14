@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `MIPSolver(objective="min_shortfall")` — minimise the SPF-weighted shortfall under
+  `COSTBUDGET` (prioritizr `add_min_shortfall_objective`). `objective="max_n_targets_met"` is
+  accepted as an alias of `max_features` (prioritizr ≥ 9 name). (stage1)
+- `MIPSolver(shortfall="relative" | "absolute")`.
+
+### Changed
+- `MIPSolver(objective="min_largest_shortfall")` now minimises the largest **relative**
+  shortfall (shortfall / (target × MISSLEVEL), as prioritizr) and counts features with no
+  occurrences. Pass `shortfall="absolute"` for the v0.38 behaviour. (stage1)
+
 ### Fixed
 - `MIPSolver` returned no solution when a zero-cost planning unit held no features (its
   variable never entered the model) (stage1, S9).

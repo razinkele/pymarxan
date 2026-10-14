@@ -13,6 +13,7 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver
 from tests.pymarxan.lp_canon import canonical_model, captured_models
+from tests.pymarxan.solvers.test_stage1_golden_v038 import make_relabs_problem
 
 ONE = SolverConfig(num_solutions=1)
 SIMPLE = Path(__file__).parent.parent.parent / "data" / "simple"
@@ -104,3 +105,79 @@ def test_large_mip_warning_once_with_caller_frame() -> None:
         large = [x for x in w if "warn_above_pu" in str(x.message)]
         assert len(large) == 1
         assert large[0].filename == __file__
+
+
+def test_relative_is_default_and_differs_from_absolute() -> None:
+    rel = MIPSolver(objective="min_largest_shortfall").solve(make_relabs_problem(), ONE)[0]
+    ab = MIPSolver(objective="min_largest_shortfall", shortfall="absolute").solve(
+        make_relabs_problem(), ONE,
+    )[0]
+    assert rel.selected.tolist() == [False, False, True]
+    assert rel.metadata["mip_objective_value"] == pytest.approx(0.7)
+    assert rel.metadata["shortfall"] == "relative"
+    assert ab.selected.tolist() == [True, False, False]
+    assert ab.metadata["mip_objective_value"] == pytest.approx(40.0)
+
+
+def test_min_shortfall_values() -> None:
+    p = make_relabs_problem()
+    rel = MIPSolver(objective="min_shortfall").solve(p, ONE)[0]
+    ab = MIPSolver(objective="min_shortfall", shortfall="absolute").solve(p, ONE)[0]
+    assert rel.metadata["mip_objective_value"] == pytest.approx(1.2)  # PU2/PU3 tie
+    assert ab.selected.tolist() == [True, False, False]
+    assert ab.metadata["mip_objective_value"] == pytest.approx(50.0)
+
+
+def test_absolute_min_shortfall_is_spf_weighted() -> None:
+    # spf b = 3: PU1 -> 40 + 3 * 10 = 70 (unweighted would report 50).
+    w = make_relabs_problem()
+    w = w.copy_with(features=w.features.assign(spf=[1.0, 3.0]))
+    sol = MIPSolver(objective="min_shortfall", shortfall="absolute").solve(w, ONE)[0]
+    assert sol.selected.tolist() == [True, False, False]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(70.0)
+
+
+def test_core_reused_instance_no_state_leak() -> None:
+    # Review Focus 5 (core): a _build that caches terms on self would return p1's 0.7 for p2.
+    solver = MIPSolver(objective="min_largest_shortfall")
+    p1 = make_relabs_problem()
+    p2 = p1.copy_with(features=p1.features.assign(target=[40.0, 10.0]))  # PU3 -> 0.5
+    solver.build_model(p1)
+    a = solver.solve(p2, ONE)[0].metadata["mip_objective_value"]
+    b = solver.solve(p1, ONE)[0].metadata["mip_objective_value"]
+    assert a == pytest.approx(0.5)
+    assert b == pytest.approx(0.7)
+
+
+def test_min_shortfall_requires_budget() -> None:
+    p = make_relabs_problem()
+    p = p.copy_with(parameters={"BLM": 0.0})
+    with pytest.raises(ValueError, match="min_shortfall.*COSTBUDGET"):
+        MIPSolver(objective="min_shortfall").solve(p, ONE)
+
+
+def test_relative_counts_ghost_feature() -> None:
+    sol = MIPSolver(objective="min_largest_shortfall").solve(_with_ghost(1.0), ONE)[0]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("misslevel", [0.0, 0.5])
+def test_relative_misslevel_divisor(misslevel: float) -> None:
+    p = make_relabs_problem()
+    p = p.copy_with(parameters={**p.parameters, "MISSLEVEL": misslevel})
+    sol = MIPSolver(objective="min_largest_shortfall").solve(p, ONE)[0]
+    if misslevel == 0.0:
+        assert sol.metadata["shortfall"] == "relative"  # written by Step 3 only: RED now
+        assert sol.metadata["mip_objective_value"] == pytest.approx(0.0)  # every R <= 0 skipped
+    else:
+        # R_a = 50, R_b = 5: PU3 -> a 20/50 = 0.4, b 0 -> 0.4; PU1 -> b 5/5 = 1.0
+        assert sol.selected.tolist() == [False, False, True]
+        assert sol.metadata["mip_objective_value"] == pytest.approx(0.4)
+
+
+def test_alias_and_bad_names() -> None:
+    assert MIPSolver(objective="max_n_targets_met").objective == "max_features"
+    with pytest.raises(ValueError, match="shortfall"):
+        MIPSolver(shortfall="percent")
+    with pytest.raises(ValueError, match="objective"):
+        MIPSolver(objective="max_utility")
