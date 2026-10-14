@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 import pulp
@@ -78,6 +79,21 @@ def _core_spf(problem: ConservationProblem) -> dict[int, float]:
         int(f): float(s)
         for f, s in zip(ids, problem.features["spf"].values.astype(float), strict=True)
     }
+
+
+@dataclass
+class _BuiltModel:
+    """Result of ``MIPSolver._build``: the PuLP model plus what ``solve`` needs."""
+
+    model: pulp.LpProblem
+    x: dict[int, pulp.LpVariable]
+    pu_ids: list[int]
+    blm: float
+    objective_expr: pulp.LpAffineExpression  # natural units
+    probmode: int
+    has_target2: bool
+    has_sep_active: bool
+    lex: tuple[pulp.LpAffineExpression, pulp.LpAffineExpression] | None = None
 
 
 class MIPSolver(Solver):
@@ -167,14 +183,9 @@ class MIPSolver(Solver):
     def available(self) -> bool:
         return True  # pulp is a core dependency
 
-    def solve(
-        self, problem: ConservationProblem, config: SolverConfig | None = None
-    ) -> list[Solution]:
-        if config is None:
-            config = SolverConfig()
-
-        # S3b: heads-up before building the model when the MILP is likely too large.
-        _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
+    def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
+        """Build the PuLP model (no warnings, no solve)."""
+        objective_expr: pulp.LpAffineExpression | None = None
 
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = int(problem.parameters.get("PROBMODE", 0))
@@ -550,6 +561,37 @@ class MIPSolver(Solver):
                     diff_terms.append(x[pid])
             model += pulp.lpSum(diff_terms) >= 1, f"nogood_cut_{forbid_idx}"
 
+        if objective_expr is None:  # natural units: min_set / max_* / absolute minimax
+            objective_expr = model.objective
+            if self.objective in ("max_features", "max_weighted_features"):
+                objective_expr = -model.objective
+        return _BuiltModel(
+            model=model, x=x, pu_ids=pu_ids, blm=blm, objective_expr=objective_expr,
+            probmode=probmode, has_target2=bool(has_target2),
+            has_sep_active=bool(has_sep_active),
+        )
+
+    def build_model(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> pulp.LpProblem:
+        """The PuLP model ``solve`` would hand to the backend (for ``write_problem``)."""
+        if config is None:
+            config = SolverConfig()
+        _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
+        return self._build(problem, config).model
+
+    def solve(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        if config is None:
+            config = SolverConfig()
+        # S3b: heads-up before building the model when the MILP is likely too large.
+        _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
+        built = self._build(problem, config)
+        model, x, pu_ids = built.model, built.x, built.pu_ids
+        probmode, has_target2 = built.probmode, built.has_target2
+        has_sep_active, blm = built.has_sep_active, built.blm
+
         # Solve
         time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
         gap = float(problem.parameters.get("MIP_GAP", 0.0))
@@ -597,20 +639,16 @@ class MIPSolver(Solver):
         # gap is what build_solution reports post-hoc.
         # pulp.value() is None when any variable in the expression has no value (zero-cost
         # x never written to the LP); evaluate the objective reading those as 0.
-        obj_value = float(model.objective.constant or 0.0) + sum(
-            float(coef) * float(v.varValue or 0.0) for v, coef in model.objective.items()
+        obj_expr = built.objective_expr
+        obj_value = float(obj_expr.constant or 0.0) + sum(
+            float(coef) * float(v.varValue or 0.0) for v, coef in obj_expr.items()
         )
         meta = {
             "solver": self.name(),
             "status": pulp.LpStatus[model.status],
             "mip_backend": resolved_backend,
             "objective": self.objective,
-            # Stub; Task 5 replaces it with built.objective_expr.
-            "mip_objective_value": (
-                -obj_value
-                if self.objective in ("max_features", "max_weighted_features")
-                else obj_value
-            ),
+            "mip_objective_value": obj_value,
         }
         if probmode == 3:
             meta["mip_chance_strategy"] = self.mip_chance_strategy

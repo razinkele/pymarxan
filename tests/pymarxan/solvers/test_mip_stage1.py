@@ -1,14 +1,21 @@
 """Stage 1 changes to the single-zone MIPSolver (spec §1 MIPSolver, S2, S9)."""
 from __future__ import annotations
 
+import warnings
+from pathlib import Path
+
 import pandas as pd
+import pulp
 import pytest
 
+from pymarxan.io.readers import load_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver
+from tests.pymarxan.lp_canon import canonical_model, captured_models
 
 ONE = SolverConfig(num_solutions=1)
+SIMPLE = Path(__file__).parent.parent.parent / "data" / "simple"
 
 
 def _two_pu(cost2: float, *, spf: bool = True) -> ConservationProblem:
@@ -70,3 +77,30 @@ def test_all_zero_cost_min_set_solves(target: float) -> None:
     assert len(sols) == 1
     assert sols[0].selected.tolist() == ([True, False] if target > 0 else [False, False])
     assert sols[0].metadata["mip_objective_value"] == 0.0
+
+
+def test_build_model_equals_solved_model() -> None:
+    p = load_project(SIMPLE)
+    built = MIPSolver().build_model(p)
+    with captured_models() as models:
+        MIPSolver().solve(p, ONE)
+    assert isinstance(built, pulp.LpProblem)
+    assert canonical_model(built) == canonical_model(models[0])
+
+
+def test_build_model_refuses_what_solve_refuses() -> None:
+    p = load_project(SIMPLE)
+    p = p.copy_with(parameters={**p.parameters, "PROBMODE": 3})
+    with pytest.raises(NotImplementedError):
+        MIPSolver(mip_chance_strategy="socp").build_model(p)
+
+
+def test_large_mip_warning_once_with_caller_frame() -> None:
+    p = load_project(SIMPLE)
+    for call in (MIPSolver(warn_above_pu=1).solve, MIPSolver(warn_above_pu=1).build_model):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            call(p)
+        large = [x for x in w if "warn_above_pu" in str(x.message)]
+        assert len(large) == 1
+        assert large[0].filename == __file__
