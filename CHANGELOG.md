@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-10-14
+
 ### Added
 - `MIPSolver(objective="min_shortfall")` — minimise the SPF-weighted shortfall under
   `COSTBUDGET` (prioritizr `add_min_shortfall_objective`). `objective="max_n_targets_met"` is
@@ -1370,7 +1372,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.39.0
 [0.38.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.38.0
 [0.37.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.37.0
 [0.36.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.36.0
