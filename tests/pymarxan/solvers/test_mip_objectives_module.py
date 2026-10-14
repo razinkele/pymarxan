@@ -161,3 +161,41 @@ def test_solve_lexicographic_infeasible_pass1_returns_status() -> None:
         warnings.simplefilter("error")  # no fallback warning on pass-1 failure
         status = solve_lexicographic(m, pulp.lpSum([x]), pulp.lpSum([x]), CBC)
     assert status == pulp.LpStatusInfeasible
+
+
+def _two_pu(objective: str, shortfall: str, weights: dict[str, float]) -> tuple[list[int], float]:
+    """One PU may be chosen. fa and fc are met only by PU1, fb only by PU2 (amount 10, R 10)."""
+    m = pulp.LpProblem("w", pulp.LpMinimize)
+    x = {i: pulp.LpVariable(f"x_{i}", cat="Binary") for i in (1, 2)}
+    achieved = {"fa": 10 * x[1], "fb": 10 * x[2], "fc": 10 * x[1]}
+    terms = [
+        TargetTerm(k, "feature", pulp.lpSum([a]), 10.0, weights.get(k, 1.0))
+        for k, a in achieved.items()
+    ]
+    ctx = ObjectiveContext(m, pulp.lpSum(x.values()), terms)
+    term = BUILDERS[objective](ctx, shortfall)
+    set_objective(m, term)
+    m += ctx.cost_expr <= 1, "cost_budget"
+    m.solve(CBC)
+    return [round(x[i].varValue or 0) for i in (1, 2)], float(pulp.value(term.expr))
+
+
+def test_max_features_positive_count() -> None:
+    # PU1 meets fa and fc; PU2 meets only fb.
+    assert _two_pu("max_features", "relative", {}) == ([1, 0], pytest.approx(2.0))
+
+
+def test_max_weighted_features_weights_choose_targets() -> None:
+    # Unweighted PU1 (2 targets) wins; with fb weighted 5, PU2 (5) beats PU1 (1 + 1).
+    assert _two_pu("max_weighted_features", "relative", {}) == ([1, 0], pytest.approx(2.0))
+    w = {"fb": 5.0}
+    assert _two_pu("max_weighted_features", "relative", w) == ([0, 1], pytest.approx(5.0))
+
+
+def test_min_shortfall_weights_change_optimum() -> None:
+    # PU1 unmet: fb only -> w_b * 10; PU2 unmet: fa + fc -> (w_a + w_c) * 10.
+    w = {"fa": 1.0, "fb": 5.0, "fc": 1.0}
+    assert _two_pu("min_shortfall", "absolute", w) == ([0, 1], pytest.approx(20.0))
+    assert _two_pu("min_shortfall", "relative", w) == ([0, 1], pytest.approx(2.0))
+    # Unit weights: PU1 leaves 10, PU2 leaves 20 -> PU1; weights flip the choice.
+    assert _two_pu("min_shortfall", "absolute", {}) == ([1, 0], pytest.approx(10.0))
