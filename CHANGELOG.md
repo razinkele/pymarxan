@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shortfall (shortfall / (target × MISSLEVEL), as prioritizr) and counts features with no
   occurrences. Pass `shortfall="absolute"` for the v0.38 behaviour. (stage1)
 
+### Deprecated
+- `pymarxan.objectives` (unused `Objective` classes; their zone builders were incomplete and
+  read `BUDGET`): use `MIPSolver(objective=...)` / `ZoneMIPSolver(objective=...)`. Removal in
+  v0.42. (stage1, S1)
+
 ### Fixed
 - `MIPSolver` returned no solution when a zero-cost planning unit held no features (its
   variable never entered the model) (stage1, S9).

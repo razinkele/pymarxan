@@ -2,6 +2,9 @@
 
 Extends solver configuration with objective type selection:
 MinSet (default), MaxCoverage, MaxUtility, MinShortfall.
+
+The selected objective is stored in `cfg['objective_type']` but no solver reads it yet
+(known gap; wiring planned in the Shiny follow-ups).
 """
 from __future__ import annotations
 

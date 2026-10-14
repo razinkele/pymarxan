@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from pymarxan.objectives.base import Objective, ZonalObjective
-from pymarxan.objectives.max_coverage import MaxCoverageObjective
-from pymarxan.objectives.max_utility import MaxUtilityObjective
-from pymarxan.objectives.min_shortfall import MinShortfallObjective
-from pymarxan.objectives.minset import MinSetObjective
-
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    from pymarxan.objectives.base import Objective, ZonalObjective
+    from pymarxan.objectives.max_coverage import MaxCoverageObjective
+    from pymarxan.objectives.max_utility import MaxUtilityObjective
+    from pymarxan.objectives.min_shortfall import MinShortfallObjective
+    from pymarxan.objectives.minset import MinSetObjective
 
 def _make_problem(params=None, **kw):
     from pymarxan.models.problem import ConservationProblem
