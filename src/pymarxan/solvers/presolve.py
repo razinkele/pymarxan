@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -62,18 +62,41 @@ def _emit_presolve(
     warnings.warn(text, PresolveWarning, stacklevel=stacklevel)
 
 
-def _first(items: list[str], n: int = 5) -> str:
-    more = f" (+{len(items) - n} more)" if len(items) > n else ""
+def _first(items: list[str], n: int = 5, total: int | None = None) -> str:
+    """The first ``n`` items, then ``(+k more)`` against ``total`` (default ``len(items)``)."""
+    total = len(items) if total is None else total
+    more = f" (+{total - n} more)" if total > n else ""
     return "; ".join(items[:n]) + more
 
 
-def _nonfinite(code: str, named: Iterable[tuple[str, Any]]) -> list[str]:
+Label = Callable[[int], str]
+"""Row index -> the entity it belongs to (``"PU 7"``, ``"species 2 PU 4"``); called only
+for the rows a message reports, so labelling stays cheap on large tables."""
+
+
+def _labeller(prefixes: tuple[str, ...], *columns: Any) -> Label:
+    cols = [np.asarray(c) for c in columns]
+
+    def label(i: int) -> str:
+        return " ".join(f"{p} {_fmt_id(c[i])}" for p, c in zip(prefixes, cols, strict=True))
+
+    return label
+
+
+def _fmt_id(v: Any) -> str:
+    f = float(v)
+    return str(int(f)) if f.is_integer() else f"{f:g}"
+
+
+def _nonfinite(code: str, named: Iterable[tuple[str, Any, Label]]) -> list[str]:
     out: list[str] = []
-    for name, values in named:
+    for name, values, label in named:
         arr = np.asarray(values, dtype=float).ravel()
-        bad = int((~np.isfinite(arr)).sum())
-        if bad:
-            out.append(f"{code}: {name} has {bad} non-finite value(s)")
+        (bad,) = np.nonzero(~np.isfinite(arr))
+        if bad.size:
+            items = [f"{label(int(i))} = {arr[i]:g}" for i in bad[:5]]
+            out.append(f"{code}: {bad.size} non-finite {name} value(s): "
+                       + _first(items, total=int(bad.size)))
     return out
 
 
@@ -155,23 +178,33 @@ def _budget(problem: ConservationProblem) -> float | None:
     return None if budget is None else float(budget)
 
 
-def _common(problem: ConservationProblem, costs: Any, named_extra: list[tuple[str, Any]],
-            totals: pd.Series, budget: float | None) -> list[str]:
+def _common(problem: ConservationProblem, costs: Any, cost_label: Label,
+            named_extra: list[tuple[str, Any, Label]], totals: pd.Series,
+            budget: float | None) -> list[str]:
     """Checks shared by core and zone problems (P1-P5, P8)."""
     params = problem.parameters
-    amounts = problem.pu_vs_features["amount"].to_numpy(dtype=float)
-    targets = problem.features["target"].to_numpy(dtype=float)
-    bnd = (problem.boundary["boundary"].to_numpy(dtype=float)
-           if problem.boundary is not None else np.empty(0))
+    pvf = problem.pu_vs_features
+    amounts = pvf["amount"].to_numpy(dtype=float)
+    feats = problem.features
+    targets = feats["target"].to_numpy(dtype=float)
+    b = problem.boundary
+    bnd = b["boundary"].to_numpy(dtype=float) if b is not None else np.empty(0)
+    id1: Any = b["id1"].to_numpy() if b is not None else np.empty(0)
+    id2: Any = b["id2"].to_numpy() if b is not None else np.empty(0)
     blm = float(params.get("BLM", 0.0))
-    named: list[tuple[str, Any]] = [
-        ("cost", costs), ("amount", amounts), ("target", targets), ("boundary", bnd),
-        ("BLM", [blm]),
+    named: list[tuple[str, Any, Label]] = [
+        ("cost", costs, cost_label),
+        ("amount", amounts, _labeller(("species", "PU"), pvf["species"], pvf["pu"])),
+        ("target", targets, _labeller(("feature",), feats["id"])),
+        ("boundary", bnd, lambda i: f"boundary {_fmt_id(id1[i])}-{_fmt_id(id2[i])}"),
+        ("BLM", [blm], lambda i: "BLM"),
     ]
     if budget is not None:
-        named.append(("COSTBUDGET", [budget]))
+        named.append(("COSTBUDGET", [budget], lambda i: "COSTBUDGET"))
     out = _nonfinite("P1", named + named_extra)
-    neg = [f"{v:g}" for v in np.asarray(costs, dtype=float) if v < 0]
+    cost_arr = np.asarray(costs, dtype=float)
+    neg = [f"{cost_label(int(i))} has cost {cost_arr[i]:g}"
+           for i in np.nonzero(cost_arr < 0)[0]]
     if neg:
         out.append(f"P1: {len(neg)} negative cost(s): {_first(neg)}")
     out += _ratio("P2", "costs", costs)
@@ -196,7 +229,7 @@ def _core_checks(problem: ConservationProblem) -> list[str]:
     pvf = problem.pu_vs_features
     totals = pvf.groupby("species")["amount"].sum()
     budget = _budget(problem)
-    out = _common(problem, costs, [], totals, budget)
+    out = _common(problem, costs, _labeller(("PU",), pu["id"]), [], totals, budget)
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     locked_out = {int(p) for p, s in zip(pu["id"].values, status, strict=True) if s == 3}
     avail = pvf[~pvf["pu"].isin(locked_out)].groupby("species")["amount"].sum()
@@ -231,14 +264,17 @@ def _zone_checks(problem: ZonalProblem) -> list[str]:
         min_forced_cost,
     )
 
-    zc = problem.zone_costs["cost"].to_numpy(dtype=float)
-    extra: list[tuple[str, Any]] = [
-        ("zone contribution", problem.zone_contributions["contribution"].to_numpy(dtype=float)
-         if problem.zone_contributions is not None else []),
-    ]
+    zcf = problem.zone_costs
+    zc = zcf["cost"].to_numpy(dtype=float)
+    contrib = problem.zone_contributions
+    extra: list[tuple[str, Any, Label]] = []
+    if contrib is not None:
+        extra.append(("zone contribution", contrib["contribution"].to_numpy(dtype=float),
+                      _labeller(("feature", "zone"), contrib["feature"], contrib["zone"])))
     totals = problem.pu_vs_features.groupby("species")["amount"].sum()
     budget = _budget(problem)
-    out = _common(problem, zc, extra, totals, budget)
+    cost_label = _labeller(("PU", "zone"), zcf["pu"], zcf["zone"])
+    out = _common(problem, zc, cost_label, extra, totals, budget)
     unreachable = diagnose_zone_infeasibility(problem)
     if unreachable:
         out.append("P6: " + _first(unreachable))

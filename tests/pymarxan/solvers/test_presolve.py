@@ -192,3 +192,41 @@ def test_import_order_no_cycle(module: str) -> None:
     code = f"import {module}; import pymarxan; pymarxan.presolve_check; pymarxan.PresolveWarning"
     subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parents[3],
                    env={"PYTHONPATH": "src", "PATH": ""})
+
+
+def test_p1_messages_name_entities() -> None:
+    # Spec §4: each message names the entity and the numbers involved.
+    p = _core(
+        planning_units=pd.DataFrame(
+            {"id": [1, 4, 7], "cost": [1.0, np.inf, -3.0], "status": [0, 0, 0]}),
+        features=pd.DataFrame(
+            {"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0], "spf": [1.0, 1.0]}),
+        pu_vs_features=pd.DataFrame(
+            {"species": [1, 2], "pu": [1, 4], "amount": [1.0, np.nan]}),
+        boundary=pd.DataFrame({"id1": [1], "id2": [7], "boundary": [np.nan]}),
+    )
+    p1 = [m for m in presolve_check(p) if m.startswith("P1: ")]
+    text = " | ".join(p1)
+    assert any("PU 7" in m and "-3" in m for m in p1), p1
+    assert any("PU 4" in m and "inf" in m for m in p1), p1
+    assert any("species 2" in m and "PU 4" in m and "nan" in m for m in p1), p1
+    assert "boundary 1-7" in text, p1
+
+
+def test_p1_zone_cost_names_pu_and_zone() -> None:
+    p = make_anchor_problem()
+    zc = p.zone_costs.copy()
+    zc.loc[(zc["pu"] == 2) & (zc["zone"] == 1), "cost"] = np.nan
+    zc.loc[(zc["pu"] == 3) & (zc["zone"] == 2), "cost"] = -4.0
+    p1 = [m for m in presolve_check(p.copy_with(zone_costs=zc)) if m.startswith("P1: ")]
+    assert any("PU 2 zone 1" in m and "nan" in m for m in p1), p1
+    assert any("PU 3 zone 2" in m and "-4" in m for m in p1), p1
+
+
+def test_p1_truncates_with_total_count() -> None:
+    n = 8
+    p = _core(planning_units=pd.DataFrame(
+        {"id": list(range(1, n + 1)), "cost": [-1.0] * n, "status": [0] * n}))
+    (neg,) = [m for m in presolve_check(p) if "negative" in m]
+    assert neg.startswith(f"P1: {n} negative cost(s)") and "(+3 more)" in neg
+    assert "PU 5" in neg and "PU 6" not in neg
