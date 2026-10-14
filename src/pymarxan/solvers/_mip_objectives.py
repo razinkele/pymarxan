@@ -142,8 +142,14 @@ def solve_lexicographic(
     Pass 1 minimises ``primary``. Pass 2 adds ``primary <= opt·(1+rel_tol)+abs_tol``
     (``"lex_primary_cap"``) and minimises ``secondary``. If pass 2 yields no solution the
     pass-1 values are restored, one ``UserWarning`` is emitted and pass 1's status returned.
+    A variable-free (constant) ``primary`` — no target terms — is a single solve of
+    ``secondary``.
     """
     model.sense = pulp.LpMinimize
+    if not primary.keys():
+        model.setObjective(secondary)
+        model.solve(solver)
+        return int(model.status)
     model.setObjective(primary)
     model.solve(solver)
     variables = model.variables()
@@ -160,6 +166,7 @@ def solve_lexicographic(
     ):
         for v in model.variables():
             v.varValue = snapshot.get(v.name)
+        model.status = status1
         warnings.warn(
             "lexicographic pass 2 (minimise cost at the optimal penalty) found no solution; "
             "returning the pass-1 solution",

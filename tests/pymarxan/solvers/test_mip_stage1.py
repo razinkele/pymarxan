@@ -181,3 +181,86 @@ def test_alias_and_bad_names() -> None:
         MIPSolver(shortfall="percent")
     with pytest.raises(ValueError, match="objective"):
         MIPSolver(objective="max_utility")
+
+
+def test_min_penalties_lexicographic_on_fractional_data() -> None:
+    # v0.38: M = Σcost + 1 = 102; 0.01·102 < 100 so it left PU1 out (target unmet).
+    sol = MIPSolver(objective="min_penalties").solve(_two_pu(1.0), ONE)[0]
+    assert sol.selected.tolist() == [True, False]
+    assert sol.cost == pytest.approx(100.0)
+    assert sol.metadata["mip_objective_value"] == pytest.approx(0.0)  # SPF·shortfall
+
+
+def test_min_penalties_cost_is_secondary() -> None:
+    # Both PUs meet the target; pass 2 must take the cheaper one.
+    pu = pd.DataFrame({"id": [1, 2], "cost": [5.0, 3.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [0.5]})
+    pvf = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [1.0, 1.0]})
+    p = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pvf)
+    sol = MIPSolver(objective="min_penalties").solve(p, ONE)[0]
+    assert sol.selected.tolist() == [False, True]
+
+
+def test_min_penalties_build_model_is_pass1() -> None:
+    m = MIPSolver(objective="min_penalties").build_model(_two_pu(1.0))
+    assert "lex_primary_cap" not in m.constraints
+    assert {v.name for v, _ in m.objective.items()} == {"s_f1"}
+
+
+def test_min_penalties_objective_is_spf_weighted_and_cap_is_tight() -> None:
+    # The ghost (target 5, spf 7) is unmeetable: pass 1 = 7 * 5 = 35, not 5.
+    sol = MIPSolver(objective="min_penalties").solve(_with_ghost(1.0), ONE)[0]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(35.0)
+    assert sol.selected.tolist() == [True, False]
+    # Cap tightness: with spf 1e-6 on feature 1, dropping PU1 (cost 1) adds only 1e-6 of
+    # weighted shortfall, so any pass-2 cap looser than 35 * (1 + 2.9e-8) (or abs_tol
+    # >= 1e-6) lets cost win and returns [False, False]; the spec's rel_tol = abs_tol = 1e-9
+    # keeps PU1.
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({
+        "id": [1, 2], "name": ["a", "ghost"], "target": [1.0, 5.0], "spf": [1e-6, 7.0],
+    })
+    pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
+    tight = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pvf,
+        parameters={"COSTBUDGET": 1.0, "BLM": 0.0},
+    )
+    sol = MIPSolver(objective="min_penalties").solve(tight, ONE)[0]
+    assert sol.selected.tolist() == [True, False]
+    assert sol.metadata["mip_objective_value"] == pytest.approx(35.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("status", [[0, 0], [2, 0]])
+def test_min_penalties_no_targets_is_min_cost(status: list[int]) -> None:
+    # Every target 0: no terms, so the primary is constant and cost alone decides (as v0.38).
+    pu = pd.DataFrame({"id": [1, 2], "cost": [5.0, 3.0], "status": status})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [0.0]})
+    pvf = pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]})
+    p = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pvf)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sols = MIPSolver(objective="min_penalties").solve(p, ONE)
+    assert len(sols) == 1
+    assert sols[0].selected.tolist() == [status[0] == 2, False]
+    assert sols[0].metadata["mip_objective_value"] == 0.0
+
+
+def test_min_penalties_pass2_fallback_warns_at_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    orig = pulp.LpProblem.solve
+    calls = {"n": 0}
+
+    def flaky(self: pulp.LpProblem, *a: object, **k: object) -> int:
+        calls["n"] += 1
+        result = orig(self, *a, **k)
+        if calls["n"] == 2:
+            self.status = pulp.LpStatusInfeasible
+        return result
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", flaky)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sol = MIPSolver(objective="min_penalties").solve(_two_pu(1.0), ONE)[0]
+    lex = [w for w in caught if "pass 2" in str(w.message)]
+    assert len(lex) == 1 and lex[0].filename == __file__
+    assert sol.selected.tolist() == [True, False]  # pass-1 values
+    assert sol.metadata["status"] == "Optimal"

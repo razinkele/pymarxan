@@ -163,6 +163,45 @@ def test_solve_lexicographic_infeasible_pass1_returns_status() -> None:
     assert status == pulp.LpStatusInfeasible
 
 
+def test_solve_lexicographic_fallback_sets_model_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orig = pulp.LpProblem.solve
+    calls = {"n": 0}
+
+    def flaky(self: pulp.LpProblem, *a: object, **k: object) -> int:
+        calls["n"] += 1
+        result = orig(self, *a, **k)
+        if calls["n"] == 2:
+            self.status = pulp.LpStatusInfeasible
+        return result
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", flaky)
+    m = pulp.LpProblem("l3", pulp.LpMinimize)
+    x1 = pulp.LpVariable("x_1", cat="Binary")
+    s = pulp.LpVariable("s", lowBound=0)
+    m += s >= 1 - x1, "short"
+    with pytest.warns(UserWarning, match="pass 2"):
+        status = solve_lexicographic(m, pulp.lpSum([s]), 5 * x1, CBC)
+    assert m.status == status == pulp.LpStatusOptimal
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_solve_lexicographic_variable_free_primary_is_single_pass(locked: bool) -> None:
+    # No target terms: the primary is a constant, so only the secondary is minimised.
+    m = pulp.LpProblem("e", pulp.LpMinimize)
+    x1 = pulp.LpVariable("x_1", cat="Binary")
+    x2 = pulp.LpVariable("x_2", cat="Binary")
+    if locked:
+        m += x1 == 1, "locked_in_1"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        status = solve_lexicographic(m, pulp.lpSum([]), 5 * x1 + 3 * x2, CBC)
+    assert status == pulp.LpStatusOptimal
+    assert "lex_primary_cap" not in m.constraints
+    assert (x1.varValue, x2.varValue) == ((1.0 if locked else 0.0), 0.0)
+
+
 def _two_pu(objective: str, shortfall: str, weights: dict[str, float]) -> tuple[list[int], float]:
     """One PU may be chosen. fa and fc are met only by PU1, fb only by PU2 (amount 10, R 10)."""
     m = pulp.LpProblem("w", pulp.LpMinimize)

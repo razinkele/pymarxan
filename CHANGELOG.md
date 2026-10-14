@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MIPSolver` `max_features` / `max_weighted_features` counted a feature with a target but no
   `pu_vs_features` rows as met for free; it is now never met. `max_weighted_features` no
   longer needs an `spf` column (defaults to 1.0).
+- `MIPSolver(objective="min_penalties")` could trade target shortfall for cost on fractional
+  data (its big-M only dominated when SPF·Δshortfall ≥ 1); it is now an exact two-pass
+  lexicographic solve. A feature with a target but no `pu_vs_features` rows now carries its
+  full SPF-weighted shortfall (v0.38 gave it a free slack). `build_model` / `write_problem`
+  export the pass-1 model. (stage1, S2)
 
 ## [0.38.0] — 2026-10-11
 

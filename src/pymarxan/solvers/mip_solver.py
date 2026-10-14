@@ -28,6 +28,7 @@ from pymarxan.solvers._mip_objectives import (
     TargetTerm,
     resolve_objective,
     set_objective,
+    solve_lexicographic,
     validate_shortfall,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
@@ -194,7 +195,11 @@ class MIPSolver(Solver):
     met under ``COSTBUDGET``; ``"max_n_targets_met"`` is an accepted alias of
     ``"max_features"``), ``"min_shortfall"`` (Σ SPF·shortfall under ``COSTBUDGET``),
     ``"min_largest_shortfall"`` (minimax shortfall under ``COSTBUDGET``) and
-    ``"min_penalties"`` (Σ SPF·shortfall first, cost second).
+    ``"min_penalties"`` (Σ SPF·shortfall first, cost second). ``min_penalties`` is an exact
+    two-pass lexicographic solve (pass 1 minimises Σ SPF·shortfall; pass 2 minimises cost
+    with that optimum capped); it differs from prioritizr's ``add_min_penalties_objective``,
+    which minimises penalties subject to hard targets (and an optional budget); here targets
+    are soft and their shortfall is penalised by SPF, Marxan-style.
 
     ``shortfall`` sets the units of the two shortfall objectives: ``"relative"`` (default,
     shortfall / (target × MISSLEVEL), as prioritizr) or ``"absolute"`` (the v0.38 behaviour
@@ -257,6 +262,7 @@ class MIPSolver(Solver):
     def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
         """Build the PuLP model (no warnings, no solve)."""
         objective_expr: pulp.LpAffineExpression | None = None
+        lex: tuple[pulp.LpAffineExpression, pulp.LpAffineExpression] | None = None
 
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = int(problem.parameters.get("PROBMODE", 0))
@@ -542,23 +548,16 @@ class MIPSolver(Solver):
             model += (t_var, "objective")
             model += cost_expr <= cost_budget, "cost_budget"
         elif self.objective == "min_penalties":
-            # Hierarchical: minimise Σ SPF_j · slack_j first, cost second.
-            # Implemented via weighted scalarisation
-            #     min  M · Σ SPF_j · slack_j  +  Σ cost_i · x_i
-            # with M chosen large enough that any non-zero penalty term
-            # dominates the worst-case cost (sum of all costs + 1).
-            spf_by_id = _core_spf(problem)
-            for fi in range(len(feat_ids_init)):
-                fid = int(feat_ids_init[fi])
-                slack[fid] = pulp.LpVariable(f"slack_{fid}", lowBound=0)
-            penalty_expr = pulp.lpSum(
-                spf_by_id[fid] * slack[fid] for fid in slack
-            )
-            total_cost_upper = sum(float(c) for c in pu_cost_arr) + 1.0
-            model += (
-                total_cost_upper * penalty_expr + cost_expr,
-                "objective",
-            )
+            # Exact lexicographic (S2): pass 1 min Σ SPF·shortfall, pass 2 min cost at that
+            # optimum (solve_lexicographic). v0.38's big-M (Σ cost + 1) only dominated when
+            # SPF·Δshortfall >= 1, so fractional data could trade targets for cost. Not
+            # prioritizr's add_min_penalties_objective (penalty-only, hard targets).
+            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
+            ctx = ObjectiveContext(model, cost_expr, terms)
+            primary = pulp.lpSum(t.weight * ctx.slack(t) for t in ctx.terms)
+            model.setObjective(primary)  # build_model exports the pass-1 model
+            lex = (primary, cost_expr)
+            objective_expr = primary
         else:
             model += (
                 cost_expr + blm * boundary_expr + conn_expr + prob_expr,
@@ -577,7 +576,9 @@ class MIPSolver(Solver):
             fid = int(feat_ids[fi])
             target = float(feat_targets[fi]) * misslevel
 
-            if fid in feat_groups.groups and not builder_path:
+            if fid in feat_groups.groups and not (
+                builder_path or self.objective == "min_penalties"
+            ):
                 amount_expr = amount_exprs[fid]
                 if self.objective in ("max_features", "max_weighted_features"):
                     # Relaxed target: only enforced when feat_met_j = 1.
@@ -595,14 +596,6 @@ class MIPSolver(Solver):
                     )
                     assert t_var is not None  # for mypy: set in init block above
                     model += t_var >= slack[fid], f"max_shortfall_{fid}"
-                elif self.objective == "min_penalties":
-                    # slack_j ≥ target_j − amount; the objective minimises
-                    # Σ SPF_j · slack_j (already added above), so slack_j
-                    # is pulled to 0 whenever it can be.
-                    model += (
-                        slack[fid] >= target - amount_expr,
-                        f"slack_{fid}",
-                    )
                 else:
                     model += amount_expr >= target, f"target_{fid}"
 
@@ -642,13 +635,16 @@ class MIPSolver(Solver):
         return _BuiltModel(
             model=model, x=x, pu_ids=pu_ids, blm=blm, objective_expr=objective_expr,
             probmode=probmode, has_target2=bool(has_target2),
-            has_sep_active=bool(has_sep_active),
+            has_sep_active=bool(has_sep_active), lex=lex,
         )
 
     def build_model(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> pulp.LpProblem:
-        """The PuLP model ``solve`` would hand to the backend (for ``write_problem``)."""
+        """The PuLP model ``solve`` would hand to the backend (for ``write_problem``).
+
+        For ``min_penalties`` this is the pass-1 model (objective Σ SPF·shortfall).
+        """
         if config is None:
             config = SolverConfig()
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
@@ -684,7 +680,11 @@ class MIPSolver(Solver):
             else "gurobi" if isinstance(solver, pulp.GUROBI_CMD)
             else "cbc"
         )
-        model.solve(solver)
+        if built.lex is not None:
+            status = solve_lexicographic(model, built.lex[0], built.lex[1], solver)
+        else:
+            model.solve(solver)
+            status = int(model.status)
 
         # Accept any solver outcome where decision variables have integer
         # incumbent values. CBC sets status=LpStatusNotSolved (not Optimal)
@@ -698,7 +698,7 @@ class MIPSolver(Solver):
         # A PU in no constraint and with zero cost never enters the model (value None):
         # read as 0 (S9).
         has_values = any(pulp.value(x[pid]) is not None for pid in pu_ids)
-        if model.status in infeasible_statuses or not has_values:
+        if status in infeasible_statuses or not has_values:
             return []
 
         # Extract solution
@@ -719,7 +719,7 @@ class MIPSolver(Solver):
         )
         meta = {
             "solver": self.name(),
-            "status": pulp.LpStatus[model.status],
+            "status": pulp.LpStatus[status],
             "mip_backend": resolved_backend,
             "objective": self.objective,
             "mip_objective_value": obj_value,
