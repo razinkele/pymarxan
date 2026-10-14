@@ -69,6 +69,17 @@ def _warn_if_large_mip(n_pu: int, threshold: int | None) -> None:
         )
 
 
+def _core_spf(problem: ConservationProblem) -> dict[int, float]:
+    """feature id -> spf; 1.0 when the column is absent (as the zone MIP's _spf_lookup)."""
+    ids = problem.features["id"].values
+    if "spf" not in problem.features.columns:
+        return {int(f): 1.0 for f in ids}
+    return {
+        int(f): float(s)
+        for f, s in zip(ids, problem.features["spf"].values.astype(float), strict=True)
+    }
+
+
 class MIPSolver(Solver):
     """Solver that formulates the Marxan minimum-set problem as a MILP.
 
@@ -378,10 +389,8 @@ class MIPSolver(Solver):
             # maximises phylogenetic diversity. This weights the *target-met*
             # indicator; it is NOT the objectives/ MaxUtility class (which sums
             # held amounts). Like max_features, a feature with no pu_vs_features
-            # rows gets an unconstrained feat_met the maximiser sets to 1 for
-            # free — callers must prune zero-occurrence features (the phylo
-            # branch decomposition does). Solution.objective is recomputed
-            # min_set-style and is NOT the weighted objective value.
+            # rows can never be met (feat_met is forced to 0 below). Solution.objective
+            # is recomputed min_set-style and is NOT the weighted objective value.
             cost_budget = problem.parameters.get("COSTBUDGET")
             if cost_budget is None:
                 raise ValueError(
@@ -392,11 +401,7 @@ class MIPSolver(Solver):
                     "met by selecting all PUs."
                 )
             cost_budget = float(cost_budget)
-            feat_spf_arr = problem.features["spf"].values.astype(float)
-            spf_by_id = {
-                int(feat_ids_init[fi]): float(feat_spf_arr[fi])
-                for fi in range(len(feat_ids_init))
-            }
+            spf_by_id = _core_spf(problem)
             for fi in range(len(feat_ids_init)):
                 fid = int(feat_ids_init[fi])
                 feat_met[fid] = pulp.LpVariable(f"feat_met_{fid}", cat="Binary")
@@ -430,11 +435,7 @@ class MIPSolver(Solver):
             #     min  M · Σ SPF_j · slack_j  +  Σ cost_i · x_i
             # with M chosen large enough that any non-zero penalty term
             # dominates the worst-case cost (sum of all costs + 1).
-            feat_spf_arr = problem.features["spf"].values.astype(float)
-            spf_by_id = {
-                int(feat_ids_init[fi]): float(feat_spf_arr[fi])
-                for fi in range(len(feat_ids_init))
-            }
+            spf_by_id = _core_spf(problem)
             for fi in range(len(feat_ids_init)):
                 fid = int(feat_ids_init[fi])
                 slack[fid] = pulp.LpVariable(f"slack_{fid}", lowBound=0)
@@ -520,6 +521,14 @@ class MIPSolver(Solver):
                 else:
                     model += amount_expr >= target, f"target_{fid}"
 
+        if feat_met:
+            # Ghost features (target > 0, no pu_vs_features rows) can never be met; v0.38
+            # left feat_met unconstrained so the maximiser counted them for free.
+            for fi in range(len(feat_ids)):
+                fid = int(feat_ids[fi])
+                if fid not in feat_groups.groups and float(feat_targets[fi]) * misslevel > 0:
+                    feat_met[fid].upBound = 0
+
         # Phase 25: no-good cuts for portfolio generation. Each forbidden
         # selection vector contributes one constraint forcing at least
         # one binary variable to differ from it. Passed through
@@ -570,7 +579,9 @@ class MIPSolver(Solver):
             pulp.constants.LpStatusUnbounded,
             pulp.constants.LpStatusUndefined,
         }
-        has_values = all(pulp.value(x[pid]) is not None for pid in pu_ids)
+        # A PU in no constraint and with zero cost never enters the model (value None):
+        # read as 0 (S9).
+        has_values = any(pulp.value(x[pid]) is not None for pid in pu_ids)
         if model.status in infeasible_statuses or not has_values:
             return []
 
@@ -589,6 +600,12 @@ class MIPSolver(Solver):
             "status": pulp.LpStatus[model.status],
             "mip_backend": resolved_backend,
             "objective": self.objective,
+            # Stub; Task 5 replaces it with built.objective_expr.
+            "mip_objective_value": (
+                -float(pulp.value(model.objective))
+                if self.objective in ("max_features", "max_weighted_features")
+                else float(pulp.value(model.objective))
+            ),
         }
         if probmode == 3:
             meta["mip_chance_strategy"] = self.mip_chance_strategy

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `MIPSolver` returned no solution when a zero-cost planning unit held no features (its
+  variable never entered the model) (stage1, S9).
+- `MIPSolver` `max_features` / `max_weighted_features` counted a feature with a target but no
+  `pu_vs_features` rows as met for free; it is now never met. `max_weighted_features` no
+  longer needs an `spf` column (defaults to 1.0).
+
 ## [0.38.0] — 2026-10-11
 
 ### Added
