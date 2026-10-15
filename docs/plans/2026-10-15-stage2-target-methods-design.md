@@ -78,7 +78,7 @@ PUs, including locked-out ones, as prioritizr does); `k_j` = km² per native uni
    (no `features=` added — `group_targets` already selects by its `groups` keys).
 6. **Per-feature inputs** (`status`, `pop_size`, `density_per_km2`, …) accept a scalar (applied
    to every selected feature), a `Mapping[int, ...]`, or a `pandas.Series` indexed by feature
-   id (public type aliases `PerFeatureFloat` / `PerFeatureStr`). Mappings may have extra keys; a
+   id (type aliases `PerFeatureFloat` / `PerFeatureStr`, exported from `pymarxan.targets`). Mappings may have extra keys; a
    missing key for a selected feature, or a non-finite / out-of-range value, raises `ValueError`
    naming the feature id(s). Values are looked up **by feature id**, never by position. Keys
    and `features=` entries must be integral (int, numpy integer, integral float); names,
@@ -258,19 +258,24 @@ duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2,
 - **wilson:** `β = 2r/σ² − 1`; `k = (1e5·σ²·β²/2)^(1/β)`; `t = min(k / d, cap, f)`. `r > 0`,
   `σ² > 0`, `d > 0`; `β ≤ 0` → `ValueError` naming the feature (prioritizr returns NaN/Inf).
   The formula is Lande's (1993, 10.1086/285580) large-population approximation of mean time to
-  extinction, solved for `k` with T = 1e5 years; it is only valid when `1e5·σ²·β²/2 > 1`. The
-  4-lens science review solved Lande's exact formula: at r=0.0200001, σ²=0.04 the approximation
-  gives k ≈ 0 (no protection) where the exact model needs ln K ≈ 63. So
-  `1e5·σ²·β²/2 ≤ 1` → `ValueError` naming the feature (revised 2026-10-15; replaces the earlier
-  "underflow → target 0" rule).
+  extinction, solved for `k` with T = 1e5 years. It is accurate only when `1e5·σ²·β²/2 ≫ 1`:
+  the exact model is `e^x − 1 − x = base` with `x = β·ln K`, while the approximation uses
+  `e^x = base`. The review rounds solved the exact model. At r=0.0200001, σ²=0.04 the
+  approximation gives k ≈ 0 (no protection) where the exact model needs ln K ≈ 63. Just above
+  base = 1 (r=0.02045, σ²=0.04) it gives k ≈ 1.05 against K ≈ 1.8e22. Rule (revised 2026-10-15,
+  round 2): return prioritizr's approximate target, but also compute the exact target (Newton
+  solve of `expm1(x) − x = base`) and raise `ValueError` naming the features when the two
+  differ by more than 1% after cap and clip. The message points users to `pop_size_targets`.
+  This keeps exact prioritizr parity wherever a value is returned.
   Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317; with d=0.5 →
   26.7496 (pins the division by `d`).
   **Numerics:** compute `ln k = ln(1e5·σ²·β²/2) / β` and `k = exp(ln k)`, mapping
   `ln k > ln(sys.float_info.max)` to `k = inf` before dividing by `d` (so `t = min(cap, f)`, or
   `f` with `cap_km2=None`; Python's
-  `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3). Since base > 1 is
-  required, `ln k > 0` and `k` cannot underflow. Tests pin r=500.5, σ²=1,000 (β=1e-3) →
-  `t = min(cap, f)` (`f` when `cap_km2=None`), and r=0.0200001, σ²=0.04 → `ValueError`.
+  `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3).
+  Tests pin r=500.5, σ²=1,000 (β=1e-3) → `t = min(cap, f)` (`f` when `cap_km2=None`; both
+  models overflow, so no raise); r=0.0200001 and r=0.02045 (σ²=0.04) → `ValueError`; and
+  the Newton solver over base ∈ {1e-8, 0.5, 1, 32,000, 1e300}.
   Wilson et al. 2010 (10.1890/09-1051.1) is closed access; the docstring says the formula
   follows prioritizr and cites Lande 1993 for the approximation.
 - **duran:** `t = min(h·p⁴, f)` (+ cap if given); `p ∈ [0, 1]`, `h > 0` (km²). Persistence

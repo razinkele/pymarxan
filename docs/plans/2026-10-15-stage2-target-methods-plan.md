@@ -213,7 +213,7 @@ git commit -m "refactor(targets): convert to package; deprecate loglinear_target
 **Interfaces:**
 - Consumes: `ConservationProblem.feature_amounts() -> dict[int, float]`.
 - Produces (all private, used by Tasks 3–6):
-  - Type aliases `PerFeatureFloat = float | Mapping[int, float] | pd.Series` and `PerFeatureStr = str | Mapping[int, str] | pd.Series`. Every public per-feature argument uses them.
+  - Type aliases `PerFeatureFloat = float | Mapping[int, float] | pd.Series` and `PerFeatureStr = str | Mapping[int, str] | pd.Series`. Every public per-feature argument uses them, and they are **exported** from `pymarxan.targets` so typed callers can import them.
   - `as_feature_id(name, key) -> int`: accepts int, numpy integers and integral floats; any other key raises `ValueError("{name} must be feature ids (int), ...")`.
   - `select_features(problem, features: Iterable[int] | None) -> list[int]`: ids in `problem.features` order; raises on an unknown id, a non-id value, or a boolean-mask Series.
   - `per_feature(name: str, value: Any, fids: list[int]) -> dict[int, Any]`: a scalar, a Mapping or a `pd.Series`. A Series with a duplicated index raises; keys go through `as_feature_id(f"{name} keys", k)`; extra keys are ignored; a missing key raises.
@@ -472,8 +472,9 @@ import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
 
-# Public input types: one value for every feature, a ``{feature_id: value}``
-# mapping, or a pandas Series indexed by feature id.
+# Input types accepted by the public methods (exported from pymarxan.targets):
+# one value for every feature, a ``{feature_id: value}`` mapping, or a pandas
+# Series indexed by feature id.
 PerFeatureFloat: TypeAlias = float | Mapping[int, float] | pd.Series
 PerFeatureStr: TypeAlias = str | Mapping[int, str] | pd.Series
 
@@ -651,6 +652,14 @@ def finish_area(t_km2: float, f_km2: float, k: float, cap_km2: float | None) -> 
         t = min(t, cap_km2)
     return t / k
 ```
+
+- [ ] **Step 4b: Export the type aliases.** In `src/pymarxan/targets/__init__.py`, add after the `_basic` import block:
+
+```python
+from pymarxan.targets._units import PerFeatureFloat, PerFeatureStr
+```
+
+Then add `"PerFeatureFloat"` and `"PerFeatureStr"` at the top of `__all__`; ruff/isort order puts upper-case names first. Later tasks insert their import blocks *above* this `_units` line, which must stay last because `_units` sorts after `_redlist`.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -1294,7 +1303,8 @@ def polak_targets(
     interpolation are stated in its Methods. Polak et al. also set 100% for
     Critically Endangered species regardless of range; this preset (like
     prioritizr's) does not: target CR features separately, e.g.
-    ``relative_targets`` / ``area_targets`` with ``features=cr_ids``.
+    ``apply_targets(problem, group_targets(problem, {f: "CR" for f in cr_ids},
+    {"CR": 1.0}))``.
     """
     return interp_area_targets(
         problem,
@@ -1361,7 +1371,7 @@ from pymarxan.targets._interp import (
 )
 ```
 
-and add `"interp_absolute_targets"`, `"interp_area_targets"`, `"polak_targets"`, `"rodrigues_targets"`, `"sreekar_targets"`, `"watson_targets"` to `__all__` (alphabetical). **Ordering rule for this and later tasks:** import blocks go in module-name order `_basic`, `_compose`, `_interp`, `_population`, `_redlist` (ruff isort), and `__all__` stays alphabetical.
+and add `"interp_absolute_targets"`, `"interp_area_targets"`, `"polak_targets"`, `"rodrigues_targets"`, `"sreekar_targets"`, `"watson_targets"` to `__all__` (alphabetical). **Ordering rule for this and later tasks:** import blocks go in module-name order `_basic`, `_compose`, `_interp`, `_population`, `_redlist`, `_units` (ruff isort), and `__all__` stays sorted with the two aliases first.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -1855,7 +1865,8 @@ git commit -m "feat(targets): IUCN Red List species/ecosystem targets + Jung, Wa
 - Consumes: Task 2 helpers.
 - Produces (public):
   - `pop_size_targets(problem, *, km2_per_unit, pop_size, density_per_km2, cap_km2=1_000_000.0, features=None)`
-  - `wilson_targets(problem, *, km2_per_unit, mean_growth_rate, var_growth_rate, density_per_km2, cap_km2=1_000_000.0, features=None)`. Raises `ValueError` naming the features when `β <= 0`, or when `1e5·σ²·β²/2 <= 1` (large-population approximation invalid; spec §6 as revised by the 4-lens science review).
+  - `wilson_targets(problem, *, km2_per_unit, mean_growth_rate, var_growth_rate, density_per_km2, cap_km2=1_000_000.0, features=None)`. Returns prioritizr's large-population approximation. Raises `ValueError` naming the features when `β <= 0`, or when that target differs by more than 1% (after cap and clip) from the target given by Lande's exact model (spec §6 as revised by the review rounds).
+  - Private `_lande_exact_x(base) -> float`, which solves `expm1(x) − x = base` by Newton's method.
   - `duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2, cap_km2=None, features=None)`
 
 - [ ] **Step 1: Write the failing tests** `tests/pymarxan/targets/test_targets_population.py`:
@@ -1867,6 +1878,8 @@ Pinned values are hand-computed from the formulas in each test comment;
 km2_per_unit=1 unless stated.
 """
 from __future__ import annotations
+
+import math
 
 import pytest
 
@@ -1955,14 +1968,31 @@ def test_wilson_divides_by_density(make_problem):
                    2: pytest.approx(6.687403050, rel=REL)}
 
 
-def test_wilson_invalid_approximation_raises(make_problem):
-    # beta = 5e-6 -> base = 1e5*0.04*beta**2/2 = 5e-8 <= 1: the large-population
-    # approximation would give k ~ 0 (no protection) where Lande's exact model
-    # needs ~e^63 individuals, so refuse instead (spec §6)
-    p = make_problem({1: 1e4, 2: 1e4})
-    with pytest.raises(ValueError, match=r"approximation is invalid.*feature\(s\) \[1\]"):
-        wilson_targets(p, km2_per_unit=1.0, mean_growth_rate={1: 0.0200001, 2: 0.1},
-                       var_growth_rate=0.04, density_per_km2=1.0)
+@pytest.mark.parametrize(
+    "r, d",
+    [
+        # beta = 5e-6, 1e5*s2*beta**2/2 = 5e-8: the approximation gives k ~ 0 (no
+        # protection) while Lande's exact model needs ~e^63 individuals
+        (0.0200001, 1.0),
+        # 1e5*s2*beta**2/2 ~ 1.001: approximation k ~ 1.05 (173.7 km² target at
+        # d = 0.01) vs exact ~1.8e22 individuals (target = cap)
+        (0.02045, 0.01),
+    ],
+)
+def test_wilson_inaccurate_approximation_raises(make_problem, r, d):
+    p = make_problem({1: 1e6, 2: 1e6})
+    with pytest.raises(ValueError, match=r"differs from Lande's exact.*feature\(s\) \[1\]"):
+        wilson_targets(p, km2_per_unit=1.0, mean_growth_rate={1: r, 2: 0.1},
+                       var_growth_rate=0.04, density_per_km2=d)
+
+
+def test_wilson_lande_exact_solver():
+    # expm1(x) - x = base; large base -> x ~ ln(base); small base -> x ~ sqrt(2 base)
+    from pymarxan.targets._population import _lande_exact_x
+
+    for base in (1e-8, 0.5, 1.0, 32_000.0, 1e300):
+        x = _lande_exact_x(base)
+        assert math.expm1(x) - x == pytest.approx(base, rel=1e-9)
 
 
 def test_wilson_nonpositive_beta_raises(make_problem):
@@ -2033,6 +2063,30 @@ from pymarxan.targets._units import (
 )
 
 _LN_FLOAT_MAX = math.log(sys.float_info.max)
+_WILSON_RTOL = 0.01
+
+
+def _exp_or_inf(ln_x: float) -> float:
+    return math.inf if ln_x > _LN_FLOAT_MAX else math.exp(ln_x)
+
+
+def _lande_exact_x(base: float) -> float:
+    """Solve ``expm1(x) - x = base`` for ``x > 0`` (Newton; convex, increasing).
+
+    Lande's (1993) exact mean time to extinction, ``T·σ²·β²/2 = e^x − 1 − x``
+    with ``x = β·ln K``; the large-population approximation drops ``− 1 − x``.
+    """
+    if not math.isfinite(base):
+        return math.inf
+    if base <= 0.0:
+        return 0.0
+    x = max(math.log(base), 1.0)
+    for _ in range(200):
+        step = (math.expm1(x) - x - base) / math.expm1(x)
+        x -= step
+        if abs(step) <= 1e-15 * max(x, 1.0):
+            break
+    return x
 
 
 def pop_size_targets(
@@ -2086,12 +2140,15 @@ def wilson_targets(
     under environmental stochasticity, solved for ``k``
     (https://doi.org/10.1086/285580).
 
-    Raises ``ValueError`` naming the features where the approximation breaks
-    down: ``β <= 0`` (``r <= σ²/2``) and ``1e5·σ²·β²/2 <= 1`` (it would give
-    ``k <= 1`` individual, while Lande's exact model needs a very large
-    population there — prioritizr returns NaN/Inf or ~0 in these cases).
-    ``k`` is computed in log space; an overflowing ``k`` is treated as
-    infinite, so the target becomes ``min(cap, range)``.
+    That approximation is accurate only when ``1e5·σ²·β²/2 ≫ 1``; near and
+    below 1 it can give a near-zero target where the exact model needs an
+    enormous population. So the target is also computed from Lande's exact
+    model, and ``ValueError`` (naming the features) is raised wherever the two
+    targets differ by more than 1% after the cap and clip; ``β <= 0``
+    (``r <= σ²/2``) also raises. Where no error is raised the result is
+    prioritizr's. For refused features, set a minimum viable population and
+    use :func:`pop_size_targets`. ``k`` is computed in log space; an
+    overflowing ``k`` is treated as infinite (target ``min(cap, range)``).
 
     Wilson et al. 2010, *Ecol. Appl.* 20:1721-1732,
     https://doi.org/10.1890/09-1051.1. The formula follows prioritizr 9.0.1
@@ -2117,21 +2174,28 @@ def wilson_targets(
             f"(beta > 0); invalid for feature(s) {bad}"
         )
     base = {fid: 1e5 * s2[fid] * beta[fid] ** 2 / 2.0 for fid in fids}
-    weak = [fid for fid in fids if base[fid] <= 1.0]
-    if weak:
-        raise ValueError(
-            "wilson_targets' large-population approximation is invalid where "
-            "1e5 * var_growth_rate * beta**2 / 2 <= 1 (mean_growth_rate too close to "
-            f"var_growth_rate / 2); invalid for feature(s) {weak}"
-        )
     totals = feature_totals(problem, fids)
     factors = km2_factors(km2_per_unit, fids)
     out: dict[int, float] = {}
+    inaccurate: list[int] = []
     for fid in fids:
-        ln_k = math.log(base[fid]) / beta[fid]
-        k_pop = math.inf if ln_k > _LN_FLOAT_MAX else math.exp(ln_k)
-        f = totals[fid] * factors[fid]
-        out[fid] = finish_area(k_pop / d[fid], f, factors[fid], cap_v)
+        k_f = factors[fid]
+        f = totals[fid] * k_f
+        ln_base = math.log(base[fid]) if base[fid] > 0.0 else -math.inf
+        k_approx = _exp_or_inf(ln_base / beta[fid])
+        k_exact = _exp_or_inf(_lande_exact_x(base[fid]) / beta[fid])
+        t_approx = finish_area(k_approx / d[fid], f, k_f, cap_v)
+        t_exact = finish_area(k_exact / d[fid], f, k_f, cap_v)
+        if abs(t_approx - t_exact) > _WILSON_RTOL * t_exact:
+            inaccurate.append(fid)
+        out[fid] = t_approx
+    if inaccurate:
+        raise ValueError(
+            "wilson_targets' large-population approximation differs from Lande's exact "
+            f"model by more than {_WILSON_RTOL:.0%} for feature(s) {inaccurate} "
+            "(mean_growth_rate close to var_growth_rate / 2); set a minimum viable "
+            "population and use pop_size_targets instead"
+        )
     return out
 
 
@@ -2306,6 +2370,13 @@ def test_rule_targets_traits_series(make_problem):
     traits = pd.Series({2: {"endemic"}, 1: {"harvested"}})
     out = rule_targets(p, km2_per_unit=1.0, baseline=0.3, rules=_RULES, traits=traits)
     assert out == {1: pytest.approx(2_000.0), 2: pytest.approx(5_000.0)}
+
+
+def test_rule_targets_rejects_non_mapping_traits(make_problem):
+    # a plain list would otherwise apply to every feature positionally
+    with pytest.raises(ValueError, match="traits must map feature id"):
+        rule_targets(make_problem({1: 10.0, 2: 10.0}), km2_per_unit=1.0, baseline=0.3,
+                     rules={"endemic": 0.2}, traits=["endemic"])  # type: ignore[arg-type]
 
 
 def test_rule_targets_rejects_bare_string_trait(make_problem):
@@ -2597,8 +2668,11 @@ from pymarxan.targets._redlist import (
     rl_species_targets,
     ward_targets,
 )
+from pymarxan.targets._units import PerFeatureFloat, PerFeatureStr
 
 __all__ = [
+    "PerFeatureFloat",
+    "PerFeatureStr",
     "absolute_targets",
     "apply_targets",
     "area_targets",
@@ -2679,6 +2753,7 @@ from pymarxan.targets import (
     wilson_targets,
 )
 
+EXPECTED_ALIASES = {"PerFeatureFloat", "PerFeatureStr"}
 EXPECTED_PUBLIC = {
     "absolute_targets",
     "apply_targets",
@@ -2707,9 +2782,11 @@ EXPECTED_PUBLIC = {
 
 def test_public_api_all_matches_expected():
     # pdoc renders an empty page for a re-exporting package without __all__
-    assert set(targets_pkg.__all__) == EXPECTED_PUBLIC
+    assert set(targets_pkg.__all__) == EXPECTED_PUBLIC | EXPECTED_ALIASES
     for name in EXPECTED_PUBLIC:
         assert callable(getattr(targets_pkg, name))
+    for name in EXPECTED_ALIASES:  # type aliases used in public signatures
+        assert getattr(targets_pkg, name) is not None
 
 
 # Every area-based method, as (name, callable taking problem + km2_per_unit).
@@ -2933,7 +3010,7 @@ feature id. See each function's docstring for its source.
   - RLE criterion A3 VU threshold is 0.5 (IUCN guidelines; prioritizr has 0.3).
   - Watson at exactly the 10,000 km² threshold returns 1,000 km² (prioritizr errors).
   - Zero-total features get target 0 (prioritizr returns NaN).
-  - `wilson_targets` raises where its large-population approximation (Lande 1993, https://doi.org/10.1086/285580) is invalid: `r <= σ²/2`, or `1e5·σ²·β²/2 <= 1`. There prioritizr returns NaN/Inf, or a near-zero target for the most extinction-prone species. It also computes in log space so it can't overflow.
+  - `wilson_targets` returns prioritizr's large-population approximation (Lande 1993, https://doi.org/10.1086/285580), but raises where it is unreliable: when `r <= σ²/2`, and when its target differs by more than 1% from the target given by Lande's exact mean-time-to-extinction model. Near `1e5·σ²·β²/2 ≈ 1` the approximation gives near-zero targets for the most extinction-prone species, while the exact model needs enormous populations; prioritizr returns those values, or NaN/Inf. Refused features can use `pop_size_targets` with a chosen minimum viable population. The calculation runs in log space, so it can't overflow.
   - Per-feature inputs are keyed by feature id (prioritizr misaligns them on feature subsets and in `rule` ordering).
   - Red List criteria are case-insensitive (prioritizr cannot match `"A2b"`).
   - Red List `status` can vary per feature.
@@ -2955,7 +3032,7 @@ feature id. See each function's docstring for its source.
   - Line 76: change `│   ├── targets/           Automatic target rules (relative, log-linear, group)` to `│   ├── targets/           Target rules: relative, group, range-size, IUCN Red List, population, composition`.
   - Line 147: change `- Automatic **target-setting** rules (relative, IUCN-style log-linear, per-group)` to `- Published **target-setting** methods (Rodrigues, Watson, Polak, Sreekar, IUCN Red List species/ecosystems, Jung, Ward, population size, Wilson, Durán, rule-based, min/max) with explicit km² units`.
 
-- [ ] **Step 5: Roadmap.** In `docs/plans/2026-10-11-prioritizr-parity-roadmap.md`, follow the Stage 1 convention. Change the heading `## Stage 2 — v0.40.0: Published target-setting methods` to `## Stage 2 — v0.40.0: Published target-setting methods (SHIPPED, v0.40)`, and add under it: `**As shipped (v0.40.0):** see docs/plans/2026-10-15-stage2-target-methods-design.md. Worked examples are hand-computed from each rule as prioritizr implements it (no paper publishes numeric pairs); wilson_targets refuses inputs where its large-population approximation is invalid.` The release follows this branch directly (spec §10). If it doesn't, the release session must re-check this line.
+- [ ] **Step 5: Roadmap.** In `docs/plans/2026-10-11-prioritizr-parity-roadmap.md`, follow the Stage 1 convention. Change the heading `## Stage 2 — v0.40.0: Published target-setting methods` to `## Stage 2 — v0.40.0: Published target-setting methods (SHIPPED, v0.40)`, and add under it: `**As shipped (v0.40.0):** see docs/plans/2026-10-15-stage2-target-methods-design.md. Worked examples are hand-computed from each rule as prioritizr implements it (no paper publishes numeric pairs); wilson_targets refuses inputs where its large-population approximation disagrees with Lande's exact model by more than 1%.` The release follows this branch directly (spec §10). If it doesn't, the release session must re-check this line.
 
 - [ ] **Step 6: Full gate.**
 
