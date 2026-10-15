@@ -123,21 +123,28 @@ other golden case must reproduce exactly. Three builders are new:
   - The hard-target `target_{id}` rows of `min_set` keep their name.
   - Absolute `min_largest_shortfall` also changes structure: the builder adds no slack row
     for a feature with R ≤ 0 (target 0 or MISSLEVEL 0), where the legacy code did.
+  - `max_*` ghost features change structure too. The legacy code adds no row and fixes the
+    `feat_met_g` upper bound at 0. The builder writes the row `met_f{g}: 0 ≥ R·y`, which is
+    an empty row at MISSLEVEL 0, and leaves `y` a free binary. Solutions are identical.
 
   Solutions are unaffected, except the ghost case. `build_model` / LP-file output changes, so
   the CHANGELOG "Changed" section says so.
 - **Builder typing and defaults:**
-  - `BUILDERS` is typed with a `Protocol`
-    (`__call__(ctx, shortfall, /, *, owner: str = "", **params) -> ObjectiveTerm`), so calls
-    with `owner=` pass `make types`.
-  - `build_max_wtd_sum` takes `weights: Mapping[int, float] | None = None` (None = all 1).
+  - `BUILDERS` is typed with a `Protocol` whose method is
+    `def __call__(self, ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any) -> ObjectiveTerm`.
+    It has no positional-only `/`: round 6 found that mypy rejects every builder against a
+    `/` protocol.
+  - Every builder, `build_max_wtd_sum` included, is declared
+    `(ctx, shortfall, *, owner: str = "", **params: Any)`.
+  - `build_max_wtd_sum` additionally takes `weights: Mapping[int, float] | None = None`
+    (None = all 1), before `**params`.
   - It reads `ctx.amount_exprs.get(j, empty)`, so a ghost feature contributes 0, not a
     KeyError.
   - The expression fields of `ObjectiveContext` use `field(default_factory=pulp.LpAffineExpression)`,
     and `amount_exprs` uses `default_factory=dict`.
 
 **Golden tests first:** before `_build` is touched, record `MIPSolver` results (selected set,
-cost, objective, targets_met, metadata["objective"]) for every objective × shortfall mode,
+cost, objective, targets_met, metadata["mip_objective_value"]) for every objective × shortfall mode,
 with and without BLM, connectivity (symmetric and asymmetric), PROBMODE 1 and 2, a
 probability table with no PROBMODE set, locks, a no-good cut, and a ghost feature with
 MISSLEVEL ≠ 1. The refactor must reproduce them exactly, except in two places.
@@ -149,11 +156,11 @@ MISSLEVEL ≠ 1. The refactor must reproduce them exactly, except in two places.
   `build_min_largest_shortfall`, which renames its rows and variables and drops R ≤ 0 slack
   rows (see the renames above). The selection pinned there (`[1, 0, 0]`) must not change.
   Every other entry in that file must stay byte-identical.
-- **The absolute `min_largest_shortfall` ghost case above.** For that case the golden test pins only the new
-objective value (50.0), with a comment, and not the selection. The ghost holds m at 50, so
-every selection ties, and CBC returns the empty plan where the legacy code returned a cost-23
-one. The CHANGELOG `### Fixed` entry says that the plan degenerates when a ghost is present
-and points to `presolve_check` (P5).
+- **The absolute `min_largest_shortfall` ghost case above.** For that case the golden test
+  pins only the new `mip_objective_value` (50.0), with a comment, and not the selection. The
+  ghost holds m at 50, so every selection ties, and CBC returns the empty plan where the
+  legacy code returned a cost-23 one. The CHANGELOG `### Fixed` entry says that the plan
+  degenerates when a ghost is present, and points to `presolve_check` (P5).
 
 ## 3. Objective specs (`pymarxan.multiobjective`)
 
@@ -221,12 +228,14 @@ review). Builders must never be called twice on one context (they add named rows
     to 0. A PU variable that is never written to the LP (zero cost, no rows) keeps `None`
     after the reset, and `pulp.value` of an expression containing a `None` variable is
     `None`.
-  - `v_rec` is the exact recomputation from the rounded selection (§5 rule).
-  - **Both values are attained by the stage's own plan.** The model value is attained by the
-    solver's solution. The recomputed value is attained by the same rounded x with every
-    auxiliary set to its implied value: s = max(0, R − A) satisfies s ≥ R − A, y = 1 iff
-    A ≥ R satisfies A ≥ R·y, and m, boundary y and connectivity z are set the same way. So a
-    cap built from the better of the two stays feasible, and it is never looser than either.
+  - `v_rec` is the implied evaluation of `term.expr` at the rounded selection (§5).
+  - **Both values are attained by a model point.** The model value is attained by the
+    solver's solution. `v_rec` is attained by the implied point, provided that point is
+    `feasible` (§5).
+    - If it is not feasible, v = `v_model`. Rounding a near-integral x can break
+      COSTBUDGET: round 6 built a contrived case where it did.
+    - A cap built this way stays feasible, and it is never looser than either value when
+      both are usable.
     Using either value alone loses targets:
     - **Recompute only** (round 4, executed): amounts 0.7 + 0.1 = 0.7999999999999999 against
       target 0.8. CBC sets y = 1 within tolerance, so `v_model` = 1 but `v_rec` = 0. The cap
@@ -266,7 +275,10 @@ review). Builders must never be called twice on one context (they add named rows
   supplies it, so the helper itself needs no problem data. The helper computes `v_model`
   itself and takes the better of the two. It works over `ObjectiveTerm`s with mixed senses
   and returns
-  `HierarchicalResult(status: int, stage_reached: int)`. It raises nothing itself;
+  `HierarchicalResult(status: int, sol_status: int, stage_reached: int)`. `status` and
+  `sol_status` are those of the **last accepted** stage: they are snapshotted with the
+  variable values. After a fallback, `model.status` holds the failed solve's status, so it is
+  not used. `metadata["status"]` / `["sol_status"]` come from this result. It raises nothing itself;
   `MultiObjectiveMIP` turns the result into errors and warnings.
 - `stage_reached` is the number of accepted stages (n on full success).
 - After a stage with no solution, the loop stops.
@@ -327,6 +339,9 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   parameters, presolve hook and `_build_base`.
 - Validation at construction: ≥ 1 objective (n = 1 is allowed and equals a single solve);
   effective-key uniqueness; approach type known; `rel_tol` / weights shapes match n.
+- Calls `_build_base(problem, config, need_boundary=True)` when any spec is `MinBoundary`. A
+  `MinBoundary` spec on a problem with no boundary table → `ValueError` at `solve`: its
+  objective would be the constant 0.
 - Builds the base model and every objective term once per `solve` (§3); each run sets its
   objective and adds / deletes its cap rows. `config.num_solutions` is ignored (one solution
   per row, documented); `config.verbose` is honoured.
@@ -337,27 +352,54 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
 **Outputs** — one `Solution` per run, in row order:
 - `selected`, `cost`, `boundary`, `targets_met`, `objective` exactly as `MIPSolver` fills them
   (Marxan-style recomputation), so every existing consumer works.
-- `metadata["objective_values"]`: `{label_or_name: value}` for every objective,
-  **recomputed from the selection** with one fixed rule per builder, from the selected `x`
-  rounded to {0,1}: achieved A_j = Σ amount·x (PROBMODE-2 scaled as in the model); slack
-  s_j = max(0, R_j − A_j); met y_j = 1 iff A_j ≥ R_j exactly (the `targets_met` /
-  `check_targets` rule); largest shortfall m = max over R_j > 0 of s_j/R_j (relative) or s_j
-  (absolute), 0 when no R_j > 0; cost / boundary / connectivity / probability terms evaluated
-  directly. A PU whose `varValue` is `None` counts as 0, as in `MIPSolver`. These values
-  are reported in `objective_values` and are also `v_rec` in hierarchical caps (§4.1).
-  - Under PROBMODE 2 the recomputed met uses scaled amounts, while `Solution.targets_met`
-    (`check_targets`) uses unscaled ones, so the two can differ there (documented).
-  - **Invariant:** each recomputed value is attained by the selected `x`, with every
-    auxiliary (s, m, y, boundary y, connectivity z) at its implied value. It is the best
-    value of the objective's model expression over the exact implied auxiliaries. Two
-    consequences:
-    - a stage's own plan always satisfies its own cap, within solver tolerance;
-    - at a proven optimum, away from target boundaries, the recomputed value equals the model
-      value.
+- `metadata["objective_values"]`: `{label_or_name: value}` for every objective. Each is the
+  **implied evaluation** (defined below) of the objective's own `term.expr` at the selected
+  `x`, rounded to {0, 1}. These are the values reported in `objective_values`, and they are
+  also `v_rec` in hierarchical caps (§4.1).
 
-    A test checks both on oracle data.
+  **Implied evaluation: one source of truth, built from the model's own rows.**
+  - Every auxiliary variable is registered at creation, together with an *implied-value rule*.
+    The registry is `ObjectiveContext.implied` (and the same list on `_BaseModel`), of type
+    `list[tuple[LpVariable, Callable[[], float]]]`, kept in creation order. The rule is
+    written next to the row it belongs to:
+    - slack: `s = max(0, R − A)`;
+    - met: `y = 1` iff `A ≥ R` exactly, the `check_targets` rule;
+    - largest shortfall: `m = max(scaled s)` over R > 0, or 0 when there is none;
+    - boundary auxiliaries: `|x_i − x_j|`, exactly as the abs rows bound them;
+    - symmetric connectivity: `z = x_i·x_j`, one per unordered pair, using the first row as
+      the MIP does;
+    - asymmetric connectivity: `z = x_i·(1 − x_j)`.
+
+    Rules read the current `varValue`s, so `m` comes after the slacks it depends on.
+  - `evaluate_implied(model, x_rounded)`:
+    1. snapshot every `varValue`;
+    2. set x to `x_rounded` (a PU whose `varValue` is `None` counts as 0, as in `MIPSolver`);
+    3. apply every rule in order;
+    4. read `pulp.value(term.expr)` for every objective;
+    5. check every model row except `hier_cap_*` with `constraint.valid(1e-6)` → `feasible`;
+    6. restore the snapshot.
+  - Because each value is the model's own expression evaluated at a model point, the values
+    cannot diverge from the MIP's formulas. The Marxan-style `compute_boundary`,
+    `compute_connectivity_penalty` and `compute_probability_penalty` helpers, and
+    `Solution.objective`, are **not** used, because they differ from the MIP terms. Round 6,
+    executed, found three such differences:
+    - asymmetric connectivity;
+    - duplicate (i,j)/(j,i) symmetric rows;
+    - a negative PROBABILITYWEIGHTING.
+
+    Using those helpers made `v_rec` unattainable, and stage 2 became infeasible.
+  - `objective_values["min_cost"]` can therefore differ from `Solution.objective`, the
+    Marxan-style score, through BLM weighting, the connectivity formula and penalties
+    (documented).
+  - Under PROBMODE 2 the met rule uses the model's scaled amounts, while
+    `Solution.targets_met` (`check_targets`) uses unscaled ones, so the two can differ there
+    (documented).
+  - **Invariant:** when `feasible`, the implied point is a feasible model point at which each
+    objective takes its reported value. So a stage's own plan satisfies its own cap. At a
+    proven optimum, away from target boundaries, the implied value equals the model value.
+    A test checks both on oracle data that includes connectivity and probability.
   - **Tolerance caveat:** on tolerance-boundary data the reported met count can sit below the
-    cap's v (round-4 case: the model has the target met, the recompute does not).
+    cap's v (round-4 case: the model has the target met, the implied rule does not).
     `objective_values` stays consistent with `targets_met`. This is documented, and a
     regression test pins the cap behaviour (§7.4).
 - `metadata["approach"]` (`"hierarchical"` / `"weighted_sum"`)
@@ -406,6 +448,7 @@ Every error is a `ValueError` naming the argument, unless another type is stated
 - `MaxWtdSum` weights that do not cover every problem feature, or that name an unknown id;
 - matrix helpers with n < 2 or n_values < 2, or a `rel_tol_matrix` `max` that is negative or
   non-finite;
+- `MinBoundary` on a problem without a boundary table (at `solve`);
 - an unknown approach (`TypeError`);
 - a `ZonalProblem` (`TypeError`);
 - stage 1, or a weighted-sum row, with no solution (`RuntimeError`);
@@ -479,9 +522,22 @@ Every error is a `ValueError` naming the argument, unless another type is stated
    both targets met. This test together with the tolerance-boundary test kills both "model
    value only" and "recompute only"; `stage_reached` is n on success and k − 1 when stage k fails (mocked
    `sol_status`), and the stage-1 failure raises `RuntimeError`.
-5. **Budget / targets / boundary:** COSTBUDGET honoured when set, absent otherwise; a target
+5. **Implied evaluation (round 6):**
+   - At an optimal single-row solve, `objective_values[key] == pulp.value(term.expr)` for every
+     objective. The fixture has BLM > 0, symmetric connectivity with duplicate (i,j)/(j,i)
+     rows, asymmetric connectivity, and PROBMODE 1 with a positive and with a negative
+     PROBABILITYWEIGHTING.
+   - `Hierarchical([MinCost(), MinShortfall()])` with asymmetric connectivity and two locked-in
+     endpoints reaches `stage_reached == 2`.
+   - `evaluate_implied` restores every `varValue`, and reports `feasible = False` for a
+     stubbed near-integral x whose rounding breaks COSTBUDGET. v then falls back to `v_model`,
+     and stage 2 solves.
+   - A mocked stage-2 failure leaves `metadata["status"]` / `["sol_status"]` equal to stage 1's.
+6. **Budget / targets / boundary:** COSTBUDGET honoured when set, absent otherwise; a target
    unmet at the optimum (soft targets); `MinBoundary` is non-trivial when BLM = 0.
-6. **Mutation spot-checks:** flip the cap inequality, drop `|v|`, flip the weighted-sum sign, take v from only the model value or only the recomputed value, index `rel_tol` by objective instead of stage —
+7. **Mutation spot-checks:** flip the cap inequality, drop `|v|`, flip the weighted-sum sign,
+   evaluate `v_rec` with the `compute_*` utilities, take v from only the model value or only
+   the recomputed value, index `rel_tol` by objective instead of stage —
    each must fail a test.
 
 ## 8. Docs
