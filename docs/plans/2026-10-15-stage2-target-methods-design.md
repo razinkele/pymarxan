@@ -20,14 +20,27 @@ prioritizr 9's **code** (not its docs, where the two disagree), and fix prioriti
 | `loglinear_targets` | Deprecate, keep exact v0.39 behaviour, `DeprecationWarning` pointing to `interp_absolute_targets` |
 | API shape | Plain functions returning `{fid: target}` dicts (approach A); not spec objects, not a dispatcher |
 
-**Success criteria (roadmap acceptance):** each method has a worked example pinned as a test;
-unit handling is explicit; the CHANGELOG cites each source; no new data models.
+**Success criteria (roadmap acceptance):** each public function has at least one worked
+example pinned as a test; unit handling is explicit; the CHANGELOG cites each source; no new
+data models.
+
+**Provenance of worked examples (honest statement).** None of the papers or prioritizr's
+documentation publish numeric input→target pairs, and prioritizr's own `tests/testthat` files
+compute their expected values from the same formulas on simulated rasters (e.g.
+`test_spec_jung_targets.R`: `correct_targets <- pmin(pmin(pmax(ac, fs * bc), 1e6), fs)`).
+So every pinned value here is **hand-computed from the published rule as implemented in
+prioritizr 9.0.1**, stated in a comment on each test with the formula used. This amends the
+roadmap's "taken from its paper or prioritizr's documentation" wording, which no source can
+satisfy literally.
 
 ## 2. Package layout
 
 `src/pymarxan/targets.py` becomes the package `src/pymarxan/targets/`. `__init__.py`
 re-exports every public name flat (`from pymarxan.targets import rodrigues_targets`) and keeps
-the module docstring. Existing imports keep working.
+the module docstring. Existing imports keep working. `__init__.py` **must define `__all__`**
+listing every public name: without it pdoc renders an empty `pymarxan.targets` page (verified
+on a toy package in spec review), and `make docs` still succeeds, so nothing else would catch
+it. A test asserts `set(pymarxan.targets.__all__)` equals the expected public-name set.
 
 | Module | Public contents |
 |---|---|
@@ -52,13 +65,17 @@ PUs, including locked-out ones, as prioritizr does); `k_j` = km² per native uni
 2. **Cap.** `cap_km2: float | None = 1_000_000.0` (prioritizr default; Butchart et al. 2015).
    `None` disables. Applied as `min(t, cap)` (prioritizr v9, not v8's flat replacement).
    Exception: `duran_targets` defaults to `cap_km2=None` (prioritizr applies no cap there).
-   A non-`None` cap must be finite and ≥ 0.
+   A non-`None` cap (`cap_km2`, and `cap` on `interp_absolute_targets`) must be finite and ≥ 0.
 3. **Clip.** Every area-based result is `min(t, f)`: never infeasible by construction.
-4. **Zero totals.** `F_j == 0` → target `0.0` (prioritizr returns NaN).
+   (`absolute_targets` is the one method that does not clip, §7.)
+4. **Zero totals.** `F_j == 0` → target `0.0` (prioritizr returns NaN), for every method
+   except `absolute_targets`, which returns the given amount unchanged.
 5. **`features=`.** `Iterable[int] | None`. `None` = every feature in `problem.features["id"]`.
    An id not in the problem raises `ValueError`. The output contains exactly the selected ids,
    in `problem.features` order. With `apply_targets` keeping unlisted features' targets, this is
-   how methods are mixed across feature groups.
+   how methods are mixed across feature groups. Every new method takes `features=`;
+   `relative_targets`, `group_targets` and `loglinear_targets` keep their v0.39 signatures
+   (no `features=` added — `group_targets` already selects by its `groups` keys).
 6. **Per-feature inputs** (`status`, `pop_size`, `density_per_km2`, …) accept a scalar (applied
    to every selected feature) or a `Mapping[int, ...]`. Mappings may have extra keys; a missing
    key for a selected feature, or a non-finite / out-of-range value, raises `ValueError`
@@ -100,6 +117,11 @@ Validation: `0 ≤ a ≤ e`, finite; `interp == "log10"` requires `a > 0`; `b, g
 prioritizr routes it into interpolation with two identical points and errors. Everywhere
 else the branch boundaries match prioritizr (`f < a` rare, `f > e` common, inclusive middle).
 
+Pinned example with both optional area targets (`k = 1`, `interp="log10"`, a=1,000, b=0.5,
+c=400 `rare_method="max"`, e=100,000, g=0.1, h=20,000 `common_method="min"`):
+f=500 → 400 (`max(400, 250)`); f=2,000 → 879.588 (interpolated proportion 0.43979);
+f=500,000 → 20,000 (`min(20,000, 50,000)`).
+
 ### 4.2 `interp_absolute_targets`
 
 Same rule and argument names with `absolute` for `area` (`rare_absolute_threshold`,
@@ -107,11 +129,18 @@ Same rule and argument names with `absolute` for `area` (`rare_absolute_threshol
 Equivalence pinned by test: `loglinear_targets(lower_area=L, lower_target=p, upper_area=U,
 upper_target=q)` == `interp_absolute_targets(rare_absolute_threshold=L, rare_relative_target=p,
 common_absolute_threshold=U, common_relative_target=q, interp="log10")` for every feature
-(including `F ≤ L`, `F ≥ U`, `F == 0`). Note `loglinear_targets` requires `0 < L < U` and
+(including `F ≤ L`, `F ≥ U`, `F == 0`), compared with `pytest.approx(rel=1e-12)` — the two
+evaluate the interpolation in a different operation order, so bitwise equality is not
+promised. Note `loglinear_targets` requires `0 < L < U` and
 `interp_absolute_targets` also accepts `L == U` and (linear) `L == 0`; the equivalence holds
 on `loglinear_targets`' domain.
 
-### 4.3 Presets (thin wrappers; every default overridable by keyword)
+### 4.3 Presets (thin wrappers; every listed default overridable by keyword)
+
+Presets accept only the parameters in their "Defaults" column plus `km2_per_unit`,
+`cap_km2` and `features`; the "Fixed" settings are not parameters (passing e.g.
+`interp=` or, for Watson, `common_area_threshold=` is a `TypeError`). Watson's common
+threshold always equals its `rare_area_threshold`.
 
 | Function | Fixed | Defaults | Pinned examples (km², `k = 1`) |
 |---|---|---|---|
@@ -126,6 +155,10 @@ et al. 2015 (10.1098/rsos.150107), Watson et al. 2010 (10.1111/j.1523-1739.2010.
 Sreekar & Watson 2026 (10.1038/s44358-026-00169-7): numeric breakpoints follow prioritizr's
 implementation; not confirmable from accessible paper text — docstrings say so. Polak's
 docstring notes its absolute target is non-monotone in `f` (inherent to the rule).
+
+Watson at f = 10,000 gives 1,000 on either branch (`min(1,000, 10,000)` = `0.1·10,000`), so
+that regression test proves only that pymarxan does not crash where prioritizr does; the
+test comment says so.
 
 ## 5. IUCN Red List family (`_redlist.py`)
 
@@ -167,6 +200,16 @@ Ecosystem table:
   Where prioritizr's docs disagree with its code we follow the code, which agrees with IUCN:
   species EN-B2 = 500 km² (docs: 50).
 
+Pinned examples for the general functions (`k = 1`, cap 1e6):
+- `rl_species_targets` EN, A1, B1, p=0, max → `min(max(5,000, 0.3f), cap, f)`:
+  f=3,000 → 3,000; f=10,000 → 5,000; f=50,000 → 15,000.
+- `rl_species_targets` CR, A2, B2, p=0.2, **min** → `min(min(12, 0.24f), cap, f)`:
+  f=20 → 4.8; f=1,000 → 12.
+- `rl_ecosystem_targets` VU, A3, B2, p=0, max → `min(max(5,000, 0.5f), cap, f)`:
+  f=4,000 → 4,000; f=8,000 → 5,000; f=40,000 → 20,000 (pins the VU-A3 = 0.5 deviation;
+  prioritizr's 0.3 would give 12,000).
+- Mixed per-feature `status={1: "CR", 2: "VU"}` in one call gives each feature its own row.
+
 Presets (all keywords overridable):
 
 | Function | Fixed | Defaults | Effective rule | Pinned examples |
@@ -193,10 +236,17 @@ duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2,
 
 - **pop_size:** `t = min(n / d, cap, f)`; `n > 0`, `d > 0`. Density is per km² by name; no
   unit strings (users convert, e.g. per-ha × 100). prioritizr's docs say `n·d`; its code and
-  tests divide. Example: n=500, d=2 → 250.
+  tests divide. Examples: n=500, d=2, f=10,000 → 250; n=10,000, d=0.5 → 20,000 (f=50,000)
+  and → 5,000 (f=5,000, clipped to f).
 - **wilson:** `β = 2r/σ² − 1`; `k = (1e5·σ²·β²/2)^(1/β)`; `t = min(k / d, cap, f)`. `r > 0`,
   `σ² > 0`, `d > 0`; `β ≤ 0` → `ValueError` naming the feature (prioritizr returns NaN/Inf).
-  Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317. Wilson et al. 2010
+  Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317.
+  **Numerics:** compute `ln k = ln(1e5·σ²·β²/2) / β` and `k = exp(ln k)`, mapping
+  `ln k > ln(sys.float_info.max)` to `k = inf` (the cap/clip then bounds `t`; Python's
+  `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3). As β→0⁺ with base < 1,
+  `k` underflows to 0 → target 0; the docstring flags small β as scientifically degenerate.
+  Tests pin both: σ²=1,000, r≈σ²/2 (β=1e-3) → `t = min(cap, f)`; r=0.0200001, σ²=0.04 → 0.
+  Wilson et al. 2010
   (10.1890/09-1051.1); formula checked against prioritizr only — the design review's science
   lens must try to confirm it against the paper, else the docstring says it follows prioritizr.
 - **duran:** `t = min(h·p⁴, f)` (+ cap if given); `p ∈ [0, 1]`, `h > 0` (km²). Persistence
@@ -208,21 +258,27 @@ Each per-feature input is scalar or `{fid: value}` (§3.6).
 
 ## 7. Simple methods and composition (`_compose.py`)
 
-- `absolute_targets(problem, amount, *, features=None)`: `t = a` native units, scalar or dict,
+- `absolute_targets(problem, *, amount, features=None)`: `t = a` native units, scalar or dict,
   `a ≥ 0` finite. **Not clipped** to `F` (explicit user target; matches prioritizr;
-  `presolve_check` flags targets above totals).
+  `presolve_check` flags targets above totals). Examples: `amount=5` → 5 for every feature,
+  including one with `F = 0`; `amount={1: 2.5, 2: 7}` → those values.
 - `area_targets(problem, *, km2_per_unit, area_km2, cap_km2=1_000_000.0, features=None)`:
-  `t = min(a, cap, f)`.
+  `t = min(a, cap, f)`. Examples: a=1,000 → 600 (f=600), 1,000 (f=5,000); with `k = 0.01`
+  (native unit = ha) and F=500,000 ha (f=5,000 km²) → 100,000 ha.
 - `rule_targets(problem, *, km2_per_unit, baseline, rules, traits, cap_km2=1_000_000.0,
   features=None)`: `rules: Mapping[str, float]` (each in [−1, 1]); `traits: Mapping[int,
   Collection[str]]` (every selected feature present; empty set allowed); a trait not in `rules`
   → `ValueError`. `prop = clamp(baseline + Σ rules[τ] for τ in traits[j], 0, 1)`,
   `t = min(prop·f, cap, f)`. `baseline ∈ [0, 1]`. Harris & Holness 2023
   (10.1016/j.biocon.2023.110218). Joined by feature id (fixes prioritizr's inverse-permutation
-  bug).
+  bug). Example (f=10,000 each, baseline 0.3, `rules={"endemic": 0.2, "harvested": -0.1}`):
+  `{"endemic"}` → 5,000; `{"harvested"}` → 2,000; `{"endemic", "harvested"}` → 4,000;
+  `set()` → 3,000; baseline 0.9 + endemic → clamped to 1.0 → 10,000.
 - `min_targets(*results)`, `max_targets(*results)`: ≥ 2 result dicts, feature-wise min/max.
   Inputs must have identical key sets, else `ValueError` listing the difference (prioritizr
-  silently drops NaN). Fewer than 2 inputs → `ValueError`.
+  silently drops NaN). Fewer than 2 inputs → `ValueError`. Output follows the first input's
+  key order. Example: `max_targets({1: 100, 2: 50}, {1: 80, 2: 90})` → `{1: 100, 2: 90}`;
+  `min_targets` of the same → `{1: 80, 2: 50}`.
 
 ## 8. `loglinear_targets` deprecation
 
@@ -239,21 +295,30 @@ Under `tests/pymarxan/targets/` (no `__init__.py` there → repo-unique basename
 Fixture: a small synthetic `ConservationProblem` whose feature totals are chosen to hit the
 pinned `f` values with `km2_per_unit=1` (and a rescaled variant).
 
-1. **Worked examples:** every pinned value in §4–7 (`pytest.approx`, rel 1e-6).
+1. **Worked examples:** every pinned value in §4–7 (`pytest.approx`, rel 1e-6), each with a
+   comment giving the formula it was hand-computed from (§1 provenance).
 2. **Regime boundaries:** Jung 2,200 / 2,857.14; Ward 100 / 500; Watson f = 10,000;
-   Rodrigues cap onset 1e7; Wilson β just above 0 (finite, large); f = 0 → 0 for every method.
+   Rodrigues cap onset 1e7; Wilson overflow and underflow cases (§6); f = 0 → 0 for every
+   area-based method (`absolute_targets` excluded, §3.4).
 3. **Invariants** (parametrised over all area-based methods): `0 ≤ t ≤ F`; `t·k ≤ cap`.
-   **Rescaled units:** amounts ×100 with `km2_per_unit` ÷100 → native targets ×100 exactly.
+   **Rescaled units:** amounts ×100 with `km2_per_unit` ÷100 → native targets ×100, compared
+   with `pytest.approx(rel=1e-12)` (the float round-trip is not bitwise exact).
+   **Public API:** `set(pymarxan.targets.__all__)` equals the expected name set.
 4. **prioritizr-bug regressions:** subset + out-of-order dict keys; `"A2b"`; RLE VU-A3 = 0.5;
    Watson at threshold; f = 0; Wilson β ≤ 0 raises; `rule_targets` with shuffled `traits`.
 5. **Validation:** one test per `ValueError` path (missing dict key, unknown feature id, bad
    status, half-given target/method pair, bad thresholds, log10 with a = 0, min/max key mismatch).
-6. **Backwards compatibility:** `tests/pymarxan/test_targets.py` passes unchanged apart from
-   expecting `DeprecationWarning` on `loglinear_targets`; loglinear ≡ interp_absolute test.
+6. **Backwards compatibility:** `tests/pymarxan/test_targets.py` keeps every assertion; its
+   `loglinear_targets` tests are wrapped in `pytest.warns(DeprecationWarning)` (the only
+   edit), plus a loglinear ≡ interp_absolute test. No other caller of `loglinear_targets`
+   exists in `src/`, `examples/` or `docs/`.
 7. **End to end:** `rodrigues_targets` → `apply_targets` on `tests/data/simple` →
    `MIPSolver` solves with all targets met (anchor 35.0 untouched — it uses the file's targets).
-8. **Docs:** a `docs/TUTORIAL.md` section (mixed methods: `jung_targets` on threatened ids,
-   `rodrigues_targets` on the rest, `apply_targets`) pinned by `tests/test_tutorial_examples.py`.
+8. **Docs:** a `docs/TUTORIAL.md` section "Published target-setting methods" (mixed methods:
+   `jung_targets` on threatened ids, `rodrigues_targets` on the rest, `apply_targets`). Its
+   code block is copied verbatim into a new `test_section_target_methods` in
+   `tests/test_tutorial_examples.py` (that file hand-copies each section; nothing extracts
+   markdown).
 
 ## 10. Docs and release notes
 
@@ -278,4 +343,5 @@ Shiny UI for target methods; zone / per-zone targets; string shortcuts (`"jung"`
 - **Locked-out PUs** count toward `F`, as in prioritizr; large locked-out shares can make a
   clipped target unattainable. Documented; `presolve_check` / infeasibility diagnostics apply.
 - **Package conversion** must not break `from pymarxan.targets import ...` or pdoc output;
-  covered by the unchanged backwards-compat tests and `make docs`.
+  covered by the backwards-compat tests and the `__all__` test (§2) — `make docs` alone
+  would not catch an empty page.
