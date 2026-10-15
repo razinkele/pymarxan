@@ -32,6 +32,11 @@ from pymarxan.targets._interp import (
     sreekar_targets,
     watson_targets,
 )
+from pymarxan.targets._population import (
+    duran_targets,
+    pop_size_targets,
+    wilson_targets,
+)
 from pymarxan.targets._redlist import (
     jung_targets,
     rl_ecosystem_targets,
@@ -44,12 +49,14 @@ __all__ = [
     "PerFeatureFloat",
     "PerFeatureStr",
     "apply_targets",
+    "duran_targets",
     "group_targets",
     "interp_absolute_targets",
     "interp_area_targets",
     "jung_targets",
     "loglinear_targets",
     "polak_targets",
+    "pop_size_targets",
     "relative_targets",
     "rl_ecosystem_targets",
     "rl_species_targets",
@@ -57,4 +64,5 @@ __all__ = [
     "sreekar_targets",
     "ward_targets",
     "watson_targets",
+    "wilson_targets",
 ]
