@@ -97,12 +97,12 @@ other golden case must reproduce exactly. Three builders are new:
   - `conn_expr: LpAffineExpression`, default empty
   - `prob_expr: LpAffineExpression`, default empty
   - `amount_exprs: dict[int, LpAffineExpression]` keyed by feature id, default `{}`
-  - `implied: list[tuple[LpVariable, Callable[[], float]]]`, default `[]`, holding the
+  - `implied: list[tuple[LpVariable, Callable[[], float]]]`, `field(default_factory=list)`, holding the
     implied-value registry (§5)
 
   `MIPSolver` fills them from `_build_base`. (There is no `penalty_expr`.)
 - Every builder has the signature `builder(ctx, shortfall, *, owner="", **params) -> ObjectiveTerm`.
-  `BUILDERS[name](ctx, shortfall)` therefore still works, and `zones/mip_solver.py:251` is
+  `BUILDERS[name](ctx, shortfall)` therefore still works, and `zones/mip_solver.py:251-252` is
   untouched. The only extra param is `weights` (`build_max_wtd_sum`).
 - **Name ownership:**
   - A variable or constraint the builder *owns* is named `f"{ctx.prefix}{owner}{stem}"`, e.g.
@@ -306,12 +306,13 @@ review). Builders must never be called twice on one context (they add named rows
 
 ### 4.3 Matrix helpers (prioritizr parity)
 - `weights_matrix(n_objectives, n_values, *, include_zeros=True, include_extremes=True)` —
-  prioritizr `approach_weights_matrix` algorithm exactly (§ research notes 2.4): grid of
+  prioritizr `approach_weights_matrix` algorithm exactly (`R/approach_weights_matrix.R`): grid of
   `linspace(0,1,n_values)` (or `n_values+1` points without 0 when `include_zeros=False`),
   drop all-equal rows, drop rows with < 2 entries > 1e-6, prepend `identity(n)` if
   `include_extremes`, always prepend a row of ones. Row order follows R's `expand.grid`
-  (first column varies fastest). Pinned: (2,5) → the 15 rows listed in the notes; (3,3) → 22
-  rows; (3,5) → 112 rows.
+  (first column varies fastest). Pinned: (2,5) → exactly these 15 rows, in order:
+  `[1,1],[1,0],[0,1],[.5,.25],[.75,.25],[1,.25],[.25,.5],[.75,.5],[1,.5],[.25,.75],[.5,.75],`
+  `[1,.75],[.25,1],[.5,1],[.75,1]`; (3,3) → 22 rows; (3,5) → 112 rows.
 - `rel_tol_matrix(n_objectives, n_values, max, *, include_zeros=True, order=True)` — prioritizr
   `approach_rel_tol_matrix`: grid over n−1 columns of `linspace(0,max,n_values)` (or without
   0); if `order`, keep rows non-increasing across columns. Pinned: (3,3,1) →
@@ -360,7 +361,7 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
 - `metadata["objective_values"]`: `{label_or_name: value}` for every objective. Each is the
   **implied evaluation** (defined below) of the objective's own `term.expr` at the selected
   `x`, rounded to {0, 1}. These are the values reported in `objective_values`, and they are
-  also `v_rec` in hierarchical caps (§4.1).
+  also `v_rec` in hierarchical caps when the implied point is `feasible` (§4.1).
 
   **Implied evaluation: one source of truth, built from the model's own rows.**
   - Every auxiliary variable is registered together with an *implied-value rule*, written
@@ -392,7 +393,8 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   - `evaluate_implied(model, x, x_rounded, implied, terms) -> tuple[list[float], bool]` returns
     (one value per term, `feasible`):
     1. snapshot every tracked `varValue`;
-    2. set x to `x_rounded` (a `None` value counts as 0, as in `MIPSolver`);
+    2. set x to `x_rounded`, which the caller rounds from the accepted `varValue`s to {0, 1}
+       (a `None` value counts as 0, as in `MIPSolver`);
     3. apply every rule in registry order;
     4. read `pulp.value(term.expr)` for every objective;
     5. check **every** model row with `constraint.valid(1e-6)` → `feasible`. This includes the
@@ -400,7 +402,8 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
        built a contrived run where skipping them let cap 2 contradict cap 1;
     6. restore the snapshot.
   - Consequence: on tolerance-boundary data the implied point can violate an earlier
-    stage's cap. That stage and later ones then fall back to `v_model` (documented).
+    stage's cap. When that happens, the stage being capped falls back to `v_model`, and
+    later stages can as well (documented).
   - Because each value is the model's own expression evaluated at a model point, the values
     cannot diverge from the MIP's formulas. The Marxan-style `compute_boundary`,
     `compute_connectivity_penalty` and `compute_probability_penalty` helpers, and
@@ -468,7 +471,9 @@ Every error is a `ValueError` naming the argument, unless another type is stated
 - duplicate effective keys (`label or name`);
 - a label that is not an identifier;
 - `rel_tol` length ≠ n−1, or weights length ≠ n (checked per row);
-- negative or non-finite `rel_tol`, `abs_tol` or weights;
+- negative or non-finite `rel_tol`, `abs_tol` or `WeightedSum` weights;
+- non-finite `MaxWtdSum` feature weights (any sign is allowed);
+- an unknown `shortfall` value (`"relative"` / `"absolute"`) on a spec;
 - an all-zero weights row;
 - `MaxWtdSum` weights that do not cover every problem feature, or that name an unknown id
   (at `solve`);
@@ -557,6 +562,9 @@ Every error is a `ValueError` naming the argument, unless another type is stated
    - `m` is registered after its slacks: on a fixture where the solver's slack values are
      stale, `evaluate_implied` gives the true largest shortfall.
    - Tracked variables: a zero-cost PU with no rows keeps `None` after `evaluate_implied`.
+   - Earlier caps are checked (round-7 cap-contradiction case): with a negative SPF on
+     tolerance-boundary amounts, a 3-objective hierarchy reaches `stage_reached == 3`. An
+     implementation that skips `hier_cap_*` rows in the feasibility check stops at stage 2.
    - `Hierarchical([MinCost(), MinShortfall()])` with asymmetric connectivity and two locked-in
      endpoints reaches `stage_reached == 2`.
    - `evaluate_implied` restores every `varValue`, and reports `feasible = False` for a
@@ -567,7 +575,8 @@ Every error is a `ValueError` naming the argument, unless another type is stated
    unmet at the optimum (soft targets); `MinBoundary` is non-trivial when BLM = 0.
 7. **Mutation spot-checks:** flip the cap inequality, drop `|v|`, flip the weighted-sum sign,
    evaluate `v_rec` with the `compute_*` utilities, take v from only the model value or only
-   the recomputed value, index `rel_tol` by objective instead of stage —
+   the recomputed value, index `rel_tol` by objective instead of stage, skip `hier_cap_*` rows in the
+   feasibility check —
    each must fail a test.
 
 ## 8. Docs
