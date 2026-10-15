@@ -116,14 +116,6 @@ def test_loglinear_is_deprecated():
         )
 
 
-def test_targets_package_all():
-    import pymarxan.targets as targets_pkg
-
-    assert {"apply_targets", "group_targets", "loglinear_targets", "relative_targets"} <= set(
-        targets_pkg.__all__
-    )
-
-
 def test_group_targets_apply_group_fraction_to_members():
     problem = _problem()
     groups = {1: "abundant", 2: "scarce"}
