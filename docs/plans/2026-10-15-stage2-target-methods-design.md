@@ -262,11 +262,17 @@ duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2,
   the exact model is `e^x − 1 − x = base` with `x = β·ln K`, while the approximation uses
   `e^x = base`. The review rounds solved the exact model. At r=0.0200001, σ²=0.04 the
   approximation gives k ≈ 0 (no protection) where the exact model needs ln K ≈ 63. Just above
-  base = 1 (r=0.02045, σ²=0.04) it gives k ≈ 1.05 against K ≈ 1.8e22. Rule (revised 2026-10-15,
+  base = 1 (r=0.02045, σ²=0.04, base ≈ 1.0125) it gives k ≈ 1.74 against K ≈ 1.7e22. Rule (revised 2026-10-15,
   round 2): return prioritizr's approximate target, but also compute the exact target (Newton
   solve of `expm1(x) − x = base`) and raise `ValueError` naming the features when the two
   differ by more than 1% after cap and clip. The message points users to `pop_size_targets`.
   This keeps exact prioritizr parity wherever a value is returned.
+  The 1% tolerance also refuses some ordinary-looking inputs where the variance is small (r =
+  σ² = 0.01 is 1.4% off; r = σ² = 0.001 is 9.1% off); the error message names both routes. The
+  exact solver uses a relative Newton stop and a series for small x (accurate for base from
+  1e-300 to the float maximum). Tests pin the tolerance (r=0.034 raises / 0.035 returns at
+  σ²=0.04), the after-cap comparison (r=0.0525, σ²=0.1 → cap), the small-variance route and
+  the underflow path.
   Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317; with d=0.5 →
   26.7496 (pins the division by `d`).
   **Numerics:** compute `ln k = ln(1e5·σ²·β²/2) / β` and `k = exp(ln k)`, mapping

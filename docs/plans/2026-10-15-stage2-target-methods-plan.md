@@ -1836,7 +1836,7 @@ from pymarxan.targets._redlist import (
 )
 ```
 
-and `"jung_targets"`, `"rl_ecosystem_targets"`, `"rl_species_targets"`, `"ward_targets"` to `__all__`. Keep the import blocks in module-name order: `_basic`, `_compose`, `_interp`, `_population`, `_redlist`, as ruff's isort requires.
+and `"jung_targets"`, `"rl_ecosystem_targets"`, `"rl_species_targets"`, `"ward_targets"` to `__all__`. Keep the import blocks in module-name order, as ruff's isort requires: `_basic`, `_compose`, `_interp`, `_population`, `_redlist`, then `_units` last. This block goes directly above the `_units` line.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -1974,8 +1974,8 @@ def test_wilson_divides_by_density(make_problem):
         # beta = 5e-6, 1e5*s2*beta**2/2 = 5e-8: the approximation gives k ~ 0 (no
         # protection) while Lande's exact model needs ~e^63 individuals
         (0.0200001, 1.0),
-        # 1e5*s2*beta**2/2 ~ 1.001: approximation k ~ 1.05 (173.7 km² target at
-        # d = 0.01) vs exact ~1.8e22 individuals (target = cap)
+        # 1e5*s2*beta**2/2 = 1.0125: approximation k ~ 1.737 (173.7 km² target at
+        # d = 0.01) vs exact ~1.7e22 individuals (target = cap)
         (0.02045, 0.01),
     ],
 )
@@ -1990,9 +1990,62 @@ def test_wilson_lande_exact_solver():
     # expm1(x) - x = base; large base -> x ~ ln(base); small base -> x ~ sqrt(2 base)
     from pymarxan.targets._population import _lande_exact_x
 
-    for base in (1e-8, 0.5, 1.0, 32_000.0, 1e300):
+    for base in (0.5, 1.0, 32_000.0, 1e300):
         x = _lande_exact_x(base)
         assert math.expm1(x) - x == pytest.approx(base, rel=1e-9)
+    # tiny base: compare with the series inverse x = s - s²/6 + s³/36, s = sqrt(2 base)
+    # (expm1(x) - x cancels catastrophically here, so it is not a usable check)
+    for base in (1e-8, 1e-30, 1e-300):
+        s = math.sqrt(2.0 * base)
+        assert _lande_exact_x(base) == pytest.approx(s - s * s / 6 + s**3 / 36, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "r, expected",
+    [
+        # beta = 0.7, base = 980: approx k = 18,757.7 vs exact 18,974.0 (1.14% apart)
+        (0.034, None),
+        # beta = 0.75, base = 1125: approx k = 11,700.47 vs exact 11,811.99 (0.94%)
+        (0.035, 11_700.4715047),
+    ],
+)
+def test_wilson_tolerance_is_one_percent(make_problem, r, expected):
+    # approx k = (1e5*s2*beta**2/2)**(1/beta); exact x solves expm1(x) - x = base,
+    # k = e**(x/beta). Returned values are prioritizr's approximation.
+    p = make_problem({1: 2e7})
+    kw = dict(km2_per_unit=1.0, mean_growth_rate=r, var_growth_rate=0.04, density_per_km2=1.0)
+    if expected is None:
+        with pytest.raises(ValueError, match="differs from Lande's exact"):
+            wilson_targets(p, **kw)
+    else:
+        assert wilson_targets(p, **kw)[1] == pytest.approx(expected, rel=1e-6)
+
+
+def test_wilson_compares_after_cap(make_problem):
+    # beta = 0.05, base = 12.5: raw k differ ~200x (8.7e21 vs 1.7e24 individuals) but
+    # both targets exceed the 1e6 km² cap, so they agree and no error is raised
+    p = make_problem({1: 2e7})
+    out = wilson_targets(p, km2_per_unit=1.0, mean_growth_rate=0.0525, var_growth_rate=0.1,
+                         density_per_km2=1.0)
+    assert out[1] == 1e6
+
+
+def test_wilson_small_variance_route_raises(make_problem):
+    # r = s2 = 0.01: beta = 1, base = 50 -> approx k = 500 vs exact 507.2 (1.43% apart);
+    # small variance, not r near s2/2, makes the approximation inaccurate here
+    p = make_problem({1: 2e7})
+    with pytest.raises(ValueError, match=r"r near σ²/2, or σ² small"):
+        wilson_targets(p, km2_per_unit=1.0, mean_growth_rate=0.01, var_growth_rate=0.01,
+                       density_per_km2=1.0)
+
+
+def test_wilson_base_underflow_names_feature(make_problem):
+    # s2 = 1e-300 and beta ~ 4e-16 make 1e5*s2*beta**2/2 underflow to 0.0; the error
+    # must still name the feature rather than be a bare "math domain error"
+    p = make_problem({1: 1e4})
+    with pytest.raises(ValueError, match=r"Lande's exact.*\[1\]"):
+        wilson_targets(p, km2_per_unit=1.0, mean_growth_rate=1e-300 / 2 * (1 + 4e-16),
+                       var_growth_rate=1e-300, density_per_km2=1.0)
 
 
 def test_wilson_nonpositive_beta_raises(make_problem):
@@ -2078,13 +2131,21 @@ def _lande_exact_x(base: float) -> float:
     """
     if not math.isfinite(base):
         return math.inf
-    if base <= 0.0:
+    if base <= 0.0:  # reachable only via float underflow of 1e5·σ²·β²/2
         return 0.0
-    x = max(math.log(base), 1.0)
+    if base < 1e-200:  # x*x would underflow; expm1(x) - x = x²/2 to double precision
+        return math.sqrt(2.0 * base)
+    x = max(math.log(base), 1.0) if base > 1.0 else math.sqrt(2.0 * base)
     for _ in range(200):
-        step = (math.expm1(x) - x - base) / math.expm1(x)
+        if x < 1e-4:  # series for expm1(x) - x avoids cancellation
+            g = x * x / 2.0 * (1.0 + x / 3.0 + x * x / 12.0)
+            gp = x * (1.0 + x / 2.0 + x * x / 6.0)
+        else:
+            g = math.expm1(x) - x
+            gp = math.expm1(x)
+        step = (g - base) / gp
         x -= step
-        if abs(step) <= 1e-15 * max(x, 1.0):
+        if abs(step) <= 1e-15 * x:
             break
     return x
 
@@ -2193,8 +2254,8 @@ def wilson_targets(
         raise ValueError(
             "wilson_targets' large-population approximation differs from Lande's exact "
             f"model by more than {_WILSON_RTOL:.0%} for feature(s) {inaccurate} "
-            "(mean_growth_rate close to var_growth_rate / 2); set a minimum viable "
-            "population and use pop_size_targets instead"
+            "(1e5·σ²·β²/2 is not much larger than 1: r near σ²/2, or σ² small); set a "
+            "minimum viable population and use pop_size_targets instead"
         )
     return out
 
@@ -2237,7 +2298,7 @@ def duran_targets(
     }
 ```
 
-- [ ] **Step 4: Re-export.** In `__init__.py` add:
+- [ ] **Step 4: Re-export.** In `__init__.py` add this block directly above the `_redlist` block (and so above the `_units` line):
 
 ```python
 from pymarxan.targets._population import (
