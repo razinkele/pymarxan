@@ -172,8 +172,8 @@ review). Builders must never be called twice on one context (they add named rows
   solve). min_penalties tests are the guard.
 - Stage 1 with no solution → `RuntimeError` naming the stage and suggesting
   `presolve_check(problem)`. (A weighted-sum row with no solution → `RuntimeError` naming the
-  row.) A later stage with no solution (only numerically possible — the
-  previous solution satisfies the cap) → restore the previous stage's values, one
+  row.) A later stage with no solution (numerically, or a time limit hit
+  with no incumbent — the previous solution satisfies the cap otherwise) → restore the previous stage's values, one
   `UserWarning`, `metadata["stage_reached"] = k`.
 - Cap rows are removed after each run so sweep rows are independent.
 
