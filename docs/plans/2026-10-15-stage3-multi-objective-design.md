@@ -36,7 +36,7 @@ best-representing ones" (hierarchical) and "the cost-vs-representation frontier"
   `≥ 0` (`rcpp_convert_ref_point_method.cpp:80-97`), so the min-max stage always gives t = 0
   and the method minimises a weighted sum of normalised shortfalls. → deferred.
 - The `objective` attribute is read from raw auxiliary variables, which can misstate members
-  not being optimised at that stage. → pymarxan recomputes from the selection.
+  not being optimised at that stage. → pymarxan recomputes reported values from the selection.
 
 **Success criteria (roadmap acceptance):** hierarchical on a 2-objective toy matches the
 enumerated lexicographic optimum; the weighted-sum sweep reproduces the convex hull of an
@@ -89,16 +89,47 @@ other golden case must reproduce exactly. Three builders are new:
   `max_wtd_sum`, backlog item folded in because the prioritizr parity tests use it). Feature
   weights default to 1.
 
-Builders that need expressions beyond `cost_expr` and target terms read them from an extended
-`ObjectiveContext` (new optional fields `boundary_expr`, `penalty_expr`, `amount_exprs`, all
-defaulting to empty expressions so `ZoneMIPSolver`'s use of the context is unchanged).
+**Builder protocol (fixed here so both solvers keep working).**
+- `ObjectiveContext` gains these fields, each with a default, so `ZoneMIPSolver`'s
+  `ObjectiveContext(model, cost_expr, terms)` call is unchanged:
+  - `blm: float = 0.0`
+  - `boundary_expr: LpAffineExpression` (unweighted), default empty
+  - `conn_expr: LpAffineExpression`, default empty
+  - `prob_expr: LpAffineExpression`, default empty
+  - `amount_exprs: dict[int, LpAffineExpression]` keyed by feature id, default `{}`
+
+  `MIPSolver` fills them from `_build_base`. (There is no `penalty_expr`.)
+- Every builder has the signature `builder(ctx, shortfall, *, owner="", **params) -> ObjectiveTerm`.
+  `BUILDERS[name](ctx, shortfall)` therefore still works, and `zones/mip_solver.py:251` is
+  untouched. The only extra param is `weights` (`build_max_wtd_sum`).
+- **Name ownership:**
+  - A variable or constraint the builder *owns* is named `f"{ctx.prefix}{owner}{stem}"`, e.g.
+    `max_shortfall`, `maxs_{key}`. With the default `owner=""` every name is exactly today's.
+  - The per-target slack and met variables stay `ctx.slack()` / `ctx.met()`. They are named with
+    `ctx.prefix` only and are shared.
+  - The multi-objective path passes `owner=f"{key}__"`, where `key` is the spec's effective key
+    (§3).
+- New builders:
+  - `build_min_cost`: `cost_expr + ctx.blm·boundary_expr + conn_expr + prob_expr`.
+  - `build_min_boundary`: `boundary_expr`.
+  - `build_max_wtd_sum(ctx, shortfall, *, owner="", weights)`: `Σ_j weights[j]·amount_exprs[j]`.
+    It owns no variables.
+- `MIPSolver`'s legacy blocks are replaced by builders. That renames LP variables and
+  constraints: `feat_met_{id}` → `y_f{id}`, `target_{id}` → `met_f{id}`, `slack_{id}` →
+  `s_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`, and the objective name `"objective"` is
+  dropped. Solutions are unaffected, but `build_model` / LP-file output changes, so CHANGELOG
+  "Changed" says so.
 
 **Golden tests first:** before `_build` is touched, record `MIPSolver` results (selected set,
 cost, objective, targets_met, metadata["objective"]) for every objective × shortfall mode,
 with and without BLM, connectivity (symmetric and asymmetric), PROBMODE 1 and 2, a
 probability table with no PROBMODE set, locks, a no-good cut, and a ghost feature with
 MISSLEVEL ≠ 1. The refactor must reproduce them exactly, except the absolute
-`min_largest_shortfall` ghost case above, whose new value is recorded with a comment.
+`min_largest_shortfall` ghost case above. For that case the golden test pins only the new
+objective value (50.0), with a comment, and not the selection. The ghost holds m at 50, so
+every selection ties, and CBC returns the empty plan where the legacy code returned a cost-23
+one. The CHANGELOG `### Fixed` entry says that the plan degenerates when a ghost is present
+and points to `presolve_check` (P5).
 
 ## 3. Objective specs (`pymarxan.multiobjective`)
 
@@ -114,14 +145,22 @@ New module `src/pymarxan/multiobjective.py` (core layer, no UI). Frozen dataclas
 | `MaxWeightedFeatures()` | `build_max_weighted_features` | max | SPF-weighted count |
 | `MaxWtdSum(weights=None)` | `build_max_wtd_sum` | max | `weights`: None (all 1) or `{feature_id: w}` covering every feature in the problem (finite, any sign; an unlisted problem feature or an id not in the problem → ValueError) |
 
-Each spec has `name` (e.g. `"min_cost"`, `"min_shortfall"`) used as the key in reported
-objective values; two specs with the same name in one problem must be distinguished by an
-explicit `label=` argument (all specs accept `label: str | None = None`), otherwise
-`ValueError`. The label (or name) is also the prefix of every variable and constraint the
-spec's builder **owns** (e.g. `max_shortfall` / `maxs_*`), so two `MinLargestShortfall`
-specs do not collide; the per-target slack and met variables keep the context prefix and are
-shared (see below). Labels must be Python identifiers (`str.isidentifier()`), because PuLP
-rewrites characters such as space and `-` to `_` and distinct labels could collide.
+**Keys.**
+- Each spec has a `name`, e.g. `"min_cost"` or `"min_shortfall"`.
+- All specs accept `label: str | None = None`.
+- A spec's **effective key** is `label or name`. Effective keys must be unique within one
+  `MultiObjectiveMIP`, otherwise `ValueError`. So
+  `[MinShortfall(), MinShortfall(label="min_shortfall")]` is rejected.
+- The effective key is used:
+  - as the key in reported objective values;
+  - as the owner prefix (`f"{key}__"`, §2) of every variable and constraint the spec's builder
+    owns, so two `MinLargestShortfall` specs do not collide. The per-target slack and met
+    variables are shared (see below).
+- Labels must be Python identifiers (`str.isidentifier()`), because PuLP rewrites characters
+  such as space and `-` to `_`, and distinct labels could then collide.
+- Each spec has a method `build(ctx) -> ObjectiveTerm` that calls its builder with
+  `shortfall`, `owner` and, for `MaxWtdSum`, `weights`.
+- Each spec has `sense` (`"min"` / `"max"`).
 
 **Terms are built once.** `MultiObjectiveMIP.solve` builds every spec's `ObjectiveTerm` once,
 on one shared `ObjectiveContext` (so slack / met variables are shared between objectives that
@@ -145,37 +184,63 @@ review). Builders must never be called twice on one context (they add named rows
   argument.
 - `rel_tol`: a float (applied to every stage), a sequence of n−1 floats, or a 2-D sequence
   (one row of n−1 per run). Each value finite and ≥ 0; values > 1 allowed.
-- Stage k (k < n): solve with objective k; let v be its value; add the cap row
-  `"hier_cap_{k}"`:
+- Stages are numbered 1..n. In stage k (k < n): solve with objective k; let v be its value;
+  add the cap row `"hier_cap_{k}"`:
   - minimise: `f_k ≤ v + r_k·|v| + abs_tol`
   - maximise: `f_k ≥ v − (r_k·|v| + abs_tol)`
-  Then stage k+1. The last stage's solution is returned.
-- v is the objective value **recomputed from the stage's selection** (§5 rule), not the
-  solver's reported value; with `MIP_GAP` > 0 it is an incumbent, not a proven optimum
-  (documented). **Solution acceptance (every hierarchical stage and every weighted-sum row):**
+  Then stage k+1. `r_k` is indexed by **solve order**: the k-th tolerance caps the k-th stage.
+  The last stage's solution is returned.
+- **What v is:** the **model's value** of objective k's expression (`term.expr`) at the
+  accepted solution, after every variable whose `varValue` is still `None` has been set to 0.
+  A PU variable that is never written to the LP (zero cost, no rows) keeps `None` after the
+  reset, and `pulp.value` of an expression containing a `None` variable is `None`.
+  - v is **not** the recomputed reporting value (§5). The cap constrains the model
+    expression, so v must be measured on that same expression.
+  - For the objective just optimised, the auxiliary variables are tight in the optimised
+    direction, so the model value is the solver's optimum within its tolerance. The
+    raw-auxiliary misreporting prioritizr suffers from affects only objectives *not* being
+    optimised, which is why reporting recomputes.
+  - Recomputing v as well would be unsafe. Round-4 review, executed: amounts 0.7 + 0.1 =
+    0.7999999999999999 against target 0.8. CBC sets y = 1, so the model value of
+    `MaxFeatures` is 1, but the exact recompute is 0. A cap `f ≥ 0 − tol` constrains nothing,
+    and `[MaxFeatures, MinCost]` returned the empty plan at cost 0 instead of cost 2 with the
+    target met.
+  - With `MIP_GAP` > 0, v is an incumbent's value, not a proven optimum (documented).
+
+  **Solution acceptance (every hierarchical stage and every weighted-sum row):**
   before each solve every `varValue` is reset to `None`; a solve is accepted only if
   `model.sol_status` is `LpSolutionOptimal` (1) or `LpSolutionIntegerFeasible` (2). Anything
   else is "no solution" — CBC can leave non-None, constraint-violating values after a failed
   solve, and values left from the previous stage would trivially satisfy its caps, so no
   value-based heuristic is used. Tests mock `sol_status` for both paths.
-- At v = 0 the cap allows only `abs_tol` regardless of `rel_tol` (same as prioritizr); users
-  who want slack there raise `abs_tol`. The caps differ from prioritizr's `v·(1±r)` only when
-  v < 0, where prioritizr's cap is tighter than the optimum (infeasible) and ours is not.
-- `MIP_TIME_LIMIT` applies per stage, so a run takes up to n × T and a sweep rows × n × T
-  (documented).
-- Implementation: generalise `solve_lexicographic` to `solve_hierarchical(model, terms,
-  rel_tols, abs_tol, solver)` over `ObjectiveTerm`s with mixed senses. `solve_lexicographic`
-  becomes a two-term wrapper with its current signature and behaviour, preserving: the bare
-  `cost_expr` secondary (min_penalties ignores BLM — not `build_min_cost`), the constant-primary
-  shortcut, the `"lex_primary_cap"` row name, the warning text and stacklevel, and the
-  snapshot / restore of variable values (CBC leaves stale, non-None values after an infeasible
-  solve). min_penalties tests are the guard.
-- Stage 1 with no solution → `RuntimeError` naming the stage and suggesting
-  `presolve_check(problem)`. (A weighted-sum row with no solution → `RuntimeError` naming the
-  row.) A later stage with no solution (numerically, or a time limit hit
-  with no incumbent — the previous solution satisfies the cap otherwise) → restore the previous stage's values, one
-  `UserWarning`, `metadata["stage_reached"] = k`.
-- Cap rows are removed after each run so sweep rows are independent.
+- At v = 0 the cap allows only `abs_tol`, whatever `rel_tol` is. prioritizr has no abs_tol
+  and allows zero slack there. Users who want slack at v = 0 raise `abs_tol`.
+- Our caps differ from prioritizr's `v·(1±r)` in two ways:
+  - by `abs_tol` at every v;
+  - when v < 0, prioritizr's cap is tighter than the optimum, so the problem is infeasible.
+    Ours is not.
+- `MIP_TIME_LIMIT` applies per stage, so a run takes up to n × T and a sweep up to
+  rows × n × T (documented). Stages are not warm-started, so a time-limited later stage can
+  end with no incumbent (handled below). Warm starts, and reusing stage 1 across sweep rows,
+  are follow-ons.
+- **Implementation:** `solve_lexicographic` is **left untouched**. It is not a wrapper. It
+  differs from the new loop in its acceptance rule, cap formula, source of v and stage-1
+  failure behaviour, and its tests mock only `status`.
+- `solve_hierarchical(model, terms, rel_tols, abs_tol, solver) -> HierarchicalResult` is new
+  code in `_mip_objectives.py`. It works over `ObjectiveTerm`s with mixed senses and returns
+  `HierarchicalResult(status: int, stage_reached: int)`. It raises nothing itself;
+  `MultiObjectiveMIP` turns the result into errors and warnings.
+- `stage_reached` is the number of accepted stages (n on full success).
+- After a stage with no solution, the loop stops.
+- Stage 1 with no solution (`stage_reached == 0`) → `RuntimeError` naming the stage and
+  suggesting `presolve_check(problem)`.
+- A later stage with no solution → the previous stage's snapshot of variable values is
+  restored, one `UserWarning` is issued, and `metadata["stage_reached"] = k − 1`. This can
+  happen numerically, or when a time limit is hit with no incumbent; otherwise the previous
+  solution satisfies the cap.
+- A weighted-sum row with no solution → `RuntimeError` naming the row. This deliberately
+  aborts the whole sweep (documented); warn-and-skip is a follow-on.
+- Cap rows are removed after each run (also on failure) so sweep rows are independent.
 
 ### 4.2 `WeightedSum(weights)`
 - `weights`: a sequence of n floats, or a 2-D sequence (one row per run). Each finite and ≥ 0;
@@ -223,7 +288,7 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   `MIPSolver`'s strategy validation, backend factory, `MIP_TIME_LIMIT` / `MIP_GAP`
   parameters, presolve hook and `_build_base`.
 - Validation at construction: ≥ 1 objective (n = 1 is allowed and equals a single solve);
-  label uniqueness; approach type known; `rel_tol` / weights shapes match n.
+  effective-key uniqueness; approach type known; `rel_tol` / weights shapes match n.
 - Builds the base model and every objective term once per `solve` (§3); each run sets its
   objective and adds / deletes its cap rows. `config.num_solutions` is ignored (one solution
   per row, documented); `config.verbose` is honoured.
@@ -240,31 +305,68 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   s_j = max(0, R_j − A_j); met y_j = 1 iff A_j ≥ R_j exactly (the `targets_met` /
   `check_targets` rule); largest shortfall m = max over R_j > 0 of s_j/R_j (relative) or s_j
   (absolute), 0 when no R_j > 0; cost / boundary / connectivity / probability terms evaluated
-  directly. Hierarchical caps use these recomputed values as v. **Invariant:** each
-  recomputed value is the best value of that objective's model expression over its auxiliary
-  variables at the selected `x` (s, m, y, boundary y, connectivity z all take their implied
-  values), so a stage's own selection always satisfies its own cap (a test checks this).
-  **Caveat:** the exact `A ≥ R` rule for met can disagree with the solver's tolerance (CBC can
-  set y = 1 with A = 0.7999999999999999 against R = 0.8); the recomputed value then errs on the
-  conservative side (never above the model's value for a maximised objective). Oracle and
-  fixture data keep achieved amounts off target boundaries.
-- `metadata["approach"]` (`"hierarchical"` / `"weighted_sum"`), `["row"]`, `["rel_tol"]` or
-  `["weights"]`, `["stage_reached"]` (hierarchical), `["status"]` (PuLP status string of the
-  final stage), `["mip_backend"]`, `["solver"] = "MultiObjectiveMIP"`. There is no
-  `metadata["objective"]` (single-objective `MIPSolver` sets it; here `objective_values`
-  replaces it).
-- `nondominated(solutions) -> list[Solution]` (module-level): keeps solutions not dominated
-  under each objective's sense using `objective_values`; identical value vectors keep the
-  first. It applies the same domination rule as `calibration.pareto.pareto_frontier`, but is
-  new code: `pareto_frontier` works on a 2-objective `BLMResult`, not on solutions.
+  directly. A PU whose `varValue` is `None` counts as 0, as in `MIPSolver`. These values
+  are **for reporting only**; caps use the model value (§4.1).
+  - Under PROBMODE 2 the recomputed met uses scaled amounts, while `Solution.targets_met`
+    (`check_targets`) uses unscaled ones, so the two can differ there (documented).
+  - **Invariant, within solver tolerance:** each recomputed value is the best value of that
+    objective's model expression over its auxiliary variables at the selected `x`. Here s, m,
+    y, boundary y and connectivity z all take their implied values. So for the objective just
+    optimised, the recomputed value matches the model value up to the solver's feasibility
+    tolerance, and a test checks this away from target boundaries.
+  - **Tolerance caveat:** on tolerance-boundary data the two can differ (round-4 case:
+    model 1 met, recomputed 0 met). A reported met count can then sit below the cap's v, while
+    `objective_values` stays consistent with `targets_met`. This is documented, and a
+    regression test pins the cap behaviour (§7.4).
+- `metadata["approach"]` (`"hierarchical"` / `"weighted_sum"`)
+- `metadata["row"]`
+- `metadata["rel_tol"]` or `metadata["weights"]`
+- `metadata["stage_reached"]` (hierarchical only; see §4.1)
+- `metadata["status"]`: the PuLP status string of the final accepted solve.
+- `metadata["sol_status"]`: its PuLP solution status, int 1 or 2. 2 marks an incumbent that is
+  not proven optimal: CBC reports status "Optimal" with sol_status 2 when a time limit is hit
+  with an incumbent.
+- `metadata["objective_senses"]`: `{key: "min" | "max"}`.
+- `metadata["mip_backend"]`
+- `metadata["solver"] = "MultiObjectiveMIP"`
+
+There is no `metadata["objective"]`: single-objective `MIPSolver` sets it, and here
+`objective_values` replaces it.
+- `nondominated(solutions) -> list[Solution]` (module-level) keeps the solutions that are
+  not dominated, using `objective_values` and `objective_senses`.
+  - A solution is dominated if another is at least as good on every key and strictly better
+    on one, with "better" taken in each key's sense.
+  - Values are compared exactly, with no tolerance.
+  - Identical value vectors keep the first, in input order.
+  - Input order is preserved.
+  - An empty input gives `[]`.
+  - Solutions whose key sets or senses differ, or that lack these metadata keys, raise
+    `ValueError`.
+  - It applies the same domination rule as `calibration.pareto.pareto_frontier`, but is new
+    code: `pareto_frontier` works on a 2-objective `BLMResult`, not on solutions.
+- **Public names** (`pymarxan.multiobjective.__all__`): `MultiObjectiveMIP`, `Hierarchical`,
+  `WeightedSum`, `ObjectiveSpec`, `MinCost`, `MinBoundary`, `MinShortfall`,
+  `MinLargestShortfall`, `MaxFeatures`, `MaxWeightedFeatures`, `MaxWtdSum`, `weights_matrix`,
+  `rel_tol_matrix`, `nondominated`. The module is added to the subpackage table in
+  `.github/copilot-instructions.md`.
 
 ## 6. Errors
 
-All `ValueError` naming the argument unless stated: empty `objectives`; duplicate names
-without labels; `rel_tol` length ≠ n−1 or weights length ≠ n (per row); negative / non-finite
-`rel_tol`, `abs_tol` or weights; all-zero weights row; `MaxWtdSum` weights not covering
-every problem feature or naming an unknown id; matrix helpers with n < 2; unknown approach (`TypeError`); `ZonalProblem` (`TypeError`); stage-1 infeasible
-(`RuntimeError`).
+Every error is a `ValueError` naming the argument, unless another type is stated:
+- empty `objectives`;
+- duplicate effective keys (`label or name`);
+- a label that is not an identifier;
+- `rel_tol` length ≠ n−1, or weights length ≠ n (checked per row);
+- negative or non-finite `rel_tol`, `abs_tol` or weights;
+- an all-zero weights row;
+- `MaxWtdSum` weights that do not cover every problem feature, or that name an unknown id;
+- matrix helpers with n < 2 or n_values < 2, or a `rel_tol_matrix` `max` that is negative or
+  non-finite;
+- an unknown approach (`TypeError`);
+- a `ZonalProblem` (`TypeError`);
+- stage 1, or a weighted-sum row, with no solution (`RuntimeError`);
+- `nondominated` given solutions whose key sets or senses differ, or that lack those metadata
+  keys.
 
 ## 7. Testing
 
@@ -272,15 +374,37 @@ every problem feature or naming an unknown id; matrix helpers with n < 2; unknow
    there, recorded on the unmodified source; anchor 35.0; existing `min_penalties`
    lexicographic tests unchanged.
 2. **Enumeration oracles** on a 6–8 PU toy (brute force over 2ⁿ selections):
-   - hierarchical (MinCost → MinShortfall and MinShortfall → MinCost), rel_tol 0 and > 0,
-     equals the enumerated lexicographic optimum value pair;
-   - weighted-sum sweep: enumerate the (cost, shortfall) lower convex hull, derive one weight
+   - hierarchical with 2 objectives (MinCost → MinShortfall and MinShortfall → MinCost):
+     - rel_tol 0: the result equals the enumerated lexicographic optimum value pair.
+     - rel_tol r > 0: assert stage 2's value equals the enumerated `min f2 s.t.
+       f1 ≤ v + r|v| + abs_tol`, and assert the cap inequality holds. Do not assert the pair,
+       because f1 can tie within the cap.
+   - **3 objectives with distinct tolerances:** `rel_tol = [0, r]` and `[r, 0]` (r > 0) on a
+     fixture where the two give different enumerated results. This pins indexing by solve
+     order.
+   - **Mixed-sense hierarchy:** stage 1 maximised (MaxWtdSum) with r > 0, then stage 2
+     minimised (MinCost), against enumeration. This pins the `≥` cap and
+     `−(r|v| + abs_tol)`.
+   - **Locks and no-good cuts:** the hierarchical oracle is repeated with one locked-in PU, one
+     locked-out PU and one forbidden selection. Every stage must respect them.
+   - **Mixed-sense weighted sum:** MinCost + MaxWtdSum rows against enumeration. This catches
+     a sign `s` taken from the wrong objective, which the (min, min) oracle and the
+     (max, max) parity cases cannot.
+   - weighted-sum sweep: enumerate the Pareto-supported (cost, shortfall) hull, whose vertices
+     run from the lexicographic (min cost, then min shortfall) point to the lexicographic
+     (min shortfall, then min cost) point. Derive one weight
      row strictly inside each vertex's normal cone (midpoint of the adjacent edge normals; for
      the two endpoint vertices, a normal strictly between the axis and the single adjacent
      edge's normal — the pure axis rows tie across all minimum-cost / minimum-shortfall
      selections), and assert each row returns exactly that vertex's values; for any other rows (e.g. a
      `weights_matrix` grid) assert only the optimal weighted value, since edge-normal rows tie;
    - `nondominated` over the sweep equals the enumerated Pareto points that the sweep found.
+   - `nondominated` unit tests on hand-built Solutions:
+     - tied value vectors (the first is kept);
+     - a weakly dominated point (dropped);
+     - mixed min / max senses;
+     - empty input;
+     - mismatched key sets (`ValueError`).
 3. **prioritizr parity** on its 6-PU fixture (cost 1 each; ft1 = (5,.5,0,0,0,0),
    ft2 = (0,0,0,0,3,2); COSTBUDGET 2; prioritizr's two max_wtd_sum problems (ft1 only, ft2
    only) map to `MaxWtdSum(weights={1: 1, 2: 0}, label="ft1")` and
@@ -297,20 +421,28 @@ every problem feature or naming an unknown id; matrix helpers with n < 2; unknow
    a maximised objective with tolerance; all-zero weights row; recomputed `objective_values`
    differ from raw auxiliary values in a constructed case; two `MinLargestShortfall` specs with
    different labels build without name collisions; solving the same sweep row twice gives the
-   same result (row independence).
+   same result (row independence); **tolerance-boundary cap** (the round-4 case): amounts 0.7
+   and 0.1, target 0.8, unit costs, `Hierarchical(rel_tol=0)` over `[MaxFeatures(),
+   MinCost()]` returns cost 2 with the feature's model target met, not the empty plan;
+   a PU with zero cost and no amounts (`varValue` stays `None`) does not break v or the
+   recomputation; `stage_reached` is n on success and k − 1 when stage k fails (mocked
+   `sol_status`), and the stage-1 failure raises `RuntimeError`.
 5. **Budget / targets / boundary:** COSTBUDGET honoured when set, absent otherwise; a target
    unmet at the optimum (soft targets); `MinBoundary` is non-trivial when BLM = 0.
-6. **Mutation spot-checks:** flip the cap inequality, drop `|v|`, flip the weighted-sum sign —
+6. **Mutation spot-checks:** flip the cap inequality, drop `|v|`, flip the weighted-sum sign, take v from the recomputed value instead of the model, index `rel_tol` by objective instead of stage —
    each must fail a test.
 
 ## 8. Docs
 
 - `docs/TUTORIAL.md` section "Multi-objective planning (v0.41)": weighted-sum sweep of
   MinCost vs MinShortfall with scaled weights → `nondominated` → `Hierarchical` pick (cheapest
-  plan within 5% of the best shortfall). Pinned by `tests/test_tutorial_examples.py`.
+  plan within 5% of the best shortfall). The example sets a `COSTBUDGET` that forces a non-zero
+  best shortfall. Without one the best shortfall is 0, and `rel_tol` gives no slack at v = 0.
+  The text mentions `abs_tol` for that case. Pinned by `tests/test_tutorial_examples.py`.
 - CHANGELOG `[Unreleased]`: Added (MultiObjectiveMIP, specs, approaches, helpers,
   `nondominated`, `MinCost`/`MinBoundary`/`MaxWtdSum` builders); Changed (`MIPSolver` internals
-  refactored onto builders, behaviour unchanged except the next line); Fixed (absolute
+  refactored onto builders; solutions unchanged except the next line; LP variable /
+  constraint names in exported models changed, §2); Fixed (absolute
   `min_largest_shortfall` now counts ghost features, §2); deviations from prioritizr (abs tolerance and
   |v| in caps; priority = list order; objective values recomputed; all-zero weights rejected;
   reference point omitted as broken in 9.0.1). Sources: Williams & Kendall 2017
