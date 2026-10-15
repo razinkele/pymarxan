@@ -910,7 +910,7 @@ index f3b65d4..c06ed6f 100644
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_mip_build_base.py tests/pymarxan/solvers/test_stage3_golden_v040.py -q -p no:cacheprovider`
 
-Expected: `6 failed, 120 passed`: three base tests with `AttributeError: 'MIPSolver' object has no attribute '_build_base'`, `test_min_penalties_primary_is_absolute_min_shortfall_builder` with `assert not True` (v0.40 adds `short_*` rows at MISSLEVEL 0), `test_mip_solver_result_unchanged[ghost_misslevel09|min_largest_shortfall|absolute]` (`assert 0.0 == 9.0 ± ...`) and `test_ghost_absolute_min_largest_shortfall` (`assert 5.0 == 50.0`).
+Expected: `7 failed, 120 passed`: four base tests with `AttributeError: 'MIPSolver' object has no attribute '_build_base'`, `test_min_penalties_primary_is_absolute_min_shortfall_builder` with `assert not True` (v0.40 adds `short_*` rows at MISSLEVEL 0), `test_mip_solver_result_unchanged[ghost_misslevel09|min_largest_shortfall|absolute]` (`assert 0.0 == 9.0 ± ...`) and `test_ghost_absolute_min_largest_shortfall` (`assert 5.0 == 50.0`).
 
 - [ ] **Step 4: Implement the split.** Apply this change to `src/pymarxan/solvers/mip_solver.py`. `_build_base` is the old `_build` body moved verbatim, with the expressions started as `pulp.LpAffineExpression()` (not `0`), the boundary condition widened to `(blm > 0 or need_boundary)`, one `implied.append(...)` per auxiliary, and the no-good cuts moved in; every objective-specific block is deleted.
 
@@ -1428,7 +1428,7 @@ Expected: `131 passed`.
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m 'not bench' -p no:cacheprovider`
 
-Expected: all pass (3,048 = 2,903 baseline + 122 + 18 + 5; the prototype ran this suite at 3,047, before the registry-sharing test was added).
+Expected: all pass (3,048 at the prototype = 2,903 baseline + 122 + 18 + 5).
 
 - [ ] **Step 8: Lint, type-check, commit.**
 
@@ -2721,7 +2721,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Create: `tests/pymarxan/test_multiobjective_solve.py`
 
 **Interfaces:**
-- Consumes: `MIPSolver` (strategy/backend/presolve validation, `_build_base`), `_warn_if_large_mip`, `_presolve_data` / `_emit_presolve`, `evaluate_implied`, `solve_hierarchical`, `set_objective`, `ACCEPTED_SOL_STATUSES`, `build_solution`.
+- Consumes: `MIPSolver` (strategy/backend/presolve validation, `_build_base`), `_warn_if_large_mip`, `_presolve_data` / `_emit_presolve`, `evaluate_implied`, `solve_hierarchical`, `set_objective`, `ACCEPTED_SOL_STATUSES`, `build_solution`; in tests, `tests/pymarxan/scripted_solver.py` (`Scripted` and its hooks; patch `pymarxan.solvers.mip_solver._make_pulp_solver`).
 - Produces (in `src/pymarxan/solvers/mip_solver.py`, also used by `MIPSolver.solve`): `_mip_solver_for(problem, backend, verbose) -> (solver, backend_name)` and `MIPSolver._strategy_metadata(probmode, has_target2, has_sep_active) -> dict[str, str]`.
 - Produces: `MultiObjectiveMIP(objectives, approach, *, mip_backend="auto", mip_chance_strategy="drop", mip_clump_strategy="drop", mip_sep_strategy="drop", warn_above_pu=200_000, presolve_check=False)` with `.rows`, `.name()` and `.solve(problem, config=None) -> list[Solution]` (one per row). Metadata keys: `solver`, `approach`, `row`, `rel_tol` / `weights`, `stage_reached` (hierarchical), `status`, `sol_status`, `objective_values`, `objective_senses`, `mip_backend` (+ the `mip_*_strategy` keys exactly when `MIPSolver` adds them). No `metadata["objective"]`.
 - Errors (spec §6): empty objectives, duplicate keys, shape mismatch → `ValueError` at construction; unknown approach / non-spec objective / spec without a builder / `ZonalProblem` → `TypeError`; `MinBoundary` without a boundary table and `MaxWtdSum` weights not covering the features → `ValueError` at `solve`; stage 1 or a weighted-sum row with no solution → `RuntimeError` (saying "is unbounded" when the status is Unbounded); a later stage with no solution → one `UserWarning` and the previous stage's plan.
@@ -4196,7 +4196,7 @@ def test_implied_point_is_feasible_and_attains_the_reported_values() -> None:
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/test_multiobjective_oracles.py tests/pymarxan/test_multiobjective_regressions.py -q -p no:cacheprovider`
 Expected: `45 passed`.
 
-- [ ] **Step 3: Mutation spot-checks (spec §7.7).** Save this script outside the repo (e.g. as `mutate.py` in the session scratchpad) and run it from the repository root as `/opt/micromamba/envs/shiny/bin/python <scratchpad>/mutate.py "$PWD"`. It applies each mutation, runs the Stage 3 tests, and restores the file with `git checkout`:
+- [ ] **Step 3: Mutation spot-checks (spec §7.7).** Save this script as `mutate.py` in any directory outside the repo (`<dir>`; in a Claude Code session, its scratchpad directory) and run it from the repository root as `/opt/micromamba/envs/shiny/bin/python <dir>/mutate.py "$PWD"`. It applies each mutation, runs the Stage 3 tests, and restores the file with `git checkout`:
 
 ```python
 """Apply each spec §7.7 mutation to a clean, committed checkout (argv[1]), run the Stage 3
