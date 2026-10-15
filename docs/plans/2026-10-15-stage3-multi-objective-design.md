@@ -118,7 +118,10 @@ Each spec has `name` (e.g. `"min_cost"`, `"min_shortfall"`) used as the key in r
 objective values; two specs with the same name in one problem must be distinguished by an
 explicit `label=` argument (all specs accept `label: str | None = None`), otherwise
 `ValueError`. The label (or name) is also the prefix of every variable and constraint the
-spec's builder creates, so two `MinLargestShortfall` specs do not collide.
+spec's builder **owns** (e.g. `max_shortfall` / `maxs_*`), so two `MinLargestShortfall`
+specs do not collide; the per-target slack and met variables keep the context prefix and are
+shared (see below). Labels must be Python identifiers (`str.isidentifier()`), because PuLP
+rewrites characters such as space and `-` to `_` and distinct labels could collide.
 
 **Terms are built once.** `MultiObjectiveMIP.solve` builds every spec's `ObjectiveTerm` once,
 on one shared `ObjectiveContext` (so slack / met variables are shared between objectives that
@@ -149,9 +152,12 @@ review). Builders must never be called twice on one context (they add named rows
   Then stage k+1. The last stage's solution is returned.
 - v is the objective value **recomputed from the stage's selection** (§5 rule), not the
   solver's reported value; with `MIP_GAP` > 0 it is an incumbent, not a proven optimum
-  (documented). Each stage's result is checked for feasibility (status Optimal, or
-  NotSolved/time-limit with an incumbent that satisfies every cap row within 1e-7); stale
-  values from a stage without an incumbent are never used.
+  (documented). **Solution acceptance (every hierarchical stage and every weighted-sum row):**
+  before each solve every `varValue` is reset to `None`; a solve is accepted only if
+  `model.sol_status` is `LpSolutionOptimal` (1) or `LpSolutionIntegerFeasible` (2). Anything
+  else is "no solution" — CBC can leave non-None, constraint-violating values after a failed
+  solve, and values left from the previous stage would trivially satisfy its caps, so no
+  value-based heuristic is used. Tests mock `sol_status` for both paths.
 - At v = 0 the cap allows only `abs_tol` regardless of `rel_tol` (same as prioritizr); users
   who want slack there raise `abs_tol`. The caps differ from prioritizr's `v·(1±r)` only when
   v < 0, where prioritizr's cap is tighter than the optimum (infeasible) and ours is not.
@@ -165,7 +171,8 @@ review). Builders must never be called twice on one context (they add named rows
   snapshot / restore of variable values (CBC leaves stale, non-None values after an infeasible
   solve). min_penalties tests are the guard.
 - Stage 1 with no solution → `RuntimeError` naming the stage and suggesting
-  `presolve_check(problem)`. A later stage with no solution (only numerically possible — the
+  `presolve_check(problem)`. (A weighted-sum row with no solution → `RuntimeError` naming the
+  row.) A later stage with no solution (only numerically possible — the
   previous solution satisfies the cap) → restore the previous stage's values, one
   `UserWarning`, `metadata["stage_reached"] = k`.
 - Cap rows are removed after each run so sweep rows are independent.
@@ -233,7 +240,14 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   s_j = max(0, R_j − A_j); met y_j = 1 iff A_j ≥ R_j exactly (the `targets_met` /
   `check_targets` rule); largest shortfall m = max over R_j > 0 of s_j/R_j (relative) or s_j
   (absolute), 0 when no R_j > 0; cost / boundary / connectivity / probability terms evaluated
-  directly. Hierarchical caps use these recomputed values as v.
+  directly. Hierarchical caps use these recomputed values as v. **Invariant:** each
+  recomputed value is the best value of that objective's model expression over its auxiliary
+  variables at the selected `x` (s, m, y, boundary y, connectivity z all take their implied
+  values), so a stage's own selection always satisfies its own cap (a test checks this).
+  **Caveat:** the exact `A ≥ R` rule for met can disagree with the solver's tolerance (CBC can
+  set y = 1 with A = 0.7999999999999999 against R = 0.8); the recomputed value then errs on the
+  conservative side (never above the model's value for a maximised objective). Oracle and
+  fixture data keep achieved amounts off target boundaries.
 - `metadata["approach"]` (`"hierarchical"` / `"weighted_sum"`), `["row"]`, `["rel_tol"]` or
   `["weights"]`, `["stage_reached"]` (hierarchical), `["status"]` (PuLP status string of the
   final stage), `["mip_backend"]`, `["solver"] = "MultiObjectiveMIP"`. There is no
@@ -261,8 +275,10 @@ every problem feature or naming an unknown id; matrix helpers with n < 2; unknow
    - hierarchical (MinCost → MinShortfall and MinShortfall → MinCost), rel_tol 0 and > 0,
      equals the enumerated lexicographic optimum value pair;
    - weighted-sum sweep: enumerate the (cost, shortfall) lower convex hull, derive one weight
-     row strictly inside each vertex's normal cone (midpoint of the adjacent edge normals),
-     and assert each row returns exactly that vertex's values; for any other rows (e.g. a
+     row strictly inside each vertex's normal cone (midpoint of the adjacent edge normals; for
+     the two endpoint vertices, a normal strictly between the axis and the single adjacent
+     edge's normal — the pure axis rows tie across all minimum-cost / minimum-shortfall
+     selections), and assert each row returns exactly that vertex's values; for any other rows (e.g. a
      `weights_matrix` grid) assert only the optimal weighted value, since edge-normal rows tie;
    - `nondominated` over the sweep equals the enumerated Pareto points that the sweep found.
 3. **prioritizr parity** on its 6-PU fixture (cost 1 each; ft1 = (5,.5,0,0,0,0),
@@ -276,7 +292,8 @@ every problem feature or naming an unknown id; matrix helpers with n < 2; unknow
    The plan re-derives these expected values by enumeration on the fixture before pinning
    them, so a mapping mistake shows up as an oracle mismatch rather than a silent pass.
 4. **Bug-fix regressions:** v < 0 (negative MaxWtdSum weights) with rel_tol > 0 is feasible
-   (prioritizr's cap would be infeasible); v = 0 allows exactly `abs_tol` (pinned, documented);
+   (prioritizr's cap would be infeasible); v = 0 allows exactly `abs_tol`, pinned with a large
+   `abs_tol` (e.g. 0.5) on a fixture where that slack changes the stage-2 optimum;
    a maximised objective with tolerance; all-zero weights row; recomputed `objective_values`
    differ from raw auxiliary values in a constructed case; two `MinLargestShortfall` specs with
    different labels build without name collisions; solving the same sweep row twice gives the
@@ -294,7 +311,7 @@ every problem feature or naming an unknown id; matrix helpers with n < 2; unknow
 - CHANGELOG `[Unreleased]`: Added (MultiObjectiveMIP, specs, approaches, helpers,
   `nondominated`, `MinCost`/`MinBoundary`/`MaxWtdSum` builders); Changed (`MIPSolver` internals
   refactored onto builders, behaviour unchanged except the next line); Fixed (absolute
-`min_largest_shortfall` now counts ghost features, §2); deviations from prioritizr (abs tolerance and
+  `min_largest_shortfall` now counts ghost features, §2); deviations from prioritizr (abs tolerance and
   |v| in caps; priority = list order; objective values recomputed; all-zero weights rejected;
   reference point omitted as broken in 9.0.1). Sources: Williams & Kendall 2017
   (10.1016/j.ecolmodel.2016.10.010), Das & Dennis 1997 (10.1007/BF01197559), Schuster et al.
