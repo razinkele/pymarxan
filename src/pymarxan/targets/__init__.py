@@ -24,6 +24,13 @@ from pymarxan.targets._basic import (
     loglinear_targets,
     relative_targets,
 )
+from pymarxan.targets._compose import (
+    absolute_targets,
+    area_targets,
+    max_targets,
+    min_targets,
+    rule_targets,
+)
 from pymarxan.targets._interp import (
     interp_absolute_targets,
     interp_area_targets,
@@ -48,19 +55,24 @@ from pymarxan.targets._units import PerFeatureFloat, PerFeatureStr
 __all__ = [
     "PerFeatureFloat",
     "PerFeatureStr",
+    "absolute_targets",
     "apply_targets",
+    "area_targets",
     "duran_targets",
     "group_targets",
     "interp_absolute_targets",
     "interp_area_targets",
     "jung_targets",
     "loglinear_targets",
+    "max_targets",
+    "min_targets",
     "polak_targets",
     "pop_size_targets",
     "relative_targets",
     "rl_ecosystem_targets",
     "rl_species_targets",
     "rodrigues_targets",
+    "rule_targets",
     "sreekar_targets",
     "ward_targets",
     "watson_targets",
