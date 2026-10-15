@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] — 2026-10-15
+
 ### Added
 
 - **Published target-setting methods** in `pymarxan.targets` (prioritizr 9.0.1 parity, Stage 2 of the prioritizr roadmap). Each returns `{feature_id: target}` in native units; area-based methods take a required `km2_per_unit` (no silent unit assumption), cap at `cap_km2=1e6` km² (Butchart et al. 2015, https://doi.org/10.1111/conl.12158) and clip to the feature total. Mix methods across feature groups with `features=` and `apply_targets`.
@@ -1415,7 +1417,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.40.0
 [0.39.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.39.0
 [0.38.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.38.0
 [0.37.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.37.0
