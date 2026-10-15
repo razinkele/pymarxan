@@ -10,7 +10,7 @@
 
 **Spec:** `docs/plans/2026-10-15-stage3-multi-objective-design.md` (approved 2026-10-15 after 8 review rounds). Executors read it. The spec is the authority, and this plan argues from it.
 
-**Provenance:** every code block below is extracted (`git show` / `git diff`) from a prototype built task by task in a scratch worktree, one commit per task, and run there under the commands shown. Prototype commits: Task 1 `0b0812a`, 2 `69a77f1`, 3 `0262e9a`, 4 `631b7d8`, 5 `353288b`, 6 `ae24e15`, 7 `31d6769`, 8 `93d9460` (base `00d01a3`; rebuilt after two rounds of 4-lens plan review). Diffs apply with `git apply --whitespace=nowarn` (or `--3way`) on the previous task's tree; editors that strip trailing whitespace from pasted context lines break a plain `git apply`.
+**Provenance:** every code block below is extracted (`git show` / `git diff`) from a prototype built task by task in a scratch worktree, one commit per task, and run there under the commands shown. Prototype commits: Task 1 `0b0812a`, 2 `69a77f1`, 3 `5401951`, 4 `6926715`, 5 `fe8ff47`, 6 `69eb9fa`, 7 `b435c0d`, 8 `39618bf` (base `00d01a3`; rebuilt after two rounds of 4-lens plan review and one fresh-eyes loop round). Diffs apply with `git apply --whitespace=nowarn` (or `--3way`) on the previous task's tree; editors that strip trailing whitespace from pasted context lines break a plain `git apply`.
 
 ## Global Constraints
 
@@ -38,7 +38,7 @@
 These are the places a plausible implementation silently goes wrong; each is pinned by a test that fails when the guard is removed (Task 7 Step 3 runs every spec §7.7 mutation).
 1. **CBC returns a different optimal plan after the LP renames.** Renaming `feat_met_*`/`slack_*` reorders LP columns, so CBC may break ties differently; a selection-only golden would then fail spuriously, or be "fixed" by regenerating it. → the golden records `unique_optimum` by re-solving with the found plan forbidden, pins the value always and the selection only when unique: `test_mip_solver_result_unchanged` (Task 1).
 2. **The cap value v.** Model-only loses targets after an incumbent with loose auxiliaries; recompute-only loses them at a tolerance boundary (0.7 + 0.1 < 0.8). → `test_incumbent_cap_keeps_both_targets` and `test_tolerance_boundary_cap_returns_cost_2` (Task 7), `test_incumbent_cap_uses_the_recomputed_value` and `test_tolerance_boundary_cap_keeps_the_model_target` (Task 4).
-3. **The feasibility check must include earlier `hier_cap_*` rows**, or cap 2 can contradict cap 1 and a 3-stage run stops at stage 2. → `test_earlier_caps_are_checked_three_stages` (Task 4).
+3. **The feasibility check must include earlier `hier_cap_*` rows**, or cap 2 can contradict cap 1 and a 3-stage run stops at stage 2. → `test_earlier_caps_are_checked_three_stages` (Task 4, through `evaluate_implied`) and `test_earlier_caps_are_checked_end_to_end` (Task 6, through `MultiObjectiveMIP`'s own `evaluate`, whose `if feasible else None` fallback `test_near_integral_budget_falls_back_end_to_end` also pins).
 4. **Implied values must come from the model's own expressions.** The `compute_*` helpers differ for asymmetric connectivity, duplicated symmetric pairs and negative PROBABILITYWEIGHTING, which makes `v_rec` unattainable. → `test_min_cost_then_min_shortfall_reaches_stage_2[conn_sym_dupes|conn_asym|probmode1_neg]` and `test_asymmetric_connectivity_locked_endpoints_reach_stage_2` (Task 7).
 5. **Weighted-sum sign and rel_tol indexing**: `s = −1` for maximised objectives, and the k-th tolerance caps the k-th stage. → `test_mixed_sense_weighted_sum` and `test_three_objectives_rel_tol_follows_stage_order` (Task 7), `test_rel_tol_is_indexed_by_stage` (Task 4).
 
@@ -52,16 +52,17 @@ Each bullet names the task it applies to; the per-task `Ruling:` lines restate t
 - **`solve_hierarchical`'s keyword-only `tracked` is required (Task 4)**, as spec §4.1 now writes it (`*, tracked`, no default): `model.variables()` alone misses x and registry variables that the §5 tracked set needs for the reset / snapshot / restore. Values are read with `expr_value` (None → 0) and never written as 0, so a zero-cost PU in no row keeps `None`.
 - **Mocking `sol_status` (Tasks 4, 6, 7).** Tests use `tests/pymarxan/scripted_solver.py`: a `pulp.LpSolver` that runs CBC and then a per-call hook. No production test hook.
 - **Non-spec objectives raise `TypeError` (Task 6)**, as an unknown approach does; §6 does not list this case. So does a bare `ObjectiveSpec()` or a subclass whose `name` has no builder, at construction rather than as a `KeyError` inside `solve`.
-- **Unbounded stages say so (Task 6).** When the failed solve's status is Unbounded (e.g. a negative SPF on `MinShortfall`), the `RuntimeError` says "is unbounded" instead of pointing at infeasible data.
-- **PuLP's deprecated constraints mapping (Tasks 4, 6).** PuLP 3.3.2 warns on every dict-style use of `LpProblem.constraints` (in 4.0 it becomes a method returning a list) and has no public row deletion, while `pyproject` allows `PuLP>=2.7`, where `constraints` is a plain dict. Ruling: source code goes through `constraint_map(model)` (the underlying `_constraints` dict when present, else `constraints`), which removed the per-solve warnings from `evaluate_implied` and cap deletion. Tests keep a few readable `"name" in model.constraints` checks; their warnings are PuLP's own and harmless.
+- **Unbounded stages say so (Task 6).** When the failed solve's status is Unbounded (e.g. a negative SPF on `MinShortfall`, or negative boundary / connectivity values; `MaxWtdSum` is bounded over binary x), the `RuntimeError` says "is unbounded" instead of pointing at infeasible data.
+- **Spec §5 caveats are documented (Tasks 6, 8)** in the `MultiObjectiveMIP` docstring, the CHANGELOG deviations and the tutorial: tolerance-boundary met counts can sit below a cap's v, and a cap falls back to the solver's value when the implied point breaks a model row.
+- **PuLP's deprecated constraints mapping (Task 4).** PuLP 3.3.2 warns on every dict-style use of `LpProblem.constraints` (in 4.0 it becomes a method returning a list) and has no public row deletion, while `pyproject` allows `PuLP>=2.7`, where `constraints` is a plain dict. Ruling: source code goes through `constraint_map(model)` (the underlying `_constraints` dict when present, else `constraints`), which removed the per-solve warnings from `evaluate_implied` and cap deletion. Tests keep a few readable `"name" in model.constraints` checks; their warnings are PuLP's own and harmless.
 - **Shared solver construction (Task 6).** `MIPSolver.solve` and `MultiObjectiveMIP.solve` share `mip_solver._mip_solver_for` (backend, `MIP_TIME_LIMIT`, `MIP_GAP`, resolved name) and `MIPSolver._strategy_metadata`; tests that script the solver patch `pymarxan.solvers.mip_solver._make_pulp_solver`.
-- **`Hierarchical.rel_tol` has no default (Task 5)**, as in the spec's signature; likewise `solve_hierarchical`'s keyword-only `tracked` (Task 4).
-- **Not done, by decision (plan-wide):** `_BaseModel.context()` is not guarded against a second call (it is called once, inside `MIPSolver._build` and `MultiObjectiveMIP.solve`; a second context on the same base would rebuild named rows and PuLP raises on the duplicate name); specs and approaches stay unhashable (frozen dataclasses holding dicts/lists; nothing hashes them); test glue (`P`, `run`, `sel`) is not deduplicated across test files (each file reads on its own); Task 7 is not split (its oracle and regression files are reviewed together against the same mutation run).
+- **`Hierarchical.rel_tol` has no default (Task 5)**, as in the spec's signature.
+- **Not done, by decision (plan-wide):** `_BaseModel.context()` is not guarded against a second call (it is called once, inside `MIPSolver._build` and `MultiObjectiveMIP.solve`; a second context on the same base would rebuild named rows and PuLP raises on the duplicate name); specs and approaches stay unhashable (frozen dataclasses holding dicts/lists; nothing hashes them); test glue (`P`, `run`, `sel`) is not deduplicated across test files (each file reads on its own); Task 7 is not split (its oracle and regression files are reviewed together against the same mutation run); `solve_hierarchical` has no test for "restore without the preceding reset to None" (unreachable: restored variables are either written by the solver or overwritten by their implied rules before any read).
 - **`metadata["weights"]` is the row as given (Task 6)** (not normalised); `metadata["rel_tol"]` is the row of n−1 values.
 - **Specs and approaches compare by value (Task 5)** (`@dataclass(frozen=True)`, so `MaxWtdSum` weights take part in `==`). A subclass declared `eq=False` would silently inherit the base class's label-only `__eq__`.
 - **Mutation "index rel_tol by objective instead of stage" (Task 7).** Priority = list order, so objective index = stage index and the literal mutation is a no-op. Ruling: test the realistic mis-indexing `rel_tols[-k]` (counted from the other end).
 - **Tutorial (Task 8).** The section uses `rel_tol=0.1` with COSTBUDGET 6, as spec §8 now says; the pick trades 0.133 shortfall for one cost unit. Its test asserts backend-independent facts about the sweep, because two weight rows tie between plans on a hull edge.
-- **No guard for `0·boundary_expr` (Task 2).** `build_min_cost` adds `ctx.blm * ctx.boundary_expr` unconditionally: PuLP 3.3.2 drops zero coefficients (checked), so `MinCost` carries no dead `y_*` at BLM 0 with `need_boundary=True`.
+- **No guard for `0·boundary_expr` (Task 2).** `build_min_cost` adds `ctx.blm * ctx.boundary_expr` unconditionally: PuLP 3.3.2 drops zero coefficients (checked on 3.3.2 only; under PuLP 2.x a zero-coefficient `y_*` would be harmless), so `MinCost` carries no dead `y_*` at BLM 0 with `need_boundary=True`.
 
 ---
 
@@ -355,6 +356,8 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
   - Every builder: `(ctx, shortfall, *, owner: str = "", **params: Any) -> ObjectiveTerm`. `build_min_largest_shortfall` names `f"{ctx.prefix}{owner}max_shortfall"` / `maxs_{key}` and registers `m` after its slacks.
   - `build_min_cost`, `build_min_boundary`, `build_max_wtd_sum(..., weights: Mapping[int, float] | None = None, **params)`.
   - `class BuilderFn(Protocol)` (no positional-only `/`); `BUILDERS: dict[str, BuilderFn]` with 7 entries.
+
+Ruling: `build_min_cost` adds `ctx.blm * ctx.boundary_expr` with no guard for BLM 0: PuLP 3.3.2 drops zero coefficients (checked on 3.3.2 only; a zero-coefficient `y_*` under PuLP 2.x would be harmless).
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -803,6 +806,13 @@ def test_base_has_no_targets_budget_or_objective() -> None:
     assert base.model.objective is None or not base.model.objective.items()
     assert [t.key for t in base.terms] == ["f1", "f2", "f3"]
     assert set(base.amount_exprs) == {1, 2, 3}
+
+
+def test_context_shares_the_registry() -> None:
+    base = MIPSolver()._build_base(_simple(COSTBUDGET=30.0), SolverConfig())
+    ctx = base.context()
+    ctx.slack(base.terms[0])
+    assert ctx.implied is base.implied and base.implied[-1][0].name == "s_f1"
 
 
 def test_need_boundary_builds_the_unweighted_boundary_at_blm_zero() -> None:
@@ -1390,7 +1400,7 @@ index dc5782d..0644790 100644
 
 ```diff
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 6934325..77bf30b 100644
+index 6934325..3564a67 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
 @@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
@@ -1399,7 +1409,7 @@ index 6934325..77bf30b 100644
  
 +### Changed
 +
-+- `MIPSolver` internals are refactored onto the objective builders in `solvers/_mip_objectives.py`: `_build` is now a shared base model (`_build_base`: locks, cost, boundary, connectivity, probability, amounts, no-good cuts) plus one builder per objective. Solutions are unchanged (pinned by `tests/data/golden/stage3_v040.json`), except the ghost-feature fix below. LP variable and constraint names in exported models (`build_model`, `write_problem`) change for `max_features` / `max_weighted_features` / absolute `min_largest_shortfall`: `feat_met_{id}` → `y_f{id}`, `slack_{id}` → `s_f{id}`, the relaxed `target_{id}` → `met_f{id}`, `slack_{id}` rows → `short_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`; the objective is no longer named `"objective"`. `min_set`'s hard `target_{id}` rows keep their names. Absolute `min_largest_shortfall` and `min_penalties` no longer add slack rows for a feature with target × MISSLEVEL ≤ 0, and `max_*` ghost features get a `met_f{id}` row instead of a fixed `upBound`.
++- `MIPSolver` internals are refactored onto the objective builders in `solvers/_mip_objectives.py`: `_build` is now a shared base model (`_build_base`: locks, cost, boundary, connectivity, probability, amounts, no-good cuts) plus one builder per objective. Solutions are unchanged (pinned by `tests/data/golden/stage3_v040.json`), except the ghost-feature fix below. LP variable and constraint names in exported models (`build_model`, `write_problem`) change for `max_features` / `max_weighted_features` / absolute `min_largest_shortfall`: `feat_met_{id}` → `y_f{id}`, `slack_{id}` → `s_f{id}`, the relaxed `target_{id}` → `met_f{id}`, `slack_{id}` rows → `short_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`; the objective is no longer named `"objective"`. `min_set`'s hard `target_{id}` rows keep their names. The missing-`COSTBUDGET` error for `max_features`, `max_weighted_features` and absolute `min_largest_shortfall` now uses the shared `objective=... requires a COSTBUDGET parameter` text. Absolute `min_largest_shortfall` and `min_penalties` no longer add slack rows for a feature with target × MISSLEVEL ≤ 0, and `max_*` ghost features get a `met_f{id}` row instead of a fixed `upBound`.
 +
 +### Fixed
 +
@@ -1414,18 +1424,18 @@ index 6934325..77bf30b 100644
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_mip_build_base.py tests/pymarxan/solvers/test_stage3_golden_v040.py tests/pymarxan/solvers/test_stage1_golden_v038.py -q -p no:cacheprovider`
 
-Expected: `130 passed`.
+Expected: `131 passed`.
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m 'not bench' -p no:cacheprovider`
 
-Expected: all pass (3,047 at the prototype: 2,903 baseline + 122 + 18 + 4).
+Expected: all pass (3,048 = 2,903 baseline + 122 + 18 + 5; the prototype ran this suite at 3,047, before the registry-sharing test was added).
 
 - [ ] **Step 8: Lint, type-check, commit.**
 
 ```bash
 ~/.local/bin/ruff check src tests
 /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports
-git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/ tests/data/golden/stage1_v038.json CHANGELOG.md
+git add src/pymarxan/solvers/mip_solver.py tests/pymarxan/solvers/test_mip_build_base.py tests/pymarxan/solvers/test_stage3_golden_v040.py tests/pymarxan/solvers/test_stage1_golden_v038.py tests/data/golden/stage1_v038.json CHANGELOG.md
 git commit -m "refactor(mip): split MIPSolver._build into _build_base plus objective builders
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -1451,7 +1461,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
   - `constraint_map(model) -> dict[str, LpConstraint]` (rows without PuLP 3.3's deprecated mapping access).
   - `tests/pymarxan/scripted_solver.py`: `Scripted(hooks)` (CBC, then `hooks[call](lp)`, recording each solved model's `(sense, rhs)` per row) and three hooks: `fail` (no solution, and junk values: every x at 1, the rest None, so a missing restore is caught), `optimal_without_solution` (status Optimal, sol_status 0: rejected) and `not_solved_with_incumbent` (status NotSolved, sol_status 2: accepted).
 
-Ruling: keyword-only `tracked` (x and the registry) is required, with no default, as in spec §4.1; `model.variables()` alone misses those variables. Ruling: rows are read and deleted through `constraint_map`, not PuLP 3.3's deprecated `constraints` mapping. Ruling: the module-level test helper is `build_case` (pytest < 8 nose-compat would call a module-level `setup`).
+Ruling: tests mock `sol_status` through `tests/pymarxan/scripted_solver.py` (a `pulp.LpSolver` that runs CBC, then a per-call hook), with no production test hook. Ruling: keyword-only `tracked` (x and the registry) is required, with no default, as in spec §4.1; `model.variables()` alone misses those variables. Ruling: rows are read and deleted through `constraint_map`, not PuLP 3.3's deprecated `constraints` mapping. Ruling: the module-level test helper is `build_case` (pytest < 8 nose-compat would call a module-level `setup`).
 
 - [ ] **Step 1: Write the test helper and the failing tests.** The test cases port spec-review rounds 4–7 (tolerance boundary, incumbent, near-integral budget, connectivity with locked endpoints, stale slacks, cap contradiction) and the status snapshot.
 
@@ -2068,6 +2078,8 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
   - `nondominated(solutions) -> list[Solution]`.
   - `__all__` (Task 6 adds `MultiObjectiveMIP`).
 
+Ruling: `Hierarchical.rel_tol` is required (no default), as in the spec's signature. Ruling: specs and approaches compare by value (`@dataclass(frozen=True)` on every class: a subclass declared `eq=False` would silently inherit the base class's label-only `__eq__`). Ruling: the matrix helpers accept numpy integers and reject `bool`.
+
 - [ ] **Step 1: Write the failing tests:**
 
 ```python
@@ -2201,6 +2213,7 @@ def test_weights_matrix_2_5_is_prioritizrs_15_rows() -> None:
 
 def test_weights_matrix_counts_and_options() -> None:
     assert len(weights_matrix(3, 3)) == 22
+    assert weights_matrix(np.int64(2), np.int64(5)) == weights_matrix(2, 5)  # numpy ints
     assert len(weights_matrix(3, 5)) == 112
     no_ext = weights_matrix(2, 5, include_extremes=False)
     assert no_ext[0] == [1, 1] and [1, 0] not in no_ext and len(no_ext) == 13
@@ -2564,11 +2577,12 @@ class WeightedSum:
 # --- prioritizr parameter matrices ------------------------------------------------------
 
 
-def _check_matrix_args(n_objectives: int, n_values: int) -> None:
-    if not isinstance(n_objectives, int) or n_objectives < 2:
-        raise ValueError(f"n_objectives must be an integer >= 2, got {n_objectives!r}")
-    if not isinstance(n_values, int) or n_values < 2:
-        raise ValueError(f"n_values must be an integer >= 2, got {n_values!r}")
+def _check_matrix_args(n_objectives: int, n_values: int) -> tuple[int, int]:
+    """Both sizes as ``int`` (numpy integers accepted, ``bool`` rejected)."""
+    for name, v in (("n_objectives", n_objectives), ("n_values", n_values)):
+        if not isinstance(v, numbers.Integral) or isinstance(v, bool) or v < 2:
+            raise ValueError(f"{name} must be an integer >= 2, got {v!r}")
+    return int(n_objectives), int(n_values)
 
 
 def _grid(values: list[float], n_cols: int) -> list[list[float]]:
@@ -2591,13 +2605,14 @@ def weights_matrix(
 ) -> list[list[float]]:
     """prioritizr ``approach_weights_matrix`` (9.0.1), row for row.
 
-    A grid of ``n_values`` points in [0, 1] (``n_values + 1`` without 0 when
-    ``include_zeros=False``); rows whose values are all equal, or with fewer than two
-    entries > 1e-6, are dropped; the identity rows are prepended if ``include_extremes``
-    and a row of ones always comes first. Despite prioritizr's documentation, proportional
-    duplicates such as (0.5, 0.25) and (1, 0.5) are kept.
+    A grid of ``n_values`` points in [0, 1] (with ``include_zeros=False``, the
+    ``n_values`` non-zero points of an ``n_values + 1`` grid); rows whose values are all
+    equal, or with fewer than two entries > 1e-6, are dropped; the identity rows are
+    prepended if ``include_extremes`` and a row of ones always comes first. Despite
+    prioritizr's documentation, proportional duplicates such as (0.5, 0.25) and (1, 0.5)
+    are kept.
     """
-    _check_matrix_args(n_objectives, n_values)
+    n_objectives, n_values = _check_matrix_args(n_objectives, n_values)
     rows = [
         row for row in _grid(_points(1.0, n_values, include_zeros), n_objectives)
         if len(set(row)) > 1 and sum(v > 1e-6 for v in row) >= 2
@@ -2620,11 +2635,12 @@ def rel_tol_matrix(
 ) -> list[list[float]]:
     """prioritizr ``approach_rel_tol_matrix`` (9.0.1), row for row.
 
-    A grid over n−1 columns of ``n_values`` points in [0, max] (``n_values + 1`` without 0
-    when ``include_zeros=False``). With ``order``, only rows that are non-increasing across
-    columns are kept, so an earlier stage gets at least the tolerance of a later one.
+    A grid over n−1 columns of ``n_values`` points in [0, max] (with
+    ``include_zeros=False``, the ``n_values`` non-zero points of an ``n_values + 1`` grid).
+    With ``order``, only rows that are non-increasing across columns are kept, so an
+    earlier stage gets at least the tolerance of a later one.
     """
-    _check_matrix_args(n_objectives, n_values)
+    n_objectives, n_values = _check_matrix_args(n_objectives, n_values)
     if not _finite(max) or max < 0:
         raise ValueError(f"max must be finite and >= 0, got {max!r}")
     rows = _grid(_points(float(max), n_values, include_zeros), n_objectives - 1)
@@ -2705,12 +2721,13 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Create: `tests/pymarxan/test_multiobjective_solve.py`
 
 **Interfaces:**
-- Consumes: `MIPSolver` (strategy/backend/presolve validation, `_build_base`, `_strategy_metadata`), `_warn_if_large_mip`, `_mip_solver_for`, `_presolve_data` / `_emit_presolve`, `evaluate_implied`, `solve_hierarchical`, `ACCEPTED_SOL_STATUSES`, `build_solution`.
+- Consumes: `MIPSolver` (strategy/backend/presolve validation, `_build_base`), `_warn_if_large_mip`, `_presolve_data` / `_emit_presolve`, `evaluate_implied`, `solve_hierarchical`, `set_objective`, `ACCEPTED_SOL_STATUSES`, `build_solution`.
+- Produces (in `src/pymarxan/solvers/mip_solver.py`, also used by `MIPSolver.solve`): `_mip_solver_for(problem, backend, verbose) -> (solver, backend_name)` and `MIPSolver._strategy_metadata(probmode, has_target2, has_sep_active) -> dict[str, str]`.
 - Produces: `MultiObjectiveMIP(objectives, approach, *, mip_backend="auto", mip_chance_strategy="drop", mip_clump_strategy="drop", mip_sep_strategy="drop", warn_above_pu=200_000, presolve_check=False)` with `.rows`, `.name()` and `.solve(problem, config=None) -> list[Solution]` (one per row). Metadata keys: `solver`, `approach`, `row`, `rel_tol` / `weights`, `stage_reached` (hierarchical), `status`, `sol_status`, `objective_values`, `objective_senses`, `mip_backend` (+ the `mip_*_strategy` keys exactly when `MIPSolver` adds them). No `metadata["objective"]`.
 - Errors (spec §6): empty objectives, duplicate keys, shape mismatch → `ValueError` at construction; unknown approach / non-spec objective / spec without a builder / `ZonalProblem` → `TypeError`; `MinBoundary` without a boundary table and `MaxWtdSum` weights not covering the features → `ValueError` at `solve`; stage 1 or a weighted-sum row with no solution → `RuntimeError` (saying "is unbounded" when the status is Unbounded); a later stage with no solution → one `UserWarning` and the previous stage's plan.
 - `presolve_check` runs once per `solve`, with the first row's objective set. `config.num_solutions` is ignored.
 
-Ruling: an objective that is not an `ObjectiveSpec`, or has no builder, raises `TypeError` (not listed in §6). Ruling: `metadata["weights"]` is the row as given, not normalised. Ruling: solver construction and the strategy metadata are factored into `mip_solver.py` and shared with `MIPSolver.solve`.
+Ruling: an objective that is not an `ObjectiveSpec`, or has no builder, raises `TypeError` (not listed in §6). Ruling: an Unbounded stage or row raises `RuntimeError` saying "is unbounded". Ruling: the two spec §5 caveats (tolerance-boundary met counts; a cap falling back to the solver's value when the implied point breaks a row) are documented in the `MultiObjectiveMIP` docstring. Ruling: `metadata["weights"]` is the row as given, not normalised. Ruling: solver construction and the strategy metadata are factored into `mip_solver.py` and shared with `MIPSolver.solve`.
 
 - [ ] **Step 1: Write the failing tests:**
 
@@ -2733,6 +2750,7 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.multiobjective import (
     Hierarchical,
     MaxFeatures,
+    MaxWeightedFeatures,
     MaxWtdSum,
     MinBoundary,
     MinCost,
@@ -3054,6 +3072,62 @@ def test_single_objective_equals_mip_solver() -> None:
         assert sol.metadata["objective_values"]["min_shortfall"] == pytest.approx(
             ref.metadata["mip_objective_value"], abs=1e-9,
         )
+
+
+def P(pu: dict[str, list[Any]], feat: dict[str, list[Any]], pvf: dict[str, list[Any]],
+      **kw: Any) -> ConservationProblem:
+    params = kw.pop("params", {})
+    return ConservationProblem(
+        planning_units=pd.DataFrame(pu), features=pd.DataFrame(feat),
+        pu_vs_features=pd.DataFrame(pvf), parameters=params, **kw,
+    )
+
+
+def test_near_integral_budget_falls_back_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Round 6 through MultiObjectiveMIP: v_rec's implied point breaks COSTBUDGET, so the
+    cap must use v_model and stage 2 solves."""
+    c1, eps = 1e7, 5e-8
+    p = P({"id": [1, 2], "cost": [c1, 1.0], "status": [0, 0]},
+          {"id": [1], "name": ["a"], "target": [10.0]},
+          {"species": [1], "pu": [1], "amount": [10.0]},
+          params={"COSTBUDGET": c1 * (1 - eps)})
+
+    def near(lp: pulp.LpProblem) -> None:
+        lp.sol_status = pulp.LpSolutionIntegerFeasible
+        values = {"x_1": 1 - eps, "x_2": 0.0, "y_f1": 0.0}
+        for v in lp.variables():
+            if v.name in values:
+                v.varValue = values[v.name]
+
+    _scripted(monkeypatch, Scripted({1: near}))
+    sol = run([MaxFeatures(), MinCost()], Hierarchical(0.0), p)[0]
+    assert sol.metadata["stage_reached"] == 2
+
+
+def test_earlier_caps_are_checked_end_to_end() -> None:
+    """Round 7 through MultiObjectiveMIP: negative SPF on tolerance-boundary amounts."""
+    p = P({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]},
+          {"id": [1], "name": ["a"], "target": [0.8], "spf": [-1.0]},
+          {"species": [1, 1], "pu": [1, 2], "amount": [0.7, 0.1]})
+    sol = run([MaxFeatures(), MaxWeightedFeatures(), MinCost()], Hierarchical(0.0), p)[0]
+    assert sol.metadata["stage_reached"] == 3
+
+
+def test_hierarchical_passes_x_and_the_registry_as_tracked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[set[str]] = []
+    real = mo.solve_hierarchical
+
+    def spy(*args: Any, tracked: Any, **kwargs: Any) -> Any:
+        tracked = list(tracked)
+        seen.append({v.name for v in tracked})
+        return real(*args, tracked=tracked, **kwargs)
+
+    monkeypatch.setattr(mo, "solve_hierarchical", spy)
+    p = simple(COSTBUDGET=30.0).copy_with(boundary=None)  # x_1 … x_6, no y_* auxiliaries
+    run([MinShortfall(), MinCost()], Hierarchical(0.0), p)
+    assert seen == [{f"x_{i}" for i in range(1, 7)} | {"s_f1", "s_f2", "s_f3"}]
 ```
 
 - [ ] **Step 2: Run to verify they fail.**
@@ -3066,7 +3140,7 @@ Expected: collection error, `ImportError: cannot import name 'MultiObjectiveMIP'
 
 ```diff
 diff --git a/src/pymarxan/multiobjective.py b/src/pymarxan/multiobjective.py
-index 5190bec..4166d00 100644
+index e57ff66..7dfbea6 100644
 --- a/src/pymarxan/multiobjective.py
 +++ b/src/pymarxan/multiobjective.py
 @@ -21,18 +21,30 @@ from __future__ import annotations
@@ -3109,7 +3183,7 @@ index 5190bec..4166d00 100644
      "ObjectiveSpec",
      "WeightedSum",
      "nondominated",
-@@ -380,3 +393,199 @@ def nondominated(solutions: Sequence[Solution]) -> list[Solution]:
+@@ -383,3 +396,206 @@ def nondominated(solutions: Sequence[Solution]) -> list[Solution]:
              continue
          kept.append(solutions[i])
      return kept
@@ -3123,7 +3197,7 @@ index 5190bec..4166d00 100644
 +    if status == pulp.LpStatusUnbounded:
 +        return (
 +            "is unbounded: an objective can improve without limit (e.g. a negative SPF "
-+            "on a shortfall objective, or a MaxWtdSum weight with no budget to bound it)"
++            "on a shortfall objective, or negative boundary / connectivity values)"
 +        )
 +    return (
 +        f"found no solution (status {pulp.LpStatus.get(status, status)}); run "
@@ -3135,7 +3209,7 @@ index 5190bec..4166d00 100644
 +    """Exact multi-objective MIP over one single-zone ``ConservationProblem`` (spec §5).
 +
 +    ``objectives`` are specs; their effective keys (``label or name``) must be unique.
-+    ``approach`` is :class:`Hierarchical` or :class:`WeightedSum`. The base model is
++    ``approach`` is ``Hierarchical`` or ``WeightedSum``. The base model is
 +    ``MIPSolver``'s (locks, boundary, connectivity, probability, no-good cuts); targets are
 +    soft and ``COSTBUDGET``, when set, binds every stage and run. Each objective's term is
 +    built once per ``solve``.
@@ -3149,6 +3223,13 @@ index 5190bec..4166d00 100644
 +    to rows × n × T; with ``MIP_GAP`` > 0 or a time limit a stage's v is an incumbent's
 +    value. Stage 1 (or a weighted-sum row) with no solution raises ``RuntimeError``; a later
 +    stage with no solution returns the previous stage's plan with a ``UserWarning``.
++
++    Met counts in ``objective_values`` follow the exact ``check_targets`` rule (A >= R), so
++    on data at a target's tolerance boundary (e.g. amounts 0.7 + 0.1 against 0.8) the
++    reported count can be below the value a hierarchical cap kept, which the solver reached
++    within its tolerance. When the implied point of a stage's plan violates a model row
++    (including an earlier stage's cap), that stage's cap falls back to the solver's own
++    value, and later stages can as well.
 +    """
 +
 +    def __init__(
@@ -3415,7 +3496,7 @@ index e464cda..f31b14a 100644
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/test_multiobjective_solve.py tests/pymarxan/test_multiobjective_core.py -q -p no:cacheprovider`
 
-Expected: `59 passed`.
+Expected: `62 passed`.
 
 - [ ] **Step 5: Lint, type-check, commit.**
 
@@ -3443,7 +3524,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 
 Every expected value in the oracle file is derived by brute force over the 2^7 selections of a 7-PU toy (or the 2^6 of prioritizr's fixture), inside the test. The weighted-sum hull test derives one weight row strictly inside each hull vertex's normal cone (endpoint vertices: between the axis and the single edge normal); grid rows assert only the optimal weighted value.
 
-Ruling: the §7.7 mutation "index `rel_tol` by objective instead of stage" is a no-op when priority = list order, so the spot-check uses `rel_tols[-k]`. Beyond §7.7 the script also runs R6 (no snapshot restore after a failed later stage), S1/S2 (accept on `status` instead of `sol_status`, hierarchical and weighted-sum paths), R8 (round x by `int()` truncation), N5 (`nondominated` with a 1e-6 tolerance) and N6 (raise on a stage-1 failure only in sweep row 0); the script asserts that every mutation fails a test. Ruling: the r > 0 oracle runs in both orders; cost-first locks PU1 in so v = 4 ≠ 0, and the locks / no-good test uses COSTBUDGET 8, which binds (best shortfall 0.9), so r = 0.5 changes the plan.
+Ruling: the §7.7 mutation "index `rel_tol` by objective instead of stage" is a no-op when priority = list order, so the spot-check uses `rel_tols[-k]`. Beyond §7.7 the script also runs R6 (no snapshot restore after a failed later stage), S1/S2 (accept on `status` instead of `sol_status`, hierarchical and weighted-sum paths), R8 (round x by `int()` truncation), P9 (`MultiObjectiveMIP`'s `evaluate` ignores `feasible`), N5 (`nondominated` with a 1e-6 tolerance) and N6 (raise on a stage-1 failure only in sweep row 0); the script asserts that every mutation fails a test. Ruling: the r > 0 oracle runs in both orders; cost-first locks PU1 in so v = 4 ≠ 0, and the locks / no-good test uses COSTBUDGET 8, which binds (best shortfall 0.9), so r = 0.5 changes the plan.
 
 - [ ] **Step 1: Write the oracle and parity tests:**
 
@@ -4115,7 +4196,7 @@ def test_implied_point_is_feasible_and_attains_the_reported_values() -> None:
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/test_multiobjective_oracles.py tests/pymarxan/test_multiobjective_regressions.py -q -p no:cacheprovider`
 Expected: `45 passed`.
 
-- [ ] **Step 3: Mutation spot-checks (spec §7.7).** Save this script outside the repo (e.g. `/tmp/mutate.py`) and run it from the repository root as `/opt/micromamba/envs/shiny/bin/python /tmp/mutate.py "$PWD"`. It applies each mutation, runs the Stage 3 tests, and restores the file with `git checkout`:
+- [ ] **Step 3: Mutation spot-checks (spec §7.7).** Save this script outside the repo (e.g. as `mutate.py` in the session scratchpad) and run it from the repository root as `/opt/micromamba/envs/shiny/bin/python <scratchpad>/mutate.py "$PWD"`. It applies each mutation, runs the Stage 3 tests, and restores the file with `git checkout`:
 
 ```python
 """Apply each spec §7.7 mutation to a clean, committed checkout (argv[1]), run the Stage 3
@@ -4179,6 +4260,8 @@ MUTATIONS = [
     ("N6 stage-1 failure raises only in the first sweep row", MO,
      "                if res.stage_reached == 0:",
      "                if res.stage_reached == 0 and r == 0:"),
+    ("P9 MultiObjectiveMIP evaluate ignores feasible", MO,
+     "return values[0] if feasible else None", "return values[0]"),
     ("M7 skip hier_cap_* in the feasibility check", OBJ,
      "feasible = all(c.valid(1e-6) for c in constraint_map(model).values())",
      "feasible = all(\n            c.valid(1e-6) for n, c in constraint_map(model).items()\n            if not n.startswith(\"hier_cap_\")\n        )"),
@@ -4211,7 +4294,7 @@ for label, path, old, new in MUTATIONS:
 Expected (prototype output): every mutation fails at least one test; the script exits 0.
 
 ```text
-## M1a flip min cap (<= to >=): 20 failed, 104 passed, 149 warnings in 2.32s
+## M1a flip min cap (<= to >=): 20 failed, 107 passed, 150 warnings in 2.49s
     test_min_cap_is_v_plus_r_abs_v_plus_abs_tol[0.0]
     test_min_cap_is_v_plus_r_abs_v_plus_abs_tol[0.5]
     test_zero_cost_pu_in_no_row_does_not_break_v
@@ -4232,7 +4315,7 @@ Expected (prototype output): every mutation fails at least one test; the script 
     test_v_zero_allows_exactly_abs_tol[0.5-expected1]
     test_zero_cost_pu_without_amounts
     test_asymmetric_connectivity_locked_endpoints_reach_stage_2
-## M1b flip max cap (>= to <=): 10 failed, 114 passed, 149 warnings in 2.12s
+## M1b flip max cap (>= to <=): 10 failed, 117 passed, 150 warnings in 2.38s
     test_max_cap_is_v_minus_r_abs_v_minus_abs_tol
     test_tolerance_boundary_cap_keeps_the_model_target
     test_incumbent_cap_uses_the_recomputed_value
@@ -4243,10 +4326,10 @@ Expected (prototype output): every mutation fails at least one test; the script 
     test_negative_v_with_rel_tol_is_feasible
     test_tolerance_boundary_cap_returns_cost_2
     test_incumbent_cap_keeps_both_targets
-## M2 drop |v|: 2 failed, 122 passed, 149 warnings in 2.10s
+## M2 drop |v|: 2 failed, 125 passed, 150 warnings in 2.17s
     test_min_cap_is_v_plus_r_abs_v_plus_abs_tol[0.5]
     test_negative_v_with_rel_tol_is_feasible
-## M3a flip weighted-sum sign: 21 failed, 103 passed, 138 warnings in 2.39s
+## M3a flip weighted-sum sign: 21 failed, 106 passed, 139 warnings in 2.40s
     test_weighted_sum_metadata_and_solution_fields
     test_two_min_largest_shortfall_labels_build
     test_presolve_runs_once_on_the_first_rows_objective
@@ -4268,42 +4351,46 @@ Expected (prototype output): every mutation fails at least one test; the script 
     test_objective_values_equal_the_model_at_an_optimal_row[probmode1_pos]
     test_objective_values_equal_the_model_at_an_optimal_row[probmode1_neg]
     test_implied_point_is_feasible_and_attains_the_reported_values
-## M3b drop weighted-sum sign (s = +1): 5 failed, 119 passed, 148 warnings in 2.13s
+## M3b drop weighted-sum sign (s = +1): 5 failed, 122 passed, 149 warnings in 2.24s
     test_presolve_runs_once_on_the_first_rows_objective
     test_mixed_sense_weighted_sum[row0]
     test_mixed_sense_weighted_sum[row1]
     test_mixed_sense_weighted_sum[row2]
     test_prioritizr_parity_weighted_sum
-## M4 v_rec from compute_* utilities: 4 failed, 120 passed, 152 warnings in 2.18s
+## M4 v_rec from compute_* utilities: 4 failed, 123 passed, 153 warnings in 2.22s
     test_min_cost_then_min_shortfall_reaches_stage_2[conn_sym_dupes]
     test_min_cost_then_min_shortfall_reaches_stage_2[conn_asym]
     test_min_cost_then_min_shortfall_reaches_stage_2[probmode1_neg]
     test_asymmetric_connectivity_locked_endpoints_reach_stage_2
-## M5a v = model value only: 2 failed, 122 passed, 148 warnings in 2.08s
+## M5a v = model value only: 2 failed, 125 passed, 149 warnings in 2.18s
     test_incumbent_cap_uses_the_recomputed_value
     test_incumbent_cap_keeps_both_targets
-## M5b v = recomputed value only: 2 failed, 122 passed, 148 warnings in 2.17s
+## M5b v = recomputed value only: 2 failed, 125 passed, 149 warnings in 2.14s
     test_tolerance_boundary_cap_keeps_the_model_target
     test_tolerance_boundary_cap_returns_cost_2
-## M6 rel_tol indexed by objective from the other end: 2 failed, 122 passed, 148 warnings in 2.14s
+## M6 rel_tol indexed by objective from the other end: 2 failed, 125 passed, 149 warnings in 2.14s
     test_rel_tol_is_indexed_by_stage
     test_three_objectives_rel_tol_follows_stage_order
-## R6 no restore after a failed later stage: 2 failed, 122 passed, 148 warnings in 2.14s
+## R6 no restore after a failed later stage: 2 failed, 125 passed, 149 warnings in 2.19s
     test_stage_2_failure_restores_stage_1_and_its_status
     test_later_stage_failure_warns_and_returns_the_previous_stage
-## S1 hierarchical acceptance by status, not sol_status: 2 failed, 122 passed, 147 warnings in 2.13s
+## S1 hierarchical acceptance by status, not sol_status: 2 failed, 125 passed, 148 warnings in 2.17s
     test_acceptance_follows_sol_status_not_status
     test_acceptance_follows_sol_status[approach0]
-## S2 weighted-sum acceptance by status, not sol_status: 1 failed, 123 passed, 147 warnings in 2.15s
+## S2 weighted-sum acceptance by status, not sol_status: 1 failed, 126 passed, 148 warnings in 2.20s
     test_acceptance_follows_sol_status[approach1]
-## R8 rounded via int() truncation: 1 failed, 123 passed, 148 warnings in 2.19s
+## R8 rounded via int() truncation: 1 failed, 126 passed, 149 warnings in 2.20s
     test_near_integral_x_is_rounded
-## N5 nondominated identical-vector check with a 1e-6 tolerance: 1 failed, 123 passed, 148 warnings in 2.18s
+## N5 nondominated identical-vector check with a 1e-6 tolerance: 1 failed, 126 passed, 149 warnings in 2.20s
     test_nondominated_compares_exactly
-## N6 stage-1 failure raises only in the first sweep row: 1 failed, 123 passed, 149 warnings in 2.12s
+## N6 stage-1 failure raises only in the first sweep row: 1 failed, 126 passed, 150 warnings in 2.19s
     test_stage_1_failure_in_a_later_row_names_the_row
-## M7 skip hier_cap_* in the feasibility check: 1 failed, 123 passed, 148 warnings in 2.11s
+## P9 MultiObjectiveMIP evaluate ignores feasible: 2 failed, 125 passed, 151 warnings in 2.19s
+    test_near_integral_budget_falls_back_end_to_end
+    test_earlier_caps_are_checked_end_to_end
+## M7 skip hier_cap_* in the feasibility check: 2 failed, 125 passed, 150 warnings in 2.23s
     test_earlier_caps_are_checked_three_stages
+    test_earlier_caps_are_checked_end_to_end
 ```
 Afterwards `git status --short` must show only this task's two new test files.
 
@@ -4329,11 +4416,11 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Modify: `CHANGELOG.md` (`[Unreleased]` Added, with the deviations from prioritizr)
 - Modify: `README.md` (architecture tree, feature list)
 - Modify: `.github/copilot-instructions.md` (subpackage table)
-- Modify: `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` (Stage 3 "As built" note and the reference-point descope; the heading is marked SHIPPED at release)
+- Modify: `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` (Stage 3 heading marked `(SHIPPED, v0.41)` as Stage 2 did in its docs commit, the "As built" note and the reference-point descope)
 
 **Interfaces:** docs only; the tutorial block is pinned by its test.
 
-Ruling: the tutorial test asserts backend-independent facts about the sweep (every point on the enumerated supported frontier, the three rows with unique optima present, shortfall decreasing with cost): enumeration over all 4,096 plans shows two weight rows tying between plans on a hull edge, and the tutorial does not force `mip_backend="cbc"`. The hierarchical pick (cost 5, shortfall 1.5667) is unique. The tutorial uses `rel_tol=0.1` with COSTBUDGET 6, as spec §8 says. The section still mentions `abs_tol` for v = 0. The DOIs were verified with scite during the spec's research (`stage3-prioritizr-multiobj.md` §7): Williams & Kendall 2017, Das & Dennis 1997, Schuster et al. 2023, Hanson et al. 2024.
+Ruling: the tutorial and the CHANGELOG deviations also state the two spec §5 caveats, and the roadmap heading is marked `(SHIPPED, v0.41)` in this task, as Stage 2 did. Ruling: the tutorial test asserts backend-independent facts about the sweep (every point on the enumerated supported frontier, the three rows with unique optima present, shortfall decreasing with cost): enumeration over all 4,096 plans shows two weight rows tying between plans on a hull edge, and the tutorial does not force `mip_backend="cbc"`. The hierarchical pick (cost 5, shortfall 1.5667) is unique. The tutorial uses `rel_tol=0.1` with COSTBUDGET 6, as spec §8 says. The section still mentions `abs_tol` for v = 0. The DOIs were verified with scite during the spec's research (`stage3-prioritizr-multiobj.md` §7): Williams & Kendall 2017, Das & Dennis 1997, Schuster et al. 2023, Hanson et al. 2024.
 
 - [ ] **Step 1: Write the tutorial test** (fails until the doc block exists only in the sense that the two must match; write both in this task):
 
@@ -4414,7 +4501,7 @@ index 43b613d..bfc9adf 100644
 
 ```diff
 diff --git a/docs/TUTORIAL.md b/docs/TUTORIAL.md
-index c6a82a2..540a5af 100644
+index c6a82a2..38e13cd 100644
 --- a/docs/TUTORIAL.md
 +++ b/docs/TUTORIAL.md
 @@ -22,6 +22,7 @@ covered by `docs/USER_MANUAL.md`; this file is for the Python API.
@@ -4425,7 +4512,7 @@ index c6a82a2..540a5af 100644
  
  ---
  
-@@ -353,6 +354,58 @@ feature id. See each function's docstring for its source.
+@@ -353,6 +354,64 @@ feature id. See each function's docstring for its source.
  `loglinear_targets` is deprecated: use
  `interp_absolute_targets(..., interp="log10")`.
  
@@ -4471,13 +4558,19 @@ index c6a82a2..540a5af 100644
 +The sweep finds the cost-vs-shortfall trade-offs, from the empty plan
 +(cost 0, shortfall 3.0) to the best shortfall the budget allows (1.433 at
 +cost 6); with CBC, five of them. Weight rows that tie between plans can
-+return either plan, so the set can differ between backends. The hierarchical pick gives up 0.133 of shortfall to save one cost
-+unit: stage 1 finds the best shortfall v, stage 2 minimises cost subject to
++return either plan, so the set can differ between backends.
++
++The hierarchical pick gives up 0.133 of shortfall to save one cost unit:
++stage 1 finds the best shortfall v, stage 2 minimises cost subject to
 +`shortfall <= v + 0.1·|v| + abs_tol`. When the best value is 0 (for example
 +with no budget), `rel_tol` gives no slack; raise `abs_tol` (default 1e-9)
 +instead. `objective_values` are each objective's own value at the plan;
 +`Solution.cost` and `Solution.objective` are filled as `MIPSolver` fills
-+them. A weighted sum only finds plans on the convex hull of the frontier
++them. Met counts use the exact rule (amount >= target), so on data at a
++target's tolerance boundary (0.7 + 0.1 against 0.8) the reported count can
++sit below what a hierarchical cap kept, which the solver reached within its
++tolerance; and when a plan's implied point breaks a model row (such as an
++earlier cap), that stage's cap falls back to the solver's own value. A weighted sum only finds plans on the convex hull of the frontier
 +(Das & Dennis 1997), so `Hierarchical` with a `rel_tol_matrix` sweep can
 +reach trade-offs a weight grid misses.
 +
@@ -4502,7 +4595,7 @@ index e8ddb95..4d8a035 100644
  
  ### Data flow
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 77bf30b..4f2573b 100644
+index 3564a67..140b5d5 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
 @@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
@@ -4516,14 +4609,14 @@ index 77bf30b..4f2573b 100644
 +- **Deviations from prioritizr 9.0.1** (deliberate):
 +  - Hierarchical caps are `v + r·|v| + abs_tol` (minimise) and `v − (r·|v| + abs_tol)` (maximise), not `v·(1 ± r)`: prioritizr's cap is infeasible when v < 0, and allows no slack at v = 0 (raise `abs_tol` for slack there).
 +  - Priority is the order of the objectives list (no `priority` argument); `rel_tol` is indexed by solve order.
-+  - Reported objective values are recomputed at the selected plan from the model's own expressions, not read from raw auxiliary variables (which misstate objectives not optimised at that stage).
++  - Reported objective values are recomputed at the selected plan from the model's own expressions, not read from raw auxiliary variables (which misstate objectives not optimised at that stage). Met counts follow the exact `check_targets` rule, so on data at a target's tolerance boundary the reported count can sit below the value a hierarchical cap kept (the solver met the target within its tolerance); and when the implied point of a stage's plan violates a model row, including an earlier stage's cap, that cap falls back to the solver's own value.
 +  - A hierarchical cap uses the better of the solver's value and the recomputed value, so an incumbent (time limit, `MIP_GAP` > 0) with loose auxiliaries cannot weaken later stages.
 +  - An all-zero weights row raises `ValueError` (prioritizr gives NaN coefficients).
 +  - The reference-point approach is omitted: in 9.0.1 its max rows are written `t − w·d ≤ 0` instead of `≥ 0` (`rcpp_convert_ref_point_method.cpp`), so it minimises a weighted sum of normalised shortfalls.
 +
  ### Changed
  
- - `MIPSolver` internals are refactored onto the objective builders in `solvers/_mip_objectives.py`: `_build` is now a shared base model (`_build_base`: locks, cost, boundary, connectivity, probability, amounts, no-good cuts) plus one builder per objective. Solutions are unchanged (pinned by `tests/data/golden/stage3_v040.json`), except the ghost-feature fix below. LP variable and constraint names in exported models (`build_model`, `write_problem`) change for `max_features` / `max_weighted_features` / absolute `min_largest_shortfall`: `feat_met_{id}` → `y_f{id}`, `slack_{id}` → `s_f{id}`, the relaxed `target_{id}` → `met_f{id}`, `slack_{id}` rows → `short_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`; the objective is no longer named `"objective"`. `min_set`'s hard `target_{id}` rows keep their names. Absolute `min_largest_shortfall` and `min_penalties` no longer add slack rows for a feature with target × MISSLEVEL ≤ 0, and `max_*` ghost features get a `met_f{id}` row instead of a fixed `upBound`.
+ - `MIPSolver` internals are refactored onto the objective builders in `solvers/_mip_objectives.py`: `_build` is now a shared base model (`_build_base`: locks, cost, boundary, connectivity, probability, amounts, no-good cuts) plus one builder per objective. Solutions are unchanged (pinned by `tests/data/golden/stage3_v040.json`), except the ghost-feature fix below. LP variable and constraint names in exported models (`build_model`, `write_problem`) change for `max_features` / `max_weighted_features` / absolute `min_largest_shortfall`: `feat_met_{id}` → `y_f{id}`, `slack_{id}` → `s_f{id}`, the relaxed `target_{id}` → `met_f{id}`, `slack_{id}` rows → `short_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`; the objective is no longer named `"objective"`. `min_set`'s hard `target_{id}` rows keep their names. The missing-`COSTBUDGET` error for `max_features`, `max_weighted_features` and absolute `min_largest_shortfall` now uses the shared `objective=... requires a COSTBUDGET parameter` text. Absolute `min_largest_shortfall` and `min_penalties` no longer add slack rows for a feature with target × MISSLEVEL ≤ 0, and `max_*` ghost features get a `met_f{id}` row instead of a fixed `upBound`.
 diff --git a/README.md b/README.md
 index d0da629..4fa9422 100644
 --- a/README.md
@@ -4545,18 +4638,20 @@ index d0da629..4fa9422 100644
  ### Constraints
  - **Contiguity**: selected PUs must form a connected subgraph (MIP network flow)
 diff --git a/docs/plans/2026-10-11-prioritizr-parity-roadmap.md b/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
-index fcc8353..3a31447 100644
+index fcc8353..6e0ec28 100644
 --- a/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
 +++ b/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
-@@ -124,6 +124,8 @@ models.
+@@ -122,7 +122,9 @@ models.
  
- ## Stage 3 — v0.41.0: Multi-objective optimisation
+ ---
  
-+**As built (v0.41.0):** see docs/plans/2026-10-15-stage3-multi-objective-design.md. The API is `pymarxan.multiobjective.MultiObjectiveMIP(objectives, approach)` over an ordinary `ConservationProblem` (not `MultiObjectiveProblem`); hierarchical and weighted-sum approaches, prioritizr's parameter matrices, and `nondominated` (new code: `calibration.pareto` filters a 2-objective `BLMResult`). **Descoped:** the reference-point approach and its acceptance item — prioritizr 9.0.1's implementation is broken (its max rows are written `t − w·d ≤ 0`), so there is no correct reference to match; a Chebyshev/achievement version can be built on the same builders later.
+-## Stage 3 — v0.41.0: Multi-objective optimisation
++## Stage 3 — v0.41.0: Multi-objective optimisation (SHIPPED, v0.41)
 +
++**As built (v0.41.0):** see docs/plans/2026-10-15-stage3-multi-objective-design.md. The API is `pymarxan.multiobjective.MultiObjectiveMIP(objectives, approach)` over an ordinary `ConservationProblem` (not `MultiObjectiveProblem`); hierarchical and weighted-sum approaches, prioritizr's parameter matrices, and `nondominated` (new code: `calibration.pareto` filters a 2-objective `BLMResult`). **Descoped:** the reference-point approach and its acceptance item — prioritizr 9.0.1's implementation is broken (its max rows are written `t − w·d ≤ 0`), so there is no correct reference to match; a Chebyshev/achievement version can be built on the same builders later.
+ 
  **Goal:** trade off several objectives (e.g. cost vs representation vs connectivity) exactly,
  the way prioritizr 9's `multi_problem()` does.
- 
 ```
 
 - [ ] **Step 4: Run the tutorial tests.**
@@ -4573,7 +4668,7 @@ Expected: `11 passed`.
 PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider --cov --cov-report=term
 git diff --stat 00d01a3 HEAD -- src/pymarxan/zones/
 ```
-Expected (prototype): ruff `All checks passed!`; mypy `Success: no issues found in 195 source files`; `3172 passed, 20 deselected`; total coverage 85% (`_mip_objectives.py` 99%, `mip_solver.py` 100%, `multiobjective.py` 99%); empty `zones/` diff. `tests/test_examples.py` (the 35.0 anchor harness) and `tests/pymarxan/zones/` are part of the run.
+Expected (prototype): ruff `All checks passed!`; mypy `Success: no issues found in 195 source files`; `3176 passed, 20 deselected`; total coverage 85% (`_mip_objectives.py` 99%, `mip_solver.py` 100%, `multiobjective.py` 99%); empty `zones/` diff. `tests/test_examples.py` (the 35.0 anchor harness) and `tests/pymarxan/zones/` are part of the run.
 
 - [ ] **Step 6: Commit.**
 
