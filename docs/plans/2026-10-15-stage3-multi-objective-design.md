@@ -97,6 +97,8 @@ other golden case must reproduce exactly. Three builders are new:
   - `conn_expr: LpAffineExpression`, default empty
   - `prob_expr: LpAffineExpression`, default empty
   - `amount_exprs: dict[int, LpAffineExpression]` keyed by feature id, default `{}`
+  - `implied: list[tuple[LpVariable, Callable[[], float]]]`, default `[]`, holding the
+    implied-value registry (§5)
 
   `MIPSolver` fills them from `_build_base`. (There is no `penalty_expr`.)
 - Every builder has the signature `builder(ctx, shortfall, *, owner="", **params) -> ObjectiveTerm`.
@@ -224,10 +226,10 @@ review). Builders must never be called twice on one context (they add named rows
 - **What v is:** the **better**, in objective k's sense, of two values. For a minimised
   objective it is `min(v_model, v_rec)`; for a maximised one, `max(v_model, v_rec)`.
   - `v_model` is the model's value of objective k's expression (`term.expr`) at the accepted
-    solution. It is read after every variable whose `varValue` is still `None` has been set
-    to 0. A PU variable that is never written to the LP (zero cost, no rows) keeps `None`
-    after the reset, and `pulp.value` of an expression containing a `None` variable is
-    `None`.
+    solution. A PU variable that is never written to the LP (zero cost, no rows) gets no
+    value back from the solver, so its `varValue` stays `None`. `pulp.value` of an
+    expression containing such a variable returns `None`, so `None` values in the tracked
+    set (§5) are read as 0 first.
   - `v_rec` is the implied evaluation of `term.expr` at the rounded selection (§5).
   - **Both values are attained by a model point.** The model value is attained by the
     solver's solution. `v_rec` is attained by the implied point, provided that point is
@@ -270,16 +272,19 @@ review). Builders must never be called twice on one context (they add named rows
   differs from the new loop in its acceptance rule, cap formula, source of v and stage-1
   failure behaviour, and its tests mock only `status`.
 - `solve_hierarchical(model, terms, rel_tols, abs_tol, solver, evaluate) -> HierarchicalResult`
-  is new code in `_mip_objectives.py`. `evaluate: Callable[[int], float]` maps a 0-based
-  objective index to its `v_rec` at the current variable values; `MultiObjectiveMIP`
-  supplies it, so the helper itself needs no problem data. The helper computes `v_model`
-  itself and takes the better of the two. It works over `ObjectiveTerm`s with mixed senses
-  and returns
-  `HierarchicalResult(status: int, sol_status: int, stage_reached: int)`. `status` and
-  `sol_status` are those of the **last accepted** stage: they are snapshotted with the
-  variable values. After a fallback, `model.status` holds the failed solve's status, so it is
-  not used. `metadata["status"]` / `["sol_status"]` come from this result. It raises nothing itself;
-  `MultiObjectiveMIP` turns the result into errors and warnings.
+  is new code in `_mip_objectives.py`.
+  - `evaluate: Callable[[int], float | None]` maps a 0-based objective index to its `v_rec`
+    at the current variable values. It returns `None` when the implied point is not
+    `feasible` (§5), and the helper then uses `v_model`.
+  - `MultiObjectiveMIP` supplies `evaluate` (a closure over `evaluate_implied`), so the helper
+    itself needs no problem data.
+  - The helper computes `v_model` itself and takes the better of the two.
+  - It works over `ObjectiveTerm`s with mixed senses.
+  - It returns `HierarchicalResult(status: int, sol_status: int, stage_reached: int)`.
+    `status` and `sol_status` are those of the **last accepted** stage, snapshotted with the
+    variable values. After a fallback `model.status` holds the failed solve's status, so it
+    is not used; `metadata["status"]` and `["sol_status"]` come from this result.
+  - It raises nothing itself. `MultiObjectiveMIP` turns the result into errors and warnings.
 - `stage_reached` is the number of accepted stages (n on full success).
 - After a stage with no solution, the loop stops.
 - Stage 1 with no solution (`stage_reached == 0`) → `RuntimeError` naming the stage and
@@ -358,26 +363,44 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
   also `v_rec` in hierarchical caps (§4.1).
 
   **Implied evaluation: one source of truth, built from the model's own rows.**
-  - Every auxiliary variable is registered at creation, together with an *implied-value rule*.
-    The registry is `ObjectiveContext.implied` (and the same list on `_BaseModel`), of type
-    `list[tuple[LpVariable, Callable[[], float]]]`, kept in creation order. The rule is
-    written next to the row it belongs to:
+  - Every auxiliary variable is registered together with an *implied-value rule*, written
+    next to the row it belongs to. The registry is `ObjectiveContext.implied`, of type
+    `list[tuple[LpVariable, Callable[[], float]]]` (§2). `_BaseModel` has the same list, and
+    `MultiObjectiveMIP` passes the base list into the context, so there is one registry.
+    - Rules are applied in registry order. A rule reads the current `varValue`s, so a
+      variable is registered only **after** every variable its rule reads.
+    - `build_min_largest_shortfall` therefore registers `m` after its loop over slacks, not
+      where `m` is created.
+    - `ctx.slack()` and `ctx.met()` register on creation. Zone contexts get this through the
+      default list and never read it.
+
+    The rules:
     - slack: `s = max(0, R − A)`;
     - met: `y = 1` iff `A ≥ R` exactly, the `check_targets` rule;
-    - largest shortfall: `m = max(scaled s)` over R > 0, or 0 when there is none;
+    - largest shortfall: `m = max(scaled s)` over R > 0, or 0 when there is none. It is
+      registered after the slacks it reads;
     - boundary auxiliaries: `|x_i − x_j|`, exactly as the abs rows bound them;
     - symmetric connectivity: `z = x_i·x_j`, one per unordered pair, using the first row as
       the MIP does;
     - asymmetric connectivity: `z = x_i·(1 − x_j)`.
 
-    Rules read the current `varValue`s, so `m` comes after the slacks it depends on.
-  - `evaluate_implied(model, x_rounded)`:
-    1. snapshot every `varValue`;
-    2. set x to `x_rounded` (a PU whose `varValue` is `None` counts as 0, as in `MIPSolver`);
-    3. apply every rule in order;
+  - **Tracked variable set:** `model.variables() ∪ x.values() ∪ {registered auxiliaries}`.
+    An x that has zero cost and no rows is not in `model.variables()`, and neither is an
+    auxiliary in an empty row. This set is used for the pre-solve reset to `None`, for the
+    snapshot and restore, and for the read of `None` as 0. It also guarantees that `valid()`
+    never sees a `None` value, which would raise `TypeError` in PuLP 3.3.2.
+  - `evaluate_implied(model, x, x_rounded, implied, terms) -> tuple[list[float], bool]` returns
+    (one value per term, `feasible`):
+    1. snapshot every tracked `varValue`;
+    2. set x to `x_rounded` (a `None` value counts as 0, as in `MIPSolver`);
+    3. apply every rule in registry order;
     4. read `pulp.value(term.expr)` for every objective;
-    5. check every model row except `hier_cap_*` with `constraint.valid(1e-6)` → `feasible`;
+    5. check **every** model row with `constraint.valid(1e-6)` → `feasible`. This includes the
+       `hier_cap_*` rows of earlier stages, which the implied point must also satisfy. Round 7
+       built a contrived run where skipping them let cap 2 contradict cap 1;
     6. restore the snapshot.
+  - Consequence: on tolerance-boundary data the implied point can violate an earlier
+    stage's cap. That stage and later ones then fall back to `v_model` (documented).
   - Because each value is the model's own expression evaluated at a model point, the values
     cannot diverge from the MIP's formulas. The Marxan-style `compute_boundary`,
     `compute_connectivity_penalty` and `compute_probability_penalty` helpers, and
@@ -400,7 +423,9 @@ MultiObjectiveMIP(objectives: Sequence[ObjectiveSpec], approach: Hierarchical | 
     A test checks both on oracle data that includes connectivity and probability.
   - **Tolerance caveat:** on tolerance-boundary data the reported met count can sit below the
     cap's v (round-4 case: the model has the target met, the implied rule does not).
-    `objective_values` stays consistent with `targets_met`. This is documented, and a
+    `objective_values` stays consistent with `targets_met`, up to floating-point summation
+    order: `check_targets` sums with numpy, the implied rule with `pulp.value`. This is
+    documented, and a
     regression test pins the cap behaviour (§7.4).
 - `metadata["approach"]` (`"hierarchical"` / `"weighted_sum"`)
 - `metadata["row"]`
@@ -445,7 +470,8 @@ Every error is a `ValueError` naming the argument, unless another type is stated
 - `rel_tol` length ≠ n−1, or weights length ≠ n (checked per row);
 - negative or non-finite `rel_tol`, `abs_tol` or weights;
 - an all-zero weights row;
-- `MaxWtdSum` weights that do not cover every problem feature, or that name an unknown id;
+- `MaxWtdSum` weights that do not cover every problem feature, or that name an unknown id
+  (at `solve`);
 - matrix helpers with n < 2 or n_values < 2, or a `rel_tol_matrix` `max` that is negative or
   non-finite;
 - `MinBoundary` on a problem without a boundary table (at `solve`);
@@ -523,10 +549,14 @@ Every error is a `ValueError` naming the argument, unless another type is stated
    value only" and "recompute only"; `stage_reached` is n on success and k − 1 when stage k fails (mocked
    `sol_status`), and the stage-1 failure raises `RuntimeError`.
 5. **Implied evaluation (round 6):**
-   - At an optimal single-row solve, `objective_values[key] == pulp.value(term.expr)` for every
-     objective. The fixture has BLM > 0, symmetric connectivity with duplicate (i,j)/(j,i)
-     rows, asymmetric connectivity, and PROBMODE 1 with a positive and with a negative
-     PROBABILITYWEIGHTING.
+   - At an optimal single weighted-sum row in which every objective has weight > 0,
+     `objective_values[key] == pytest.approx(pulp.value(term.expr), abs=1e-6)` for every
+     objective. The test is parametrised over fixtures with BLM > 0, symmetric connectivity
+     with duplicate (i,j)/(j,i) rows, asymmetric connectivity, and PROBMODE 1 with a positive
+     and with a negative PROBABILITYWEIGHTING.
+   - `m` is registered after its slacks: on a fixture where the solver's slack values are
+     stale, `evaluate_implied` gives the true largest shortfall.
+   - Tracked variables: a zero-cost PU with no rows keeps `None` after `evaluate_implied`.
    - `Hierarchical([MinCost(), MinShortfall()])` with asymmetric connectivity and two locked-in
      endpoints reaches `stage_reached == 2`.
    - `evaluate_implied` restores every `varValue`, and reports `feasible = False` for a
