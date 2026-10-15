@@ -262,6 +262,42 @@ def test_section_pareto_blm():
 
 
 # --------------------------------------------------------------------
+# Section: "9. Published target-setting methods (v0.40)"
+# --------------------------------------------------------------------
+
+
+def test_section_target_methods():
+    problem = build_minimal_problem()
+
+    # --- tutorial block (verbatim) ---
+    from pymarxan.solvers.base import SolverConfig
+    from pymarxan.solvers.mip_solver import MIPSolver
+    from pymarxan.targets import apply_targets, jung_targets, rodrigues_targets
+
+    # apply_targets edits features in place, so work on a copy.
+    targeted = problem.copy_with(features=problem.features.copy())
+
+    # One amount unit = 1,000 km² of habitat. There is no default unit.
+    KM2 = 1_000.0
+    threatened = [3]  # mangrove: IUCN VU
+    others = [1, 2]
+
+    apply_targets(targeted, jung_targets(targeted, km2_per_unit=KM2, features=threatened))
+    apply_targets(targeted, rodrigues_targets(targeted, km2_per_unit=KM2, features=others))
+
+    best = MIPSolver().solve(targeted, SolverConfig(num_solutions=1))[0]
+    # --- end tutorial block ---
+
+    targets = dict(zip(targeted.features["id"], targeted.features["target"]))
+    # coral 6,000 km² -> log10 band; mangrove 3,000 km² -> max(2,200, 0.77*3,000) = 2,310
+    assert targets[1] == pytest.approx(4.24772, rel=1e-4)
+    assert targets[2] == pytest.approx(3.09612, rel=1e-4)
+    assert targets[3] == pytest.approx(2.31, rel=1e-9)
+    assert all(best.targets_met.values())
+    assert list(problem.features["target"]) == [5.0, 4.0, 3.0]  # original untouched
+
+
+# --------------------------------------------------------------------
 # Section: "River connectivity and barrier restoration"
 # --------------------------------------------------------------------
 

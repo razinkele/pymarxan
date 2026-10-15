@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Published target-setting methods** in `pymarxan.targets` (prioritizr 9.0.1 parity, Stage 2 of the prioritizr roadmap). Each returns `{feature_id: target}` in native units; area-based methods take a required `km2_per_unit` (no silent unit assumption), cap at `cap_km2=1e6` km² (Butchart et al. 2015, https://doi.org/10.1111/conl.12158) and clip to the feature total. Mix methods across feature groups with `features=` and `apply_targets`.
+  - `interp_area_targets`, `interp_absolute_targets`: general rare/common threshold interpolation (log10 or linear).
+  - `rodrigues_targets`: Rodrigues et al. 2004, https://doi.org/10.1641/0006-3568(2004)054[1092:GGAPRF]2.0.CO;2.
+  - `sreekar_targets`: Sreekar & Watson 2026, https://doi.org/10.1038/s44358-026-00169-7.
+  - `polak_targets`: Polak et al. 2015, https://doi.org/10.1098/rsos.150107.
+  - `watson_targets`: Watson et al. 2010, https://doi.org/10.1111/j.1523-1739.2010.01587.x.
+  - `rl_species_targets`: IUCN (2012) Red List Categories and Criteria v3.1, 2nd ed.
+  - `rl_ecosystem_targets`: IUCN (2024) Red List of Ecosystems guidelines v2.0; Keith et al. 2013, https://doi.org/10.1371/journal.pone.0062111.
+  - `jung_targets`: Jung et al. 2021, https://doi.org/10.1038/s41559-021-01528-7 (correction https://doi.org/10.1038/s41559-021-01569-y).
+  - `ward_targets`: Ward et al. 2025, https://doi.org/10.1073/pnas.2414985122.
+  - `pop_size_targets`: minimum viable population ÷ density.
+  - `wilson_targets`: Wilson et al. 2010, https://doi.org/10.1890/09-1051.1.
+  - `duran_targets`: Durán et al. 2020, https://doi.org/10.1111/2041-210X.13427.
+  - `rule_targets`: Harris & Holness 2023, https://doi.org/10.1016/j.biocon.2023.110218.
+  - `absolute_targets`, `area_targets`, `min_targets`, `max_targets`.
+- **Deviations from prioritizr 9.0.1** (deliberate):
+  - RLE criterion A3 VU threshold is 0.5 (IUCN guidelines; prioritizr has 0.3).
+  - Watson at exactly the 10,000 km² threshold returns 1,000 km² (prioritizr errors).
+  - Zero-total features get target 0 (prioritizr returns NaN).
+  - `wilson_targets` returns prioritizr's large-population approximation (Lande 1993, https://doi.org/10.1086/285580), but raises where it is unreliable: when `r <= σ²/2`, and when its target differs by more than 1% from the target given by Lande's exact mean-time-to-extinction model. Near `1e5·σ²·β²/2 ≈ 1` the approximation gives near-zero targets for the most extinction-prone species, while the exact model needs enormous populations; prioritizr returns those values, or NaN/Inf. Refused features can use `pop_size_targets` with a chosen minimum viable population. The calculation runs in log space, so it can't overflow.
+  - Per-feature inputs are keyed by feature id (prioritizr misaligns them on feature subsets and in `rule` ordering).
+  - Red List criteria are case-insensitive (prioritizr cannot match `"A2b"`).
+  - Red List `status` can vary per feature.
+  - `min_targets`/`max_targets` refuse inputs with different features.
+  - Where prioritizr's documentation and code disagree, pymarxan follows the code: Jung 77% (not 80%), Ward 100 km² (not 100,000), species EN-B2 500 km² (not 50), and population targets divide by density.
+- Pinned worked examples are hand-computed from each published rule as prioritizr implements it. Paper text confirms Rodrigues/Butchart, Polak's breakpoints, Jung's 2,200 km² floor and Durán's z = 0.25. Watson, Sreekar, Ward and Wilson parameters, and Jung's 77% term, could not be confirmed from accessible paper text; the docstrings say so. `polak_targets` does not apply Polak et al.'s 100%-for-Critically-Endangered rule (target CR features separately).
+- Feature totals include locked-out planning units, as in prioritizr. Per-feature inputs accept dicts or pandas Series keyed by feature id; non-id keys, duplicated Series indexes, boolean masks and NaN/negative amounts raise `ValueError`.
+
+### Changed
+
+- `pymarxan.targets` is now a package; `from pymarxan.targets import ...` is unchanged.
+
+### Deprecated
+
+- `loglinear_targets`: use `interp_absolute_targets(..., interp="log10")`, which reproduces it exactly. It still works and now emits `DeprecationWarning`.
+
 ### Fixed
 
 - Docs now state the supported Python floor consistently as 3.11+ (matching `requires-python` and the CI matrix); README badge, user manual, CLAUDE.md and copilot-instructions previously said 3.12+ or 3.10+.

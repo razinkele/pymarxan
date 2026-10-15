@@ -73,7 +73,7 @@ pymarxan (three-layer monorepo)
 │   ├── rivers/            River-network (DCI) + barrier-removal optimization
 │   ├── constraints/       Contiguity, feature contiguity, neighbor, linear, budget
 │   ├── objectives/        Deprecated (v0.39, removal v0.42): use MIPSolver(objective=...)
-│   ├── targets/           Automatic target rules (relative, log-linear, group)
+│   ├── targets/           Target rules: relative, group, range-size, IUCN Red List, population, composition
 │   ├── spatial/           Grid generation, feature intersection, boundary, export
 │   ├── io/                Marxan file readers/writers (binary & zone formats)
 │   ├── calibration/       BLM calibration & sensitivity analysis
@@ -144,7 +144,7 @@ pymarxan (three-layer monorepo)
 ### Modern conservation planning
 - 30×30 / GBF area-based **representation** reporting against a policy threshold
 - Distributional **equity** analysis (per-group totals/shares + Gini coefficient)
-- Automatic **target-setting** rules (relative, IUCN-style log-linear, per-group)
+- Published **target-setting** methods (Rodrigues, Watson, Polak, Sreekar, IUCN Red List species/ecosystems, Jung, Ward, population size, Wilson, Durán, rule-based, min/max) with explicit km² units
 - Multi-scenario **robustness** (minimax-regret no-regrets plan selection)
 
 ### Constraints

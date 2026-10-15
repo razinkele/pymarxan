@@ -21,6 +21,7 @@ covered by `docs/USER_MANUAL.md`; this file is for the Python API.
 6. [Connectivity metrics (Phase 24)](#6-connectivity-metrics-phase-24)
 7. [Solution portfolios via no-good cuts (Phase 25)](#7-solution-portfolios-via-no-good-cuts-phase-25)
 8. [BLM calibration with Pareto filter (Phase 25)](#8-blm-calibration-with-pareto-filter-phase-25)
+9. [Published target-setting methods (v0.40)](#9-published-target-setting-methods-v040)
 
 ---
 
@@ -305,6 +306,52 @@ for blm, c, b in zip(pareto.blm_values, pareto.costs, pareto.boundaries):
 A point `i` is dominated by point `j` iff `cost_j ≤ cost_i AND
 boundary_j ≤ boundary_i` with strict inequality somewhere. The filter
 also deduplicates identical `(cost, boundary)` pairs.
+
+---
+
+## 9. Published target-setting methods (v0.40)
+
+`pymarxan.targets` implements the target rules conservation assessments cite:
+range-size interpolation (Rodrigues, Sreekar, Polak, Watson), IUCN Red List
+rules (species, ecosystems, Jung, Ward), population-based targets
+(population size, Wilson, Durán), and fixed-area, rule-based and min/max
+combinations. Every method returns `{feature_id: target}` in the feature's
+own units; `apply_targets` writes it onto the problem and leaves features
+it isn't given untouched, so methods mix across feature groups.
+
+Area-based methods need to know what one unit of your feature data is in
+km². There is no default: pass `km2_per_unit` (one factor, or a
+`{feature_id: factor}` dict).
+
+```python
+from pymarxan.solvers.base import SolverConfig
+from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.targets import apply_targets, jung_targets, rodrigues_targets
+
+# apply_targets edits features in place, so work on a copy.
+targeted = problem.copy_with(features=problem.features.copy())
+
+# One amount unit = 1,000 km² of habitat. There is no default unit.
+KM2 = 1_000.0
+threatened = [3]  # mangrove: IUCN VU
+others = [1, 2]
+
+apply_targets(targeted, jung_targets(targeted, km2_per_unit=KM2, features=threatened))
+apply_targets(targeted, rodrigues_targets(targeted, km2_per_unit=KM2, features=others))
+
+best = MIPSolver().solve(targeted, SolverConfig(num_solutions=1))[0]
+```
+
+Mangrove (3,000 km²) gets Jung et al.'s `max(2,200 km², 77%)` = 2,310 km²
+(2.31 units); coral and seagrass get Rodrigues et al.'s log-interpolated
+share between 100% (< 1,000 km²) and 10% (> 250,000 km²). Targets never
+exceed a feature's total, and most methods cap at 1,000,000 km²
+(`cap_km2=None` disables). Totals include locked-out planning units (as in
+prioritizr), so a target can still be unattainable; `presolve_check`
+flags that. Per-feature inputs accept a dict or a pandas Series indexed by
+feature id. See each function's docstring for its source.
+`loglinear_targets` is deprecated: use
+`interp_absolute_targets(..., interp="log10")`.
 
 ---
 

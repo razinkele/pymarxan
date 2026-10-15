@@ -79,7 +79,9 @@ one — confirm against MarZone and prioritizr zones semantics in the design rev
 
 ---
 
-## Stage 2 — v0.40.0: Published target-setting methods
+## Stage 2 — v0.40.0: Published target-setting methods (SHIPPED, v0.40)
+
+**As shipped (v0.40.0):** see docs/plans/2026-10-15-stage2-target-methods-design.md. Worked examples are hand-computed from each rule as prioritizr implements it (no paper publishes numeric pairs); wilson_targets refuses inputs where its large-population approximation disagrees with Lande's exact model by more than 1%.
 
 **Goal:** users can set targets with the methods conservation reports cite, not just relative or
 log-linear rules.
