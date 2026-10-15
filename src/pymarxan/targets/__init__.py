@@ -24,8 +24,11 @@ from pymarxan.targets._basic import (
     loglinear_targets,
     relative_targets,
 )
+from pymarxan.targets._units import PerFeatureFloat, PerFeatureStr
 
 __all__ = [
+    "PerFeatureFloat",
+    "PerFeatureStr",
     "apply_targets",
     "group_targets",
     "loglinear_targets",
