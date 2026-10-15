@@ -207,10 +207,10 @@ Pinned examples for the general functions (`k = 1`, cap 1e6):
   f=20 → 4.8; f=1,000 → 12.
 - `rl_ecosystem_targets` VU, A3, B2, p=0, max → `min(max(5,000, 0.5f), cap, f)`:
   f=4,000 → 4,000; f=8,000 → 5,000; f=40,000 → 20,000 (pins the VU-A3 = 0.5 deviation;
-  prioritizr's 0.3 would give 12,000).
+  prioritizr's 0.3 would give 0.7·40,000 = 28,000).
 - Mixed per-feature `status={1: "CR", 2: "VU"}` in one call gives each feature its own row.
 
-Presets (all keywords overridable):
+Presets (same rule as §4.3: only the Defaults column plus `km2_per_unit`, `cap_km2`, `features` are parameters; `criterion_a`, `criterion_b`, `method` are a `TypeError`):
 
 | Function | Fixed | Defaults | Effective rule | Pinned examples |
 |---|---|---|---|---|
@@ -242,10 +242,11 @@ duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2,
   `σ² > 0`, `d > 0`; `β ≤ 0` → `ValueError` naming the feature (prioritizr returns NaN/Inf).
   Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317.
   **Numerics:** compute `ln k = ln(1e5·σ²·β²/2) / β` and `k = exp(ln k)`, mapping
-  `ln k > ln(sys.float_info.max)` to `k = inf` (the cap/clip then bounds `t`; Python's
+  `ln k > ln(sys.float_info.max)` to `k = inf` before dividing by `d` (so `t = min(cap, f)`, or
+  `f` with `cap_km2=None`; Python's
   `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3). As β→0⁺ with base < 1,
   `k` underflows to 0 → target 0; the docstring flags small β as scientifically degenerate.
-  Tests pin both: σ²=1,000, r≈σ²/2 (β=1e-3) → `t = min(cap, f)`; r=0.0200001, σ²=0.04 → 0.
+  Tests pin both: r=500.5, σ²=1,000 (β=1e-3) → `t = min(cap, f)` (`f` when `cap_km2=None`); r=0.0200001, σ²=0.04 → 0.
   Wilson et al. 2010
   (10.1890/09-1051.1); formula checked against prioritizr only — the design review's science
   lens must try to confirm it against the paper, else the docstring says it follows prioritizr.
