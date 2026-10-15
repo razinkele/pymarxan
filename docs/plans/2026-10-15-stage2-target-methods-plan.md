@@ -30,12 +30,12 @@
 
 ## Review Focus
 
-These inputs are implied by the spec but not named by it. They are the ones most likely to bite a real user (Baltic/ROWER data arrives as DataFrames):
-1. **Per-feature inputs as a `pandas.Series`** indexed by feature id, e.g. `df.set_index("id")["density"]`. Users expect it to work like a dict, not to be treated as a scalar. → `per_feature` converts Series; pinned in Task 2 (`test_per_feature_normalises_numpy_keys_and_series`).
-2. **numpy integer keys or ids** (`np.int64`, from `problem.features["id"]`) in `km2_per_unit`/`status` dicts or in `features=`. Users expect them to match int ids. → normalised with `int()`; pinned in Task 2 (`test_per_feature_normalises_numpy_keys_and_series`, `test_select_features_accepts_numpy_ids_and_empty`).
-3. **Negative or non-finite feature totals** in `pu_vs_features`. Users expect an error that names the feature, not a silent negative target. → `feature_totals` raises; pinned in Task 2 (`test_feature_totals_negative_raises`).
-4. **Status strings with stray case or whitespace** (`"vu"`, `" En "`, `"a2B "`), as they come from spreadsheets. Users expect them to be accepted. → `_norm` strips and upper-cases; pinned in Task 4 (`test_rl_ecosystem_a2b_any_case`).
-5. **`features=[]` or a subset whose dict covers only that subset.** Users expect `{}` and a correct subset, with no "missing key" error for unselected features. → pinned in Task 2 (`test_select_features_accepts_numpy_ids_and_empty`) and Task 4 (`test_rl_species_subset_with_status_only_for_subset`).
+These inputs are implied by the spec but not named by it, and are the ones most likely to bite a real user (Baltic/ROWER data arrives as DataFrames). The 2026-10-15 4-lens review found the first draft's tests for #1–#4 were vacuous or missing; each now has a test that fails if the guard is removed.
+1. **Per-feature inputs as a `pandas.Series`** indexed by feature id, e.g. `df.set_index("id")["density"]`, possibly long-format with a **duplicated index**. Users expect it to work like a dict, and duplicates to raise rather than silently keep the last value. → `per_feature` converts the Series and rejects a duplicated index; the public type aliases `PerFeatureFloat`/`PerFeatureStr` include `pd.Series`, so typed callers pass mypy. Pinned in Task 2 (`test_per_feature_reads_series_by_index`, `test_per_feature_series_duplicate_index_raises`) and Task 6 (`test_rule_targets_traits_series`).
+2. **Keys and `features=` that aren't feature ids**: dicts keyed by feature *name* (`{"cod": 1.0}`), float keys (`1.5`), or a boolean mask `features=df["threatened"]`. Users expect a `ValueError` naming the argument, not truncation to id 1 or a raw `int()` error. → `as_feature_id` + `select_features`. Pinned in Task 2 (`test_per_feature_rejects_non_id_keys`, `test_select_features_rejects_non_integral_ids`, `test_select_features_rejects_boolean_mask`).
+3. **NaN or negative `pu_vs_features` amounts.** pandas' groupby-sum skips NaN, and `[100, -50]` sums to a plausible 50. Users expect an error naming the feature. → `feature_totals` checks rows. Pinned in Task 2 (`test_feature_totals_bad_row_raises_even_if_total_looks_fine`).
+4. **Status strings with stray case or whitespace** (`" En "`, `"eN\t"`), as they come from spreadsheets. Users expect them to be accepted. → `_norm` strips and upper-cases. Pinned in Task 4 (`test_rl_species_status_case_and_whitespace`, `test_rl_ecosystem_a2b_any_case`).
+5. **`features=[]`, or a dict that covers only the selected subset.** Users expect `{}` and a correct subset, with no "missing key" error for unselected features. → Pinned in Task 2 (`test_select_features_accepts_numpy_ids_and_empty`) and Task 4 (`test_rl_species_subset_with_status_only_for_subset`).
 
 ---
 
@@ -185,8 +185,8 @@ and for the first two:
 
 - [ ] **Step 6: Run the tests.**
 
-Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/test_targets.py -q -W error::DeprecationWarning:pymarxan`
-Expected: all pass. The `-W` flag proves no unwrapped deprecated call remains.
+Run: `/opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/test_targets.py -q -W error::DeprecationWarning`
+Expected: all pass. The `-W` flag proves no unwrapped deprecated call remains. Don't add a `:pymarxan` module filter: `stacklevel=2` attributes the warning to the *calling test module*, so a module-filtered `-W` would never fire (found by the 4-lens review). `test_targets.py` makes no PuLP calls, so PuLP's own deprecations can't trip it.
 
 Run: `grep -rn "loglinear_targets\|pymarxan.targets\|from pymarxan import targets" src/ examples/ docs/*.md tests/ --include=*.py --include=*.md | grep -v "^tests/pymarxan/test_targets.py\|^src/pymarxan/targets/"`
 Expected: no output (no other caller to update).
@@ -213,12 +213,14 @@ git commit -m "refactor(targets): convert to package; deprecate loglinear_target
 **Interfaces:**
 - Consumes: `ConservationProblem.feature_amounts() -> dict[int, float]`.
 - Produces (all private, used by Tasks 3–6):
-  - `select_features(problem, features: Iterable[int] | None) -> list[int]`: ids in `problem.features` order; raises if an id is unknown.
-  - `per_feature(name: str, value: Any, fids: list[int]) -> dict[int, Any]`: a scalar, a Mapping or a `pd.Series`; extra keys are ignored; raises if a key is missing.
+  - Type aliases `PerFeatureFloat = float | Mapping[int, float] | pd.Series` and `PerFeatureStr = str | Mapping[int, str] | pd.Series`. Every public per-feature argument uses them.
+  - `as_feature_id(name, key) -> int`: accepts int, numpy integers and integral floats; any other key raises `ValueError("{name} must be feature ids (int), ...")`.
+  - `select_features(problem, features: Iterable[int] | None) -> list[int]`: ids in `problem.features` order; raises on an unknown id, a non-id value, or a boolean-mask Series.
+  - `per_feature(name: str, value: Any, fids: list[int]) -> dict[int, Any]`: a scalar, a Mapping or a `pd.Series`. A Series with a duplicated index raises; keys go through `as_feature_id(f"{name} keys", k)`; extra keys are ignored; a missing key raises.
   - `numeric_per_feature(name, value, fids, *, lower=None, upper=None, lower_inclusive=True) -> dict[int, float]`
   - `check_scalar(name, value, *, lower=None, upper=None, lower_inclusive=True) -> float`: messages are `"{name} out of range: ..."` and `"{name} must be a number, ..."`.
   - `check_cap(name, cap: float | None) -> float | None`
-  - `feature_totals(problem, fids) -> dict[int, float]`: 0.0 when a feature has no rows; raises if a total is negative or non-finite.
+  - `feature_totals(problem, fids) -> dict[int, float]`: 0.0 when a feature has no rows; totals include locked-out PUs. Raises when any `pu_vs_features` row of a selected feature has a NaN, infinite or negative amount.
   - `km2_factors(km2_per_unit, fids) -> dict[int, float]`: each factor > 0.
   - `finish_area(t_km2, f_km2, k, cap_km2) -> float`: `0.0` if `f_km2 == 0`, else `min(t, f, cap) / k`.
   - Test fixture `make_problem(totals: dict[int, float]) -> ConservationProblem`.
@@ -312,7 +314,22 @@ def test_select_features_subset_keeps_problem_order(make_problem):
 def test_select_features_accepts_numpy_ids_and_empty(make_problem):
     p = make_problem({1: 1.0, 2: 2.0})
     assert select_features(p, np.array([2], dtype=np.int64)) == [2]
+    assert select_features(p, [2.0]) == [2]
     assert select_features(p, []) == []
+
+
+@pytest.mark.parametrize("bad", [[1.7], ["1"], [True]])
+def test_select_features_rejects_non_integral_ids(make_problem, bad):
+    p = make_problem({1: 1.0, 2: 2.0})
+    with pytest.raises(ValueError, match="features must be feature ids"):
+        select_features(p, bad)
+
+
+def test_select_features_rejects_boolean_mask(make_problem):
+    # features=df["threatened"] is a natural mistake; True would read as id 1
+    p = make_problem({1: 1.0, 2: 2.0})
+    with pytest.raises(ValueError, match="boolean mask"):
+        select_features(p, pd.Series([True, True]))
 
 
 def test_select_features_unknown_id_raises(make_problem):
@@ -326,10 +343,28 @@ def test_per_feature_scalar_and_mapping():
     assert per_feature("x", {2: "b", 1: "a", 7: "z"}, [1, 2]) == {1: "a", 2: "b"}
 
 
-def test_per_feature_normalises_numpy_keys_and_series():
-    assert per_feature("x", {np.int64(1): 5.0}, [1]) == {1: 5.0}
+def test_per_feature_reads_series_by_index():
     series = pd.Series({1: 0.5, 2: 0.7})
     assert per_feature("x", series, [2, 1]) == {2: 0.7, 1: 0.5}
+    # a DataFrame column indexed by feature id, in any row order
+    df = pd.DataFrame({"id": [2, 1], "density": [0.7, 0.5]})
+    assert per_feature("x", df.set_index("id")["density"], [1, 2]) == {1: 0.5, 2: 0.7}
+
+
+def test_per_feature_series_duplicate_index_raises():
+    with pytest.raises(ValueError, match=r"duplicate entries for feature\(s\) \[1\]"):
+        per_feature("x", pd.Series([1.0, 100.0, 1.0], index=[1, 1, 2]), [1, 2])
+
+
+def test_per_feature_accepts_numpy_and_integral_float_keys():
+    assert per_feature("x", {np.int64(1): 5.0, 2.0: 6.0}, [1, 2]) == {1: 5.0, 2: 6.0}
+
+
+@pytest.mark.parametrize("key", ["f1", 1.5, True])
+def test_per_feature_rejects_non_id_keys(key):
+    # name-keyed dicts and float keys must not be misread or truncated
+    with pytest.raises(ValueError, match="x keys must be feature ids"):
+        per_feature("x", {key: 1.0}, [1])
 
 
 def test_per_feature_missing_key_names_feature():
@@ -376,6 +411,25 @@ def test_feature_totals_negative_raises(make_problem):
         feature_totals(p, [1])
 
 
+@pytest.mark.parametrize("amounts", [[100.0, math.nan], [100.0, -50.0], [math.inf, 1.0]])
+def test_feature_totals_bad_row_raises_even_if_total_looks_fine(make_problem, amounts):
+    # pandas sums skip NaN, and [100, -50] sums to a plausible 50: check rows
+    p = make_problem({1: 1.0, 2: 1.0})
+    p.pu_vs_features = pd.DataFrame(
+        {"species": [1, 1, 2], "pu": [1, 2, 2], "amount": [*amounts, 3.0]}
+    )
+    with pytest.raises(ValueError, match=r"amounts must be finite and >= 0.*\[1\]"):
+        feature_totals(p, [1, 2])
+    assert feature_totals(p, [2]) == {2: 3.0}  # other features unaffected
+
+
+def test_feature_totals_include_locked_out_planning_units(make_problem):
+    # as in prioritizr, totals count every PU, locked-out (status 3) ones too
+    p = make_problem({1: 4.0, 2: 6.0})
+    p.planning_units.loc[p.planning_units["id"] == 1, "status"] = 3
+    assert feature_totals(p, [1, 2]) == {1: 4.0, 2: 6.0}
+
+
 def test_km2_factors_requires_positive_factor_for_every_feature():
     assert km2_factors(0.5, [1, 2]) == {1: 0.5, 2: 0.5}
     with pytest.raises(ValueError, match="km2_per_unit"):
@@ -411,21 +465,52 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, TypeAlias
 
+import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
+
+# Public input types: one value for every feature, a ``{feature_id: value}``
+# mapping, or a pandas Series indexed by feature id.
+PerFeatureFloat: TypeAlias = float | Mapping[int, float] | pd.Series
+PerFeatureStr: TypeAlias = str | Mapping[int, str] | pd.Series
+
+
+def as_feature_id(name: str, key: object) -> int:
+    """Return ``key`` as an int feature id; only integral numbers are accepted.
+
+    Accepts ``int``, numpy integers and integral floats (``3.0``); rejects
+    booleans, non-integral floats and strings with a ``ValueError`` naming
+    ``name``, instead of silently truncating or misreading them.
+    """
+    if isinstance(key, (bool, np.bool_)):
+        raise ValueError(f"{name} must be feature ids (int), got a boolean {key!r}")
+    if isinstance(key, (int, np.integer)):
+        return int(key)
+    if isinstance(key, (float, np.floating)) and float(key).is_integer():
+        return int(key)
+    raise ValueError(f"{name} must be feature ids (int), got {key!r}")
 
 
 def select_features(
     problem: ConservationProblem, features: Iterable[int] | None
 ) -> list[int]:
-    """Feature ids to compute, in ``problem.features`` order."""
+    """Feature ids to compute, in ``problem.features`` order.
+
+    A boolean mask (e.g. ``df["threatened"]``) is rejected: pass the ids,
+    e.g. ``df.loc[df["threatened"], "id"]``.
+    """
     ids = [int(f) for f in problem.features["id"]]
     if features is None:
         return ids
-    wanted = {int(f) for f in features}
+    if isinstance(features, pd.Series) and features.dtype == bool:
+        raise ValueError(
+            "features must be feature ids, not a boolean mask; "
+            "use e.g. df.loc[mask, 'id']"
+        )
+    wanted = {as_feature_id("features", f) for f in features}
     unknown = sorted(wanted.difference(ids))
     if unknown:
         raise ValueError(f"features not in problem: {unknown}")
@@ -435,13 +520,19 @@ def select_features(
 def per_feature(name: str, value: Any, fids: list[int]) -> dict[int, Any]:
     """Expand a scalar or a ``{feature_id: value}`` mapping to every id in ``fids``.
 
-    A :class:`pandas.Series` is read as a mapping from its index. Extra keys
-    are ignored; a missing key raises ``ValueError`` naming the ids.
+    A :class:`pandas.Series` is read as a mapping from its index (a duplicated
+    index raises). Keys must be feature ids. Extra keys are ignored; a missing
+    key raises ``ValueError`` naming the ids.
     """
     if isinstance(value, pd.Series):
+        dup = value.index[value.index.duplicated()]
+        if len(dup):
+            raise ValueError(
+                f"{name} has duplicate entries for feature(s) {sorted(set(dup.tolist()))}"
+            )
         value = value.to_dict()
     if isinstance(value, Mapping):
-        by_id = {int(k): v for k, v in value.items()}
+        by_id = {as_feature_id(f"{name} keys", k): v for k, v in value.items()}
         missing = [f for f in fids if f not in by_id]
         if missing:
             raise ValueError(f"{name} has no value for feature(s) {missing}")
@@ -526,17 +617,22 @@ def check_cap(name: str, cap: float | None) -> float | None:
 def feature_totals(problem: ConservationProblem, fids: list[int]) -> dict[int, float]:
     """Native-unit total amount per feature (0.0 for features with no rows).
 
-    Raises ``ValueError`` when a total is negative or non-finite: a target
-    computed from it would be meaningless.
+    Totals include every planning unit, locked-out (status 3) ones too, as
+    prioritizr does. Raises ``ValueError`` naming the features when any of
+    their ``pu_vs_features`` amounts is negative or non-finite (pandas would
+    otherwise skip NaN rows silently).
     """
-    totals = problem.feature_amounts()
-    out = {f: float(totals.get(f, 0.0)) for f in fids}
-    bad = [f for f, x in out.items() if not math.isfinite(x) or x < 0]
-    if bad:
+    pvf = problem.pu_vs_features
+    rows = pvf[pvf["species"].isin(fids)]
+    amounts = rows["amount"].astype(float)
+    bad_rows = rows.loc[~np.isfinite(amounts) | (amounts < 0), "species"]
+    if len(bad_rows):
         raise ValueError(
-            f"feature total amount must be finite and >= 0; invalid for feature(s) {bad}"
+            "pu_vs_features amounts must be finite and >= 0; invalid for feature(s) "
+            f"{sorted({int(f) for f in bad_rows})}"
         )
-    return out
+    totals = problem.feature_amounts()
+    return {f: float(totals.get(f, 0.0)) for f in fids}
 
 
 def km2_factors(km2_per_unit: Any, fids: list[int]) -> dict[int, float]:
@@ -582,6 +678,7 @@ git commit -m "feat(targets): shared unit/validation helpers for target methods"
 **Interfaces:**
 - Consumes: Task 2 helpers; `loglinear_targets` from Task 1 (equivalence test).
 - Produces (public):
+  - Type aliases in `_interp.py`: `Interp = Literal["log10", "linear"]`, `Method = Literal["min", "max"]`; `interp` and `*_method` parameters use them. The strings are case-sensitive, as `Literal` implies.
   - `interp_absolute_targets(problem, *, rare_absolute_threshold, rare_relative_target, common_absolute_threshold, common_relative_target, interp, rare_absolute_target=None, rare_method=None, common_absolute_target=None, common_method=None, cap=None, features=None) -> dict[int, float]`
   - `interp_area_targets(problem, *, km2_per_unit, rare_area_threshold, rare_relative_target, common_area_threshold, common_relative_target, interp, rare_area_target=None, rare_method=None, common_area_target=None, common_method=None, cap_km2=1_000_000.0, features=None)`
   - `rodrigues_targets`, `sreekar_targets`, `polak_targets` (`*, km2_per_unit, rare_area_threshold, rare_relative_target, common_area_threshold, common_relative_target, cap_km2, features`)
@@ -680,6 +777,28 @@ def test_interp_area_per_feature_factor_mapping(make_problem):
     assert out == {1: pytest.approx(500.0), 2: pytest.approx(50.0)}
 
 
+@pytest.mark.parametrize(
+    "f, expected",
+    [
+        # f == a takes the interpolation branch: b*f = 500, NOT max(800, 500)
+        (1_000.0, 500.0),
+        (999.0, 800.0),  # f < a: max(800, 0.5*999)
+        # f == e takes the interpolation branch: g*f = 10,000, NOT min(5,000, 10,000)
+        (100_000.0, 10_000.0),
+        (100_001.0, 5_000.0),  # f > e: min(5000, 0.1*100001)
+    ],
+)
+def test_interp_area_threshold_boundaries(make_problem, f, expected):
+    # prioritizr applies the rare/common area targets only for f < a and f > e
+    t = _one(
+        interp_area_targets, make_problem, f,
+        rare_area_threshold=1_000.0, rare_relative_target=0.5, rare_area_target=800.0,
+        rare_method="max", common_area_threshold=100_000.0, common_relative_target=0.1,
+        common_area_target=5_000.0, common_method="min", interp="log10",
+    )
+    assert t == pytest.approx(expected, rel=REL)
+
+
 def test_interp_area_zero_total_is_zero(make_problem):
     p = make_problem({1: 0.0, 2: 10.0})
     out = interp_area_targets(p, km2_per_unit=1.0, **_BOTH)
@@ -736,6 +855,15 @@ def test_interp_absolute_linear_allows_zero_threshold(make_problem):
         common_absolute_threshold=100.0, common_relative_target=0.0, interp="linear",
     )
     assert out[1] == pytest.approx(25.0)  # 50 * (1 - 50/100)
+
+
+def test_interp_absolute_cap_validation(make_problem):
+    with pytest.raises(ValueError, match="cap out of range"):
+        interp_absolute_targets(
+            make_problem({1: 50.0}), rare_absolute_threshold=10.0, rare_relative_target=1.0,
+            common_absolute_threshold=100.0, common_relative_target=0.1, interp="log10",
+            cap=-1.0,
+        )
 
 
 @pytest.mark.parametrize("total", [0.0, 5.0, 10.0, 31.6, 55.0, 100.0, 400.0])
@@ -853,10 +981,12 @@ published values. See ``docs/plans/2026-10-15-stage2-target-methods-design.md`` 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
+from typing import Literal
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.targets._units import (
+    PerFeatureFloat,
     check_cap,
     check_scalar,
     feature_totals,
@@ -864,6 +994,9 @@ from pymarxan.targets._units import (
     km2_factors,
     select_features,
 )
+
+Interp = Literal["log10", "linear"]
+Method = Literal["min", "max"]
 
 _METHODS: dict[str, Callable[[float, float], float]] = {"min": min, "max": max}
 _INTERPS = ("log10", "linear")
@@ -875,12 +1008,12 @@ def _validate_rule(
     a: float,
     b: float,
     c: float | None,
-    rare_method: str | None,
+    rare_method: Method | None,
     e: float,
     g: float,
     h: float | None,
-    common_method: str | None,
-    interp: str,
+    common_method: Method | None,
+    interp: Interp,
 ) -> None:
     check_scalar(f"rare_{unit}_threshold", a, lower=0.0)
     check_scalar(f"common_{unit}_threshold", e, lower=0.0)
@@ -911,12 +1044,12 @@ def _rule(
     a: float,
     b: float,
     c: float | None,
-    rare_method: str | None,
+    rare_method: Method | None,
     e: float,
     g: float,
     h: float | None,
-    common_method: str | None,
-    interp: str,
+    common_method: Method | None,
+    interp: Interp,
 ) -> float:
     """Un-capped, un-clipped target for total ``f`` (same unit as thresholds)."""
     if f < a or (a == e and f == a):
@@ -943,11 +1076,11 @@ def interp_absolute_targets(
     rare_relative_target: float,
     common_absolute_threshold: float,
     common_relative_target: float,
-    interp: str,
+    interp: Interp,
     rare_absolute_target: float | None = None,
-    rare_method: str | None = None,
+    rare_method: Method | None = None,
     common_absolute_target: float | None = None,
-    common_method: str | None = None,
+    common_method: Method | None = None,
     cap: float | None = None,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -1010,16 +1143,16 @@ def interp_absolute_targets(
 def interp_area_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     rare_area_threshold: float,
     rare_relative_target: float,
     common_area_threshold: float,
     common_relative_target: float,
-    interp: str,
+    interp: Interp,
     rare_area_target: float | None = None,
-    rare_method: str | None = None,
+    rare_method: Method | None = None,
     common_area_target: float | None = None,
-    common_method: str | None = None,
+    common_method: Method | None = None,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -1078,7 +1211,7 @@ def interp_area_targets(
 def rodrigues_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     rare_area_threshold: float = 1_000.0,
     rare_relative_target: float = 1.0,
     common_area_threshold: float = 250_000.0,
@@ -1111,7 +1244,7 @@ def rodrigues_targets(
 def sreekar_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     rare_area_threshold: float = 200.0,
     rare_relative_target: float = 1.0,
     common_area_threshold: float = 250_000.0,
@@ -1143,7 +1276,7 @@ def sreekar_targets(
 def polak_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     rare_area_threshold: float = 1_000.0,
     rare_relative_target: float = 1.0,
     common_area_threshold: float = 10_000.0,
@@ -1157,8 +1290,11 @@ def polak_targets(
     between, capped at 1,000,000 km². The absolute target is non-monotone in
     range size (9,000 km² → 1,800 km² but 10,000 km² → 1,000 km²); that is
     inherent to the rule. Polak et al. 2015, *R. Soc. Open Sci.* 2:150107,
-    https://doi.org/10.1098/rsos.150107. The breakpoints follow prioritizr
-    9.0.1 ``spec_polak_targets``; they could not be confirmed from the paper text.
+    https://doi.org/10.1098/rsos.150107 — the breakpoints and linear
+    interpolation are stated in its Methods. Polak et al. also set 100% for
+    Critically Endangered species regardless of range; this preset (like
+    prioritizr's) does not: target CR features separately, e.g.
+    ``relative_targets`` / ``area_targets`` with ``features=cr_ids``.
     """
     return interp_area_targets(
         problem,
@@ -1176,7 +1312,7 @@ def polak_targets(
 def watson_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     rare_area_threshold: float = 10_000.0,
     rare_relative_target: float = 1.0,
     rare_area_target: float = 1_000.0,
@@ -1192,7 +1328,10 @@ def watson_targets(
     (prioritizr errors there). Watson et al. 2010, *Conservation Biology*
     25:324-332, https://doi.org/10.1111/j.1523-1739.2010.01587.x. Values follow
     prioritizr 9.0.1 ``spec_watson_targets``; they could not be confirmed from
-    the paper text.
+    the paper text. Polak et al. (2015), which says it follows Watson et al.,
+    describes a different shape (linear 100% → 10% between 1,000 and
+    10,000 km², see :func:`polak_targets`); check the Watson et al. paper
+    before relying on this preset's exact shape.
     """
     return interp_area_targets(
         problem,
@@ -1222,7 +1361,7 @@ from pymarxan.targets._interp import (
 )
 ```
 
-and add `"interp_absolute_targets"`, `"interp_area_targets"`, `"polak_targets"`, `"rodrigues_targets"`, `"sreekar_targets"`, `"watson_targets"` to `__all__` (alphabetical). **Ordering rule for this and later tasks:** import blocks in module-name order `_basic`, `_compose`, `_interp`, `_population`, `_redlist` (ruff isort), `__all__` alphabetical.
+and add `"interp_absolute_targets"`, `"interp_area_targets"`, `"polak_targets"`, `"rodrigues_targets"`, `"sreekar_targets"`, `"watson_targets"` to `__all__` (alphabetical). **Ordering rule for this and later tasks:** import blocks go in module-name order `_basic`, `_compose`, `_interp`, `_population`, `_redlist` (ruff isort), and `__all__` stays alphabetical.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -1254,7 +1393,7 @@ git commit -m "feat(targets): interpolated area/absolute targets + Rodrigues, Sr
   - `rl_ecosystem_targets(...)`, with the same signature.
   - `jung_targets(problem, *, km2_per_unit, status="VU", prop_uplift=0.1, cap_km2, features)`
   - `ward_targets(problem, *, km2_per_unit, status="CR", prop_uplift=0.0, cap_km2, features)`
-  - Module constants `SPECIES_A`, `SPECIES_B`, `ECOSYSTEM_A`, `ECOSYSTEM_B` (dicts keyed by upper-case criterion, then status).
+  - Private module constants `_SPECIES_A`, `_SPECIES_B`, `_ECOSYSTEM_A`, `_ECOSYSTEM_B` (dicts keyed by upper-case criterion, then status). They are not exported; spec §2 lists no public constants. `method` is typed `Literal["max", "min"]`.
 
 - [ ] **Step 1: Write the failing tests** `tests/pymarxan/targets/test_targets_redlist.py`:
 
@@ -1325,6 +1464,14 @@ def test_rl_ecosystem_a2b_any_case(make_problem, crit):
     t = _one(rl_ecosystem_targets, make_problem, 10_000.0, status="en", criterion_a=crit,
              criterion_b="b2")
     assert t == pytest.approx(5_000.0, rel=REL)
+
+
+@pytest.mark.parametrize("status", ["EN", "en", " En ", "eN\t"])
+def test_rl_species_status_case_and_whitespace(make_problem, status):
+    # spreadsheet values: max(5000, 0.3*50000) = 15,000 at EN/A1/B1
+    t = _one(rl_species_targets, make_problem, 50_000.0, status=status, criterion_a="A1",
+             criterion_b="B1")
+    assert t == pytest.approx(15_000.0, rel=REL)
 
 
 def test_rl_species_per_feature_status(make_problem):
@@ -1421,10 +1568,13 @@ Mirrors prioritizr 9.0.1 ``spec_rl_species_targets`` /
 """
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
+from typing import Literal
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.targets._units import (
+    PerFeatureFloat,
+    PerFeatureStr,
     check_cap,
     check_scalar,
     feature_totals,
@@ -1439,17 +1589,17 @@ _Table = dict[str, dict[str, float]]
 _STATUSES = ("CR", "EN", "VU")
 _A2_SPECIES = {"CR": 0.8, "EN": 0.5, "VU": 0.3}
 
-# IUCN Red List Categories and Criteria: criterion A reduction thresholds and
+# IUCN (2012) Red List Categories and Criteria v3.1: criterion A reduction thresholds and
 # criterion B range thresholds (km²; B1 = extent of occurrence, B2 = area of
 # occupancy). Species EN-B2 is 500 km² (prioritizr's docs say 50; its code
 # and IUCN say 500).
-SPECIES_A: _Table = {
+_SPECIES_A: _Table = {
     "A1": {"CR": 0.9, "EN": 0.7, "VU": 0.5},
     "A2": _A2_SPECIES,
     "A3": _A2_SPECIES,
     "A4": _A2_SPECIES,
 }
-SPECIES_B: _Table = {
+_SPECIES_B: _Table = {
     "B1": {"CR": 100.0, "EN": 5_000.0, "VU": 20_000.0},
     "B2": {"CR": 10.0, "EN": 500.0, "VU": 2_000.0},
 }
@@ -1457,13 +1607,13 @@ SPECIES_B: _Table = {
 _A1_ECO = {"CR": 0.8, "EN": 0.5, "VU": 0.3}
 # IUCN Red List of Ecosystems guidelines v2.0. A3 VU is 0.5 (IUCN thresholds
 # 90/70/50%); prioritizr 9.0.1 has 0.3 — a deliberate deviation.
-ECOSYSTEM_A: _Table = {
+_ECOSYSTEM_A: _Table = {
     "A1": _A1_ECO,
     "A2A": _A1_ECO,
     "A2B": _A1_ECO,
     "A3": {"CR": 0.9, "EN": 0.7, "VU": 0.5},
 }
-ECOSYSTEM_B: _Table = {
+_ECOSYSTEM_B: _Table = {
     "B1": {"CR": 2_000.0, "EN": 20_000.0, "VU": 50_000.0},
     "B2": {"CR": 200.0, "EN": 2_000.0, "VU": 5_000.0},
 }
@@ -1476,12 +1626,12 @@ def _norm(value: object) -> str:
 def _rl_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    status: str | Mapping[int, str],
+    km2_per_unit: PerFeatureFloat,
+    status: PerFeatureStr,
     criterion_a: str,
     criterion_b: str,
     prop_uplift: float,
-    method: str,
+    method: Literal["max", "min"],
     cap_km2: float | None,
     features: Iterable[int] | None,
     a_table: _Table,
@@ -1521,12 +1671,12 @@ def _rl_targets(
 def rl_species_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    status: str | Mapping[int, str],
+    km2_per_unit: PerFeatureFloat,
+    status: PerFeatureStr,
     criterion_a: str,
     criterion_b: str,
     prop_uplift: float = 0.0,
-    method: str = "max",
+    method: Literal["max", "min"] = "max",
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -1546,8 +1696,9 @@ def rl_species_targets(
         prop_uplift: Proportional uplift ``p >= 0``.
         method: ``"max"`` (default) or ``"min"`` combination of the two terms.
 
-    IUCN (2025) Red List Categories and Criteria; cap from Butchart et al.
-    2015. Mirrors prioritizr 9.0.1 ``spec_rl_species_targets`` but accepts a
+    Thresholds from IUCN (2012) Red List Categories and Criteria, Version 3.1,
+    2nd edition (Gland & Cambridge: IUCN); cap from Butchart et al. 2015.
+    Mirrors prioritizr 9.0.1 ``spec_rl_species_targets`` but accepts a
     per-feature status.
     """
     return _rl_targets(
@@ -1560,20 +1711,20 @@ def rl_species_targets(
         method=method,
         cap_km2=cap_km2,
         features=features,
-        a_table=SPECIES_A,
-        b_table=SPECIES_B,
+        a_table=_SPECIES_A,
+        b_table=_SPECIES_B,
     )
 
 
 def rl_ecosystem_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    status: str | Mapping[int, str],
+    km2_per_unit: PerFeatureFloat,
+    status: PerFeatureStr,
     criterion_a: str,
     criterion_b: str,
     prop_uplift: float = 0.0,
-    method: str = "max",
+    method: Literal["max", "min"] = "max",
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -1581,8 +1732,10 @@ def rl_ecosystem_targets(
 
     Same formula as :func:`rl_species_targets` with the ecosystem thresholds:
     ``criterion_a`` in A1, A2a, A2b, A3 and ``criterion_b`` in B1, B2
-    (case-insensitive). A3 VU uses 0.5 per the IUCN RLE guidelines v2.0
-    (prioritizr 9.0.1 uses 0.3).
+    (case-insensitive). A3 VU uses 0.5 per the IUCN (2024) Red List of
+    Ecosystems guidelines v2.0 (thresholds 90/70/50%; criteria defined in
+    Keith et al. 2013, *PLoS ONE* 8:e62111,
+    https://doi.org/10.1371/journal.pone.0062111); prioritizr 9.0.1 uses 0.3.
     """
     return _rl_targets(
         problem,
@@ -1594,16 +1747,16 @@ def rl_ecosystem_targets(
         method=method,
         cap_km2=cap_km2,
         features=features,
-        a_table=ECOSYSTEM_A,
-        b_table=ECOSYSTEM_B,
+        a_table=_ECOSYSTEM_A,
+        b_table=_ECOSYSTEM_B,
     )
 
 
 def jung_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    status: str | Mapping[int, str] = "VU",
+    km2_per_unit: PerFeatureFloat,
+    status: PerFeatureStr = "VU",
     prop_uplift: float = 0.1,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
@@ -1614,8 +1767,10 @@ def jung_targets(
     (prioritizr's docs say 80%; its code and tests give 77%). Jung et al.
     2021, *Nat. Ecol. Evol.* 5:1499-1509,
     https://doi.org/10.1038/s41559-021-01528-7 (correction:
-    https://doi.org/10.1038/s41559-021-01569-y). Parameters follow prioritizr
-    9.0.1 ``spec_jung_targets``; not confirmable from accessible paper text.
+    https://doi.org/10.1038/s41559-021-01569-y). The 2,200 km² floor and the
+    100% clip for small ranges are stated in its Methods ("Target setting");
+    the 77% proportional term follows prioritizr 9.0.1 ``spec_jung_targets``
+    (the equation is not recoverable from accessible text).
     """
     return rl_species_targets(
         problem,
@@ -1633,8 +1788,8 @@ def jung_targets(
 def ward_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    status: str | Mapping[int, str] = "CR",
+    km2_per_unit: PerFeatureFloat,
+    status: PerFeatureStr = "CR",
     prop_uplift: float = 0.0,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
@@ -1700,7 +1855,7 @@ git commit -m "feat(targets): IUCN Red List species/ecosystem targets + Jung, Wa
 - Consumes: Task 2 helpers.
 - Produces (public):
   - `pop_size_targets(problem, *, km2_per_unit, pop_size, density_per_km2, cap_km2=1_000_000.0, features=None)`
-  - `wilson_targets(problem, *, km2_per_unit, mean_growth_rate, var_growth_rate, density_per_km2, cap_km2=1_000_000.0, features=None)`
+  - `wilson_targets(problem, *, km2_per_unit, mean_growth_rate, var_growth_rate, density_per_km2, cap_km2=1_000_000.0, features=None)`. Raises `ValueError` naming the features when `β <= 0`, or when `1e5·σ²·β²/2 <= 1` (large-population approximation invalid; spec §6 as revised by the 4-lens science review).
   - `duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2, cap_km2=None, features=None)`
 
 - [ ] **Step 1: Write the failing tests** `tests/pymarxan/targets/test_targets_population.py`:
@@ -1791,12 +1946,23 @@ def test_wilson_overflow_maps_to_cap_or_range(make_problem):
     assert uncapped[1] == 2e7
 
 
-def test_wilson_underflow_gives_zero(make_problem):
-    # beta = 5e-6, base = 5e-8 -> k = exp(-3.36e6) = 0.0
-    p = make_problem({1: 1e4})
-    out = wilson_targets(p, km2_per_unit=1.0, mean_growth_rate=0.0200001,
-                         var_growth_rate=0.04, density_per_km2=1.0)
-    assert out[1] == 0.0
+def test_wilson_divides_by_density(make_problem):
+    # k / d = 13.374806099 / 0.5 (prioritizr's docs write d*k; its code divides)
+    p = make_problem({1: 1e6, 2: 1e6})
+    out = wilson_targets(p, km2_per_unit=1.0, mean_growth_rate=0.1, var_growth_rate=0.04,
+                         density_per_km2={2: 2.0, 1: 0.5})
+    assert out == {1: pytest.approx(26.749612199, rel=REL),
+                   2: pytest.approx(6.687403050, rel=REL)}
+
+
+def test_wilson_invalid_approximation_raises(make_problem):
+    # beta = 5e-6 -> base = 1e5*0.04*beta**2/2 = 5e-8 <= 1: the large-population
+    # approximation would give k ~ 0 (no protection) where Lande's exact model
+    # needs ~e^63 individuals, so refuse instead (spec §6)
+    p = make_problem({1: 1e4, 2: 1e4})
+    with pytest.raises(ValueError, match=r"approximation is invalid.*feature\(s\) \[1\]"):
+        wilson_targets(p, km2_per_unit=1.0, mean_growth_rate={1: 0.0200001, 2: 0.1},
+                       var_growth_rate=0.04, density_per_km2=1.0)
 
 
 def test_wilson_nonpositive_beta_raises(make_problem):
@@ -1853,10 +2019,11 @@ from __future__ import annotations
 
 import math
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.targets._units import (
+    PerFeatureFloat,
     check_cap,
     feature_totals,
     finish_area,
@@ -1871,9 +2038,9 @@ _LN_FLOAT_MAX = math.log(sys.float_info.max)
 def pop_size_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    pop_size: float | Mapping[int, float],
-    density_per_km2: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
+    pop_size: PerFeatureFloat,
+    density_per_km2: PerFeatureFloat,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -1904,25 +2071,32 @@ def pop_size_targets(
 def wilson_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    mean_growth_rate: float | Mapping[int, float],
-    var_growth_rate: float | Mapping[int, float],
-    density_per_km2: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
+    mean_growth_rate: PerFeatureFloat,
+    var_growth_rate: PerFeatureFloat,
+    density_per_km2: PerFeatureFloat,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
     """Wilson et al. (2010) persistence-based targets.
 
     ``β = 2r/σ² − 1``; the population needed to persist 100,000 years is
-    ``k = (1e5·σ²·β²/2)^(1/β)``; ``t = min(k / d, cap, range)``. Computed in log
-    space: an overflowing ``k`` is treated as infinite (the target becomes
-    ``min(cap, range)``), and as ``β → 0⁺`` ``k`` can underflow to 0 (target 0) —
-    such small ``β`` is scientifically degenerate. ``β <= 0`` (``r <= σ²/2``)
-    raises ``ValueError``.
+    ``k = (1e5·σ²·β²/2)^(1/β)``; ``t = min(k / d, cap, range)``. This is the
+    large-population approximation of Lande's (1993) mean time to extinction
+    under environmental stochasticity, solved for ``k``
+    (https://doi.org/10.1086/285580).
+
+    Raises ``ValueError`` naming the features where the approximation breaks
+    down: ``β <= 0`` (``r <= σ²/2``) and ``1e5·σ²·β²/2 <= 1`` (it would give
+    ``k <= 1`` individual, while Lande's exact model needs a very large
+    population there — prioritizr returns NaN/Inf or ~0 in these cases).
+    ``k`` is computed in log space; an overflowing ``k`` is treated as
+    infinite, so the target becomes ``min(cap, range)``.
 
     Wilson et al. 2010, *Ecol. Appl.* 20:1721-1732,
     https://doi.org/10.1890/09-1051.1. The formula follows prioritizr 9.0.1
-    ``spec_wilson_targets``.
+    ``spec_wilson_targets``; it could not be checked against the (closed
+    access) paper text.
     """
     cap_v = check_cap("cap_km2", cap_km2)
     fids = select_features(problem, features)
@@ -1942,12 +2116,19 @@ def wilson_targets(
             "wilson_targets needs mean_growth_rate > var_growth_rate / 2 "
             f"(beta > 0); invalid for feature(s) {bad}"
         )
+    base = {fid: 1e5 * s2[fid] * beta[fid] ** 2 / 2.0 for fid in fids}
+    weak = [fid for fid in fids if base[fid] <= 1.0]
+    if weak:
+        raise ValueError(
+            "wilson_targets' large-population approximation is invalid where "
+            "1e5 * var_growth_rate * beta**2 / 2 <= 1 (mean_growth_rate too close to "
+            f"var_growth_rate / 2); invalid for feature(s) {weak}"
+        )
     totals = feature_totals(problem, fids)
     factors = km2_factors(km2_per_unit, fids)
     out: dict[int, float] = {}
     for fid in fids:
-        b = beta[fid]
-        ln_k = math.log(1e5 * s2[fid] * b * b / 2.0) / b
+        ln_k = math.log(base[fid]) / beta[fid]
         k_pop = math.inf if ln_k > _LN_FLOAT_MAX else math.exp(ln_k)
         f = totals[fid] * factors[fid]
         out[fid] = finish_area(k_pop / d[fid], f, factors[fid], cap_v)
@@ -1957,9 +2138,9 @@ def wilson_targets(
 def duran_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    probability_target: float | Mapping[int, float],
-    historical_area_km2: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
+    probability_target: PerFeatureFloat,
+    historical_area_km2: PerFeatureFloat,
     cap_km2: float | None = None,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -2041,6 +2222,7 @@ git commit -m "feat(targets): population-size, Wilson and Duran targets"
 """Tests for absolute/area/rule targets and the min/max combinators (spec §7)."""
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from pymarxan.targets import (
@@ -2119,6 +2301,21 @@ def test_rule_targets_joined_by_id_not_position(make_problem):
     assert out == {1: pytest.approx(3_000.0), 2: pytest.approx(5_000.0)}
 
 
+def test_rule_targets_traits_series(make_problem):
+    p = make_problem({1: 10_000.0, 2: 10_000.0})
+    traits = pd.Series({2: {"endemic"}, 1: {"harvested"}})
+    out = rule_targets(p, km2_per_unit=1.0, baseline=0.3, rules=_RULES, traits=traits)
+    assert out == {1: pytest.approx(2_000.0), 2: pytest.approx(5_000.0)}
+
+
+def test_rule_targets_rejects_bare_string_trait(make_problem):
+    # "ex" would otherwise be read as traits {"e", "x"}
+    p = make_problem({1: 10_000.0})
+    with pytest.raises(ValueError, match=r"feature\(s\) \[1\] must be a collection"):
+        rule_targets(p, km2_per_unit=1.0, baseline=0.3, rules={"e": 0.1, "x": 0.1},
+                     traits={1: "ex"})
+
+
 @pytest.mark.parametrize(
     "kw, match",
     [
@@ -2178,8 +2375,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping
 
+import pandas as pd
+
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.targets._units import (
+    PerFeatureFloat,
     check_cap,
     check_scalar,
     feature_totals,
@@ -2194,7 +2394,7 @@ from pymarxan.targets._units import (
 def absolute_targets(
     problem: ConservationProblem,
     *,
-    amount: float | Mapping[int, float],
+    amount: PerFeatureFloat,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
     """Explicit targets in native units (scalar or ``{feature_id: amount}``).
@@ -2210,8 +2410,8 @@ def absolute_targets(
 def area_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
-    area_km2: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
+    area_km2: PerFeatureFloat,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -2233,10 +2433,10 @@ def area_targets(
 def rule_targets(
     problem: ConservationProblem,
     *,
-    km2_per_unit: float | Mapping[int, float],
+    km2_per_unit: PerFeatureFloat,
     baseline: float,
     rules: Mapping[str, float],
-    traits: Mapping[int, Collection[str]],
+    traits: Mapping[int, Collection[str]] | pd.Series,
     cap_km2: float | None = 1_000_000.0,
     features: Iterable[int] | None = None,
 ) -> dict[int, float]:
@@ -2249,9 +2449,11 @@ def rule_targets(
         baseline: Baseline proportion in [0, 1].
         rules: Per-trait adjustment, each in [-1, 1], e.g.
             ``{"endemic": 0.2, "harvested": -0.1}``.
-        traits: ``{feature_id: {"endemic", ...}}`` for every selected feature
-            (an empty collection is allowed). A trait missing from ``rules``
-            raises ``ValueError``.
+        traits: ``{feature_id: {"endemic", ...}}`` (or a Series indexed by
+            feature id) for every selected feature; an empty collection is
+            allowed. A bare string is rejected (it would be read as one trait
+            per character): wrap it, ``{"endemic"}``. A trait missing from
+            ``rules`` raises ``ValueError``.
 
     Harris & Holness 2023, *Biol. Conserv.* 285:110218,
     https://doi.org/10.1016/j.biocon.2023.110218. Mirrors prioritizr 9.0.1
@@ -2262,9 +2464,15 @@ def rule_targets(
         check_scalar(f"rules[{name!r}]", adj, lower=-1.0, upper=1.0)
     cap_v = check_cap("cap_km2", cap_km2)
     fids = select_features(problem, features)
-    if not isinstance(traits, Mapping):
-        raise ValueError("traits must be a mapping of feature id to a collection of traits")
+    if not isinstance(traits, (Mapping, pd.Series)):
+        raise ValueError("traits must map feature id to a collection of trait names")
     feature_traits = per_feature("traits", traits, fids)
+    bare = [fid for fid, ts in feature_traits.items() if isinstance(ts, str)]
+    if bare:
+        raise ValueError(
+            f"traits for feature(s) {bare} must be a collection of trait names, "
+            'not a string; wrap it, e.g. {"endemic"}'
+        )
     unknown = sorted(
         {str(t) for ts in feature_traits.values() for t in ts}.difference(rules)
     )
@@ -2568,7 +2776,7 @@ def test_rescaled_native_unit_scales_targets(make_problem, name):
 def test_end_to_end_rodrigues_mip(tiny_problem):
     # tests/data/simple totals: species 1 = 60, 2 = 45, 3 = 33 (native units).
     # Treat one unit as 1,000 km²: ranges 60,000 / 45,000 / 33,000 km² (log10 band).
-    problem = tiny_problem.copy_with()
+    problem = tiny_problem.copy_with(features=tiny_problem.features.copy())
     t = rodrigues_targets(problem, km2_per_unit=1_000.0)
     totals = problem.feature_amounts()
     for fid, value in t.items():
@@ -2603,7 +2811,7 @@ git commit -m "test(targets): cross-method invariants, public API, end-to-end MI
 - Modify: `docs/TUTORIAL.md` (TOC entry 9 + new section before `## River connectivity and barrier restoration`)
 - Modify: `tests/test_tutorial_examples.py` (new `test_section_target_methods` before the rivers section)
 - Modify: `CHANGELOG.md` (`## [Unreleased]`)
-- Modify: `README.md` (line 76 architecture comment; line 148 feature bullet)
+- Modify: `README.md` (line 76 architecture comment; line 147 feature bullet)
 - Modify: `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` (Stage 2 heading note)
 
 **Interfaces:**
@@ -2618,35 +2826,40 @@ git commit -m "test(targets): cross-method invariants, public API, end-to-end MI
 
 
 def test_section_target_methods():
+    problem = build_minimal_problem()
+
+    # --- tutorial block (verbatim) ---
     from pymarxan.solvers.base import SolverConfig
     from pymarxan.solvers.mip_solver import MIPSolver
     from pymarxan.targets import apply_targets, jung_targets, rodrigues_targets
 
-    problem = build_minimal_problem()
+    # apply_targets edits features in place, so work on a copy.
+    targeted = problem.copy_with(features=problem.features.copy())
 
-    # One amount unit = 1,000 km² of habitat. There is no default unit:
-    # every area-based method needs km2_per_unit.
+    # One amount unit = 1,000 km² of habitat. There is no default unit.
     KM2 = 1_000.0
     threatened = [3]  # mangrove: IUCN VU
     others = [1, 2]
 
-    apply_targets(problem, jung_targets(problem, km2_per_unit=KM2, features=threatened))
-    apply_targets(problem, rodrigues_targets(problem, km2_per_unit=KM2, features=others))
+    apply_targets(targeted, jung_targets(targeted, km2_per_unit=KM2, features=threatened))
+    apply_targets(targeted, rodrigues_targets(targeted, km2_per_unit=KM2, features=others))
 
-    targets = dict(zip(problem.features["id"], problem.features["target"]))
+    best = MIPSolver().solve(targeted, SolverConfig(num_solutions=1))[0]
+    # --- end tutorial block ---
+
+    targets = dict(zip(targeted.features["id"], targeted.features["target"]))
     # coral 6,000 km² -> log10 band; mangrove 3,000 km² -> max(2,200, 0.77*3,000) = 2,310
     assert targets[1] == pytest.approx(4.24772, rel=1e-4)
     assert targets[2] == pytest.approx(3.09612, rel=1e-4)
     assert targets[3] == pytest.approx(2.31, rel=1e-9)
-
-    best = MIPSolver().solve(problem, SolverConfig(num_solutions=1))[0]
     assert all(best.targets_met.values())
+    assert list(problem.features["target"]) == [5.0, 4.0, 3.0]  # original untouched
 ```
 
 Run: `/opt/micromamba/envs/shiny/bin/pytest tests/test_tutorial_examples.py::test_section_target_methods -q`
 Expected: PASS. The code exists after Tasks 3–4; this test pins the tutorial text written next. If it fails, recheck the expected values against the formulas before changing anything.
 
-- [ ] **Step 2: Add the tutorial section.** In `docs/TUTORIAL.md`, add TOC line `9. [Published target-setting methods (v0.40)](#9-published-target-setting-methods-v040)` after item 8. Insert this section immediately before `## River connectivity and barrier restoration`. The code block is the test body verbatim, without the asserts:
+- [ ] **Step 2: Add the tutorial section.** In `docs/TUTORIAL.md`, add TOC line `9. [Published target-setting methods (v0.40)](#9-published-target-setting-methods-v040)` after item 8. Insert this section immediately before `## River connectivity and barrier restoration`. The code block is exactly the lines between `# --- tutorial block (verbatim) ---` and `# --- end tutorial block ---` in the test, dedented. Like every other section, it reuses the section-1 `problem`; `build_minimal_problem()` exists only in the test file:
 
 ````markdown
 ## 9. Published target-setting methods (v0.40)
@@ -2668,24 +2881,28 @@ from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.targets import apply_targets, jung_targets, rodrigues_targets
 
-problem = build_minimal_problem()
+# apply_targets edits features in place, so work on a copy.
+targeted = problem.copy_with(features=problem.features.copy())
 
-# One amount unit = 1,000 km² of habitat.
+# One amount unit = 1,000 km² of habitat. There is no default unit.
 KM2 = 1_000.0
 threatened = [3]  # mangrove: IUCN VU
 others = [1, 2]
 
-apply_targets(problem, jung_targets(problem, km2_per_unit=KM2, features=threatened))
-apply_targets(problem, rodrigues_targets(problem, km2_per_unit=KM2, features=others))
+apply_targets(targeted, jung_targets(targeted, km2_per_unit=KM2, features=threatened))
+apply_targets(targeted, rodrigues_targets(targeted, km2_per_unit=KM2, features=others))
 
-best = MIPSolver().solve(problem, SolverConfig(num_solutions=1))[0]
+best = MIPSolver().solve(targeted, SolverConfig(num_solutions=1))[0]
 ```
 
 Mangrove (3,000 km²) gets Jung et al.'s `max(2,200 km², 77%)` = 2,310 km²
 (2.31 units); coral and seagrass get Rodrigues et al.'s log-interpolated
 share between 100% (< 1,000 km²) and 10% (> 250,000 km²). Targets never
 exceed a feature's total, and most methods cap at 1,000,000 km²
-(`cap_km2=None` disables). See each function's docstring for its source.
+(`cap_km2=None` disables). Totals include locked-out planning units (as in
+prioritizr), so a target can still be unattainable; `presolve_check`
+flags that. Per-feature inputs accept a dict or a pandas Series indexed by
+feature id. See each function's docstring for its source.
 `loglinear_targets` is deprecated: use
 `interp_absolute_targets(..., interp="log10")`.
 
@@ -2703,8 +2920,8 @@ exceed a feature's total, and most methods cap at 1,000,000 km²
   - `sreekar_targets`: Sreekar & Watson 2026, https://doi.org/10.1038/s44358-026-00169-7.
   - `polak_targets`: Polak et al. 2015, https://doi.org/10.1098/rsos.150107.
   - `watson_targets`: Watson et al. 2010, https://doi.org/10.1111/j.1523-1739.2010.01587.x.
-  - `rl_species_targets`: IUCN Red List Categories and Criteria.
-  - `rl_ecosystem_targets`: IUCN Red List of Ecosystems guidelines v2.0.
+  - `rl_species_targets`: IUCN (2012) Red List Categories and Criteria v3.1, 2nd ed.
+  - `rl_ecosystem_targets`: IUCN (2024) Red List of Ecosystems guidelines v2.0; Keith et al. 2013, https://doi.org/10.1371/journal.pone.0062111.
   - `jung_targets`: Jung et al. 2021, https://doi.org/10.1038/s41559-021-01528-7 (correction https://doi.org/10.1038/s41559-021-01569-y).
   - `ward_targets`: Ward et al. 2025, https://doi.org/10.1073/pnas.2414985122.
   - `pop_size_targets`: minimum viable population ÷ density.
@@ -2716,13 +2933,14 @@ exceed a feature's total, and most methods cap at 1,000,000 km²
   - RLE criterion A3 VU threshold is 0.5 (IUCN guidelines; prioritizr has 0.3).
   - Watson at exactly the 10,000 km² threshold returns 1,000 km² (prioritizr errors).
   - Zero-total features get target 0 (prioritizr returns NaN).
-  - `wilson_targets` raises when `r <= σ²/2`, and computes in log space so it can't overflow (prioritizr returns NaN/Inf).
+  - `wilson_targets` raises where its large-population approximation (Lande 1993, https://doi.org/10.1086/285580) is invalid: `r <= σ²/2`, or `1e5·σ²·β²/2 <= 1`. There prioritizr returns NaN/Inf, or a near-zero target for the most extinction-prone species. It also computes in log space so it can't overflow.
   - Per-feature inputs are keyed by feature id (prioritizr misaligns them on feature subsets and in `rule` ordering).
   - Red List criteria are case-insensitive (prioritizr cannot match `"A2b"`).
   - Red List `status` can vary per feature.
   - `min_targets`/`max_targets` refuse inputs with different features.
   - Where prioritizr's documentation and code disagree, pymarxan follows the code: Jung 77% (not 80%), Ward 100 km² (not 100,000), species EN-B2 500 km² (not 50), and population targets divide by density.
-- Pinned worked examples are hand-computed from each published rule as prioritizr implements it. Polak, Watson, Sreekar, Jung, Ward and Wilson parameters could not be confirmed from accessible paper text; the docstrings say so.
+- Pinned worked examples are hand-computed from each published rule as prioritizr implements it. Paper text confirms Rodrigues/Butchart, Polak's breakpoints, Jung's 2,200 km² floor and Durán's z = 0.25. Watson, Sreekar, Ward and Wilson parameters, and Jung's 77% term, could not be confirmed from accessible paper text; the docstrings say so. `polak_targets` does not apply Polak et al.'s 100%-for-Critically-Endangered rule (target CR features separately).
+- Feature totals include locked-out planning units, as in prioritizr. Per-feature inputs accept dicts or pandas Series keyed by feature id; non-id keys, duplicated Series indexes, boolean masks and NaN/negative amounts raise `ValueError`.
 
 ### Changed
 
@@ -2735,16 +2953,16 @@ exceed a feature's total, and most methods cap at 1,000,000 km²
 
 - [ ] **Step 4: README.**
   - Line 76: change `│   ├── targets/           Automatic target rules (relative, log-linear, group)` to `│   ├── targets/           Target rules: relative, group, range-size, IUCN Red List, population, composition`.
-  - Line 148: change `- Automatic **target-setting** rules (relative, IUCN-style log-linear, per-group)` to `- Published **target-setting** methods (Rodrigues, Watson, Polak, Sreekar, IUCN Red List species/ecosystems, Jung, Ward, population size, Wilson, Durán, rule-based, min/max) with explicit km² units`.
+  - Line 147: change `- Automatic **target-setting** rules (relative, IUCN-style log-linear, per-group)` to `- Published **target-setting** methods (Rodrigues, Watson, Polak, Sreekar, IUCN Red List species/ecosystems, Jung, Ward, population size, Wilson, Durán, rule-based, min/max) with explicit km² units`.
 
-- [ ] **Step 5: Roadmap.** In `docs/plans/2026-10-11-prioritizr-parity-roadmap.md`, change the heading `## Stage 2 — v0.40.0: Published target-setting methods` to `## Stage 2 — v0.40.0: Published target-setting methods (BUILT, pending release)`, and add one line under it: `**As built:** see docs/plans/2026-10-15-stage2-target-methods-design.md; worked examples are hand-computed from each rule as prioritizr implements it (no paper publishes numeric pairs).`
+- [ ] **Step 5: Roadmap.** In `docs/plans/2026-10-11-prioritizr-parity-roadmap.md`, follow the Stage 1 convention. Change the heading `## Stage 2 — v0.40.0: Published target-setting methods` to `## Stage 2 — v0.40.0: Published target-setting methods (SHIPPED, v0.40)`, and add under it: `**As shipped (v0.40.0):** see docs/plans/2026-10-15-stage2-target-methods-design.md. Worked examples are hand-computed from each rule as prioritizr implements it (no paper publishes numeric pairs); wilson_targets refuses inputs where its large-population approximation is invalid.` The release follows this branch directly (spec §10). If it doesn't, the release session must re-check this line.
 
 - [ ] **Step 6: Full gate.**
 
 Run: `PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make check`
 Expected: lint and types clean; the full suite passes (≈2690 + ~190 new); coverage ≥ 75%.
-Run: `PATH="/opt/micromamba/envs/shiny/bin:$HOME/.local/bin:$PWD/.venv/bin:$PATH" make docs && grep -c "rodrigues_targets" docs/api/pymarxan/targets.html`
-Expected: a count ≥ 1. This proves the pdoc page is not empty. `docs/api` is generated and not tracked: run `rm -rf docs/api` afterwards so it is not committed.
+Run: `rm -rf /tmp/pdoc-targets && .venv/bin/pdoc src/pymarxan/targets -o /tmp/pdoc-targets && grep -c "rodrigues_targets" /tmp/pdoc-targets/pymarxan/targets.html`
+Expected: a count ≥ 1, which proves the pdoc page is not empty. Don't use `make docs`: pdoc is installed only in `.venv`, which lacks rasterio, so documenting all of `pymarxan` fails at `pymarxan.spatial` (found by the 4-lens review). Documenting just the targets package avoids that and writes nothing into the repo.
 
 - [ ] **Step 7: Commit.**
 

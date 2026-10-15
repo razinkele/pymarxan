@@ -77,9 +77,18 @@ PUs, including locked-out ones, as prioritizr does); `k_j` = km² per native uni
    `relative_targets`, `group_targets` and `loglinear_targets` keep their v0.39 signatures
    (no `features=` added — `group_targets` already selects by its `groups` keys).
 6. **Per-feature inputs** (`status`, `pop_size`, `density_per_km2`, …) accept a scalar (applied
-   to every selected feature) or a `Mapping[int, ...]`. Mappings may have extra keys; a missing
-   key for a selected feature, or a non-finite / out-of-range value, raises `ValueError`
-   naming the feature id(s). Values are looked up **by feature id**, never by position.
+   to every selected feature), a `Mapping[int, ...]`, or a `pandas.Series` indexed by feature
+   id (public type aliases `PerFeatureFloat` / `PerFeatureStr`). Mappings may have extra keys; a
+   missing key for a selected feature, or a non-finite / out-of-range value, raises `ValueError`
+   naming the feature id(s). Values are looked up **by feature id**, never by position. Keys
+   and `features=` entries must be integral (int, numpy integer, integral float); names,
+   non-integral floats and booleans raise `ValueError` naming the argument, a Series with a
+   duplicated index raises, and a boolean-mask Series passed as `features=` raises.
+   (Added after the 2026-10-15 4-lens review.)
+6a. **Feature data.** A selected feature with any NaN, infinite or negative `pu_vs_features`
+   amount raises `ValueError` naming it (pandas' sum would silently skip NaN). Totals include
+   locked-out (status 3) PUs, as in prioritizr; this is documented in the tutorial and
+   CHANGELOG and pinned by a test.
 7. **Unit-free exceptions.** `relative_targets` and `group_targets` (proportions) and
    `absolute_targets`, `interp_absolute_targets` (native units) take no `km2_per_unit`.
 8. **Errors.** All validation failures raise `ValueError` with the offending argument and/or
@@ -151,10 +160,15 @@ threshold always equals its `rare_area_threshold`.
 
 Provenance (docstrings): Rodrigues et al. 2004 (10.1641/0006-3568(2004)054[1092:GGAPRF]2.0.CO;2),
 rule and 1e6 cap confirmed via Butchart et al. 2015 (10.1111/conl.12158) methods text. Polak
-et al. 2015 (10.1098/rsos.150107), Watson et al. 2010 (10.1111/j.1523-1739.2010.01587.x),
-Sreekar & Watson 2026 (10.1038/s44358-026-00169-7): numeric breakpoints follow prioritizr's
-implementation; not confirmable from accessible paper text — docstrings say so. Polak's
-docstring notes its absolute target is non-monotone in `f` (inherent to the rule).
+et al. 2015 (10.1098/rsos.150107): breakpoints and linear interpolation confirmed from its
+Methods text (4-lens science review); Polak also gives Critically Endangered species 100%
+regardless of range, which the preset (like prioritizr's) does not apply — the docstring says
+to target CR features separately. Watson et al. 2010 (10.1111/j.1523-1739.2010.01587.x) and
+Sreekar & Watson 2026 (10.1038/s44358-026-00169-7): numeric values follow prioritizr's
+implementation; not confirmable from accessible paper text — docstrings say so. Watson's
+docstring also notes that Polak 2015, which says it follows Watson et al., describes the
+linear Polak shape instead. Polak's docstring notes its absolute target is non-monotone in
+`f` (inherent to the rule).
 
 Watson at f = 10,000 gives 1,000 on either branch (`min(1,000, 10,000)` = `0.1·10,000`), so
 that regression test proves only that pymarxan does not crash where prioritizr does; the
@@ -219,9 +233,12 @@ Presets (same rule as §4.3: only the Defaults column plus `km2_per_unit`, `cap_
 
 prioritizr docs say Jung = 80% and Ward = 100,000 km²; code and its tests give 77% and 100 km².
 Jung et al. 2021 (10.1038/s41559-021-01528-7) has a correction (10.1038/s41559-021-01569-y),
-cited in the docstring. Ward et al. 2025 (10.1073/pnas.2414985122). Exact preset parameters
-follow prioritizr; not confirmable from accessible paper text — docstrings say so. IUCN (2025)
-Red List Categories and Criteria / IUCN (2024) RLE Guidelines v2.0 cited for the tables.
+cited in the docstring; its Methods state the 2,200 km² floor and the 100% clip for small
+ranges, while the 77% term follows prioritizr. Ward et al. 2025 (10.1073/pnas.2414985122):
+parameters follow prioritizr; not confirmable from accessible paper text — docstring says so.
+Tables cite IUCN (2012) Red List Categories and Criteria v3.1 (2nd ed.) for species, and
+IUCN (2024) RLE Guidelines v2.0 plus Keith et al. 2013 (10.1371/journal.pone.0062111) for
+ecosystems. The tables are private module constants (not exported).
 
 ## 6. Population family (`_population.py`)
 
@@ -240,16 +257,22 @@ duran_targets(problem, *, km2_per_unit, probability_target, historical_area_km2,
   and → 5,000 (f=5,000, clipped to f).
 - **wilson:** `β = 2r/σ² − 1`; `k = (1e5·σ²·β²/2)^(1/β)`; `t = min(k / d, cap, f)`. `r > 0`,
   `σ² > 0`, `d > 0`; `β ≤ 0` → `ValueError` naming the feature (prioritizr returns NaN/Inf).
-  Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317.
+  The formula is Lande's (1993, 10.1086/285580) large-population approximation of mean time to
+  extinction, solved for `k` with T = 1e5 years; it is only valid when `1e5·σ²·β²/2 > 1`. The
+  4-lens science review solved Lande's exact formula: at r=0.0200001, σ²=0.04 the approximation
+  gives k ≈ 0 (no protection) where the exact model needs ln K ≈ 63. So
+  `1e5·σ²·β²/2 ≤ 1` → `ValueError` naming the feature (revised 2026-10-15; replaces the earlier
+  "underflow → target 0" rule).
+  Examples: r=0.1, σ²=0.04 → β=4, k=13.3748; r=0.3, σ²=1e-4 → k=1.00317; with d=0.5 →
+  26.7496 (pins the division by `d`).
   **Numerics:** compute `ln k = ln(1e5·σ²·β²/2) / β` and `k = exp(ln k)`, mapping
   `ln k > ln(sys.float_info.max)` to `k = inf` before dividing by `d` (so `t = min(cap, f)`, or
   `f` with `cap_km2=None`; Python's
-  `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3). As β→0⁺ with base < 1,
-  `k` underflows to 0 → target 0; the docstring flags small β as scientifically degenerate.
-  Tests pin both: r=500.5, σ²=1,000 (β=1e-3) → `t = min(cap, f)` (`f` when `cap_km2=None`); r=0.0200001, σ²=0.04 → 0.
-  Wilson et al. 2010
-  (10.1890/09-1051.1); formula checked against prioritizr only — the design review's science
-  lens must try to confirm it against the paper, else the docstring says it follows prioritizr.
+  `base ** (1/β)` would raise `OverflowError`, e.g. σ²=1,000, β=1e-3). Since base > 1 is
+  required, `ln k > 0` and `k` cannot underflow. Tests pin r=500.5, σ²=1,000 (β=1e-3) →
+  `t = min(cap, f)` (`f` when `cap_km2=None`), and r=0.0200001, σ²=0.04 → `ValueError`.
+  Wilson et al. 2010 (10.1890/09-1051.1) is closed access; the docstring says the formula
+  follows prioritizr and cites Lande 1993 for the approximation.
 - **duran:** `t = min(h·p⁴, f)` (+ cap if given); `p ∈ [0, 1]`, `h > 0` (km²). Persistence
   `P = (A/A_hist)^0.25` (z = 0.25, supported by Durán et al. 2020 text, 10.1111/2041-210X.13427).
   Examples: h=1,000, p=0.9 → 656.1; p=0.95 → 814.506. Docstring lists Davis 2018 and Gumbs 2023
@@ -299,7 +322,9 @@ pinned `f` values with `km2_per_unit=1` (and a rescaled variant).
 1. **Worked examples:** every pinned value in §4–7 (`pytest.approx`, rel 1e-6), each with a
    comment giving the formula it was hand-computed from (§1 provenance).
 2. **Regime boundaries:** Jung 2,200 / 2,857.14; Ward 100 / 500; Watson f = 10,000;
-   Rodrigues cap onset 1e7; Wilson overflow and underflow cases (§6); f = 0 → 0 for every
+   Rodrigues cap onset 1e7; Wilson overflow and invalid-approximation cases (§6);
+   interpolation boundaries f = a and f = e with an absolute target set (they take the
+   interpolation branch, as in prioritizr); f = 0 → 0 for every
    area-based method (`absolute_targets` excluded, §3.4).
 3. **Invariants** (parametrised over all area-based methods): `0 ≤ t ≤ F`; `t·k ≤ cap`.
    **Rescaled units:** amounts ×100 with `km2_per_unit` ÷100 → native targets ×100, compared
@@ -338,11 +363,12 @@ Shiny UI for target methods; zone / per-zone targets; string shortcuts (`"jung"`
 
 ## 12. Risks
 
-- **Paper verification:** Polak, Watson, Jung, Ward, Sreekar and Wilson parameters are from
-  prioritizr's code, not confirmed in paper text. Mitigation: honest docstrings; science lens
-  retries confirmation.
+- **Paper verification:** after the 4-lens science review, Rodrigues/Butchart, Polak, Durán and
+  Jung's 2,200 km² floor are text-confirmed; Watson, Sreekar, Ward, Wilson and Jung's 77% term
+  come from prioritizr's code. Mitigation: honest docstrings.
 - **Locked-out PUs** count toward `F`, as in prioritizr; large locked-out shares can make a
-  clipped target unattainable. Documented; `presolve_check` / infeasibility diagnostics apply.
+  clipped target unattainable. Documented (tutorial, CHANGELOG, `feature_totals` docstring) and
+  pinned by a test; `presolve_check` / infeasibility diagnostics apply.
 - **Package conversion** must not break `from pymarxan.targets import ...` or pdoc output;
   covered by the backwards-compat tests and the `__all__` test (§2) — `make docs` alone
   would not catch an empty page.
