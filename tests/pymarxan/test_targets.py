@@ -52,13 +52,14 @@ def test_loglinear_clamps_below_lower_and_above_upper():
     problem = _problem()
     # rare total 10 is at lower_area -> gets lower_target fraction 1.0 -> 10.0;
     # common total 100 is at upper_area -> gets upper_target fraction 0.1 -> 10.0
-    targets = loglinear_targets(
-        problem,
-        lower_area=10.0,
-        lower_target=1.0,
-        upper_area=100.0,
-        upper_target=0.1,
-    )
+    with pytest.warns(DeprecationWarning):
+        targets = loglinear_targets(
+            problem,
+            lower_area=10.0,
+            lower_target=1.0,
+            upper_area=100.0,
+            upper_target=0.1,
+        )
     # rare total 10 at/below lower_area -> lower_target 1.0 -> 100% -> 10.0
     assert targets[2] == pytest.approx(10.0)
     # common total 100 at/above upper_area -> upper_target 0.1 -> 10% -> 10.0
@@ -78,13 +79,14 @@ def test_loglinear_interpolates_on_log_scale():
         {"species": [1], "pu": [1], "amount": [100.0]}
     )
     problem = ConservationProblem(planning_units, features, pu_vs_features)
-    targets = loglinear_targets(
-        problem,
-        lower_area=10.0,
-        lower_target=1.0,
-        upper_area=1000.0,
-        upper_target=0.0,
-    )
+    with pytest.warns(DeprecationWarning):
+        targets = loglinear_targets(
+            problem,
+            lower_area=10.0,
+            lower_target=1.0,
+            upper_area=1000.0,
+            upper_target=0.0,
+        )
     # fraction = 1.0 + (0.0 - 1.0) * (log10(100)-log10(10))/(log10(1000)-log10(10))
     #          = 1.0 - 0.5 = 0.5 ; target = 0.5 * 100 = 50
     assert targets[1] == pytest.approx(50.0)
@@ -92,7 +94,7 @@ def test_loglinear_interpolates_on_log_scale():
 
 def test_loglinear_invalid_target_fraction_raises():
     problem = _problem()
-    with pytest.raises(ValueError, match="target"):
+    with pytest.warns(DeprecationWarning), pytest.raises(ValueError, match="target"):
         loglinear_targets(
             problem,
             lower_area=10.0,
@@ -100,6 +102,26 @@ def test_loglinear_invalid_target_fraction_raises():
             upper_area=100.0,
             upper_target=0.1,
         )
+
+
+def test_loglinear_is_deprecated():
+    problem = _problem()
+    with pytest.warns(DeprecationWarning, match="interp_absolute_targets"):
+        loglinear_targets(
+            problem,
+            lower_area=10.0,
+            lower_target=1.0,
+            upper_area=100.0,
+            upper_target=0.1,
+        )
+
+
+def test_targets_package_all():
+    import pymarxan.targets as targets_pkg
+
+    assert {"apply_targets", "group_targets", "loglinear_targets", "relative_targets"} <= set(
+        targets_pkg.__all__
+    )
 
 
 def test_group_targets_apply_group_fraction_to_members():

@@ -1,16 +1,12 @@
-"""Automatic target-setting rules.
+"""Relative, group and (deprecated) log-linear targets, and ``apply_targets``.
 
-Set each feature's representation target by a rule rather than by hand.
-Each rule returns a ``{feature_id: target_amount}`` mapping;
-:func:`apply_targets` writes it onto a problem's features.
-
-Mirrors prioritizr's ``add_relative_targets`` / ``add_auto_targets`` /
-``add_group_targets`` (Hanson et al. (2024), *Conservation Biology*,
-https://doi.org/10.1111/cobi.14376).
+Moved unchanged from the v0.39 ``pymarxan/targets.py`` module, except that
+:func:`loglinear_targets` now emits a ``DeprecationWarning``.
 """
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Mapping
 
 from pymarxan.models.problem import ConservationProblem
@@ -67,7 +63,17 @@ def loglinear_targets(
 
     Returns:
         Mapping of feature id to target amount.
+
+    .. deprecated:: 0.40.0
+        Use :func:`interp_absolute_targets` with ``interp="log10"``; this
+        function will be removed in a future release.
     """
+    warnings.warn(
+        "loglinear_targets is deprecated and will be removed in a future release; "
+        "use interp_absolute_targets(..., interp='log10')",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if lower_area <= 0 or upper_area <= 0:
         raise ValueError("lower_area and upper_area must be positive")
     if upper_area <= lower_area:
