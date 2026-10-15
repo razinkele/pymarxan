@@ -151,6 +151,12 @@ with and without BLM, connectivity (symmetric and asymmetric), PROBMODE 1 and 2,
 probability table with no PROBMODE set, locks, a no-good cut, and a ghost feature with
 MISSLEVEL ≠ 1. The refactor must reproduce them exactly, except in two places.
 
+**Tie rule** (ruling from prototyping): a selection is pinned only when the recorded optimum
+is unique. Uniqueness is probed by re-solving with the found plan forbidden. The objective
+value is always pinned. The LP renames reorder columns, so CBC may break ties differently,
+and a tied selection is not a behaviour. The golden uses COSTBUDGET 33, where every budgeted
+objective on the plain fixture has a unique optimum.
+
 - **The existing v0.38 golden file** (`tests/pymarxan/solvers/test_stage1_golden_v038.py`,
   data `tests/data/golden/stage1_v038.json`) pins canonical LP models by name. Its two entries
   `core_mls_abs_relabs` and `core_mls_abs_infeasible` are regenerated. The written reason,
@@ -158,7 +164,8 @@ MISSLEVEL ≠ 1. The refactor must reproduce them exactly, except in two places.
   `build_min_largest_shortfall`, which renames its rows and variables and drops R ≤ 0 slack
   rows (see the renames above). The selection pinned there (`[1, 0, 0]`) must not change.
   Every other entry in that file must stay byte-identical.
-- **The absolute `min_largest_shortfall` ghost case above.** For that case the golden test
+- **The absolute `min_largest_shortfall` ghost cases** (the case above, and the same fix on the
+  MISSLEVEL 0.9 ghost fixture: 0.0 → 9.0). For these cases the golden test
   pins only the new `mip_objective_value` (50.0), with a comment, and not the selection. The
   ghost holds m at 50, so every selection ties, and CBC returns the empty plan where the
   legacy code returned a cost-23 one. The CHANGELOG `### Fixed` entry says that the plan
@@ -271,7 +278,8 @@ review). Builders must never be called twice on one context (they add named rows
 - **Implementation:** `solve_lexicographic` is **left untouched**. It is not a wrapper. It
   differs from the new loop in its acceptance rule, cap formula, source of v and stage-1
   failure behaviour, and its tests mock only `status`.
-- `solve_hierarchical(model, terms, rel_tols, abs_tol, solver, evaluate) -> HierarchicalResult`
+- `solve_hierarchical(model, terms, rel_tols, abs_tol, solver, evaluate, *, tracked) -> HierarchicalResult`
+  (`tracked` is the §5 tracked variable set, which `model.variables()` alone cannot supply)
   is new code in `_mip_objectives.py`.
   - `evaluate: Callable[[int], float | None]` maps a 0-based objective index to its `v_rec`
     at the current variable values. It returns `None` when the implied point is not
@@ -583,7 +591,7 @@ Every error is a `ValueError` naming the argument, unless another type is stated
 
 - `docs/TUTORIAL.md` section "Multi-objective planning (v0.41)": weighted-sum sweep of
   MinCost vs MinShortfall with scaled weights → `nondominated` → `Hierarchical` pick (cheapest
-  plan within 5% of the best shortfall). The example sets a `COSTBUDGET` that forces a non-zero
+  plan within 10% of the best shortfall; on the tutorial's data 5% shows no trade-off). The example sets a `COSTBUDGET` that forces a non-zero
   best shortfall. Without one the best shortfall is 0, and `rel_tol` gives no slack at v = 0.
   The text mentions `abs_tol` for that case. Pinned by `tests/test_tutorial_examples.py`.
 - CHANGELOG `[Unreleased]`: Added (MultiObjectiveMIP, specs, approaches, helpers,
