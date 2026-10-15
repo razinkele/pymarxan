@@ -139,7 +139,7 @@ def wilson_targets(
             "wilson_targets needs mean_growth_rate > var_growth_rate / 2 "
             f"(beta > 0); invalid for feature(s) {bad}"
         )
-    base = {fid: 1e5 * s2[fid] * beta[fid] ** 2 / 2.0 for fid in fids}
+    base = {fid: 1e5 * s2[fid] * beta[fid] * beta[fid] / 2.0 for fid in fids}
     totals = feature_totals(problem, fids)
     factors = km2_factors(km2_per_unit, fids)
     out: dict[int, float] = {}

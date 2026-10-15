@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `min_targets`/`max_targets` refuse inputs with different features.
   - Where prioritizr's documentation and code disagree, pymarxan follows the code: Jung 77% (not 80%), Ward 100 km² (not 100,000), species EN-B2 500 km² (not 50), and population targets divide by density.
 - Pinned worked examples are hand-computed from each published rule as prioritizr implements it. Paper text confirms Rodrigues/Butchart, Polak's breakpoints, Jung's 2,200 km² floor and Durán's z = 0.25. Watson, Sreekar, Ward and Wilson parameters, and Jung's 77% term, could not be confirmed from accessible paper text; the docstrings say so. `polak_targets` does not apply Polak et al.'s 100%-for-Critically-Endangered rule (target CR features separately).
-- Feature totals include locked-out planning units, as in prioritizr. Per-feature inputs accept dicts or pandas Series keyed by feature id; non-id keys, duplicated Series indexes, boolean masks and NaN/negative amounts raise `ValueError`.
+- Feature totals include locked-out planning units, as in prioritizr. Per-feature inputs accept dicts or pandas Series keyed by feature id; non-id keys, duplicated Series indexes, a Series with a default RangeIndex, boolean masks and NaN/negative amounts raise `ValueError`.
 
 ### Changed
 
@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `loglinear_targets`: use `interp_absolute_targets(..., interp="log10")`, which reproduces it exactly. It still works and now emits `DeprecationWarning`.
+- `loglinear_targets`: use `interp_absolute_targets(..., interp="log10")`, which reproduces it to floating-point precision. It still works and now emits `DeprecationWarning`.
 
 ### Fixed
 

@@ -143,3 +143,31 @@ def test_max_of_area_and_relative(make_problem):
         area_targets(p, km2_per_unit=1.0, area_km2=1_000.0), relative_targets(p, 0.3)
     )
     assert out == {1: pytest.approx(1_000.0), 2: pytest.approx(3_000.0)}
+
+
+def test_rule_targets_non_str_trait_is_value_error(make_problem):
+    with pytest.raises(ValueError, match=r"\[1\]"):
+        rule_targets(
+            make_problem({1: 100.0}),
+            km2_per_unit=1.0,
+            baseline=0.2,
+            rules={"1": 0.1},
+            traits={1: {1}},
+        )
+
+
+@pytest.mark.parametrize("bad", [None, 5])
+def test_rule_targets_non_iterable_traits_is_value_error(make_problem, bad):
+    with pytest.raises(ValueError, match=r"\[1\]"):
+        rule_targets(
+            make_problem({1: 100.0}),
+            km2_per_unit=1.0,
+            baseline=0.2,
+            rules={"a": 0.1},
+            traits={1: bad},
+        )
+
+
+def test_combine_non_id_keys_name_the_function():
+    with pytest.raises(ValueError, match="max_targets keys"):
+        max_targets({"a": 1.0}, {"a": 2.0})

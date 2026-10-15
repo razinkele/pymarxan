@@ -29,6 +29,10 @@ _METHODS: dict[str, Callable[[float, float], float]] = {"min": min, "max": max}
 _INTERPS = ("log10", "linear")
 
 
+def _opt_float(x: float | None) -> float | None:
+    return None if x is None else float(x)
+
+
 def _validate_rule(
     *,
     unit: str,
@@ -155,11 +159,11 @@ def interp_absolute_targets(
             f,
             a=float(rare_absolute_threshold),
             b=float(rare_relative_target),
-            c=rare_absolute_target,
+            c=_opt_float(rare_absolute_target),
             rare_method=rare_method,
             e=float(common_absolute_threshold),
             g=float(common_relative_target),
-            h=common_absolute_target,
+            h=_opt_float(common_absolute_target),
             common_method=common_method,
             interp=interp,
         )
@@ -223,11 +227,11 @@ def interp_area_targets(
             f,
             a=float(rare_area_threshold),
             b=float(rare_relative_target),
-            c=rare_area_target,
+            c=_opt_float(rare_area_target),
             rare_method=rare_method,
             e=float(common_area_threshold),
             g=float(common_relative_target),
-            h=common_area_target,
+            h=_opt_float(common_area_target),
             common_method=common_method,
             interp=interp,
         )

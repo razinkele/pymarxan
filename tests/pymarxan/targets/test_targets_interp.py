@@ -272,3 +272,43 @@ def test_preset_defaults_overridable(make_problem):
     # Rodrigues with a 30% common target: 5e6 km² -> 1.5e6 -> cap 1e6
     t = _one(rodrigues_targets, make_problem, 5e6, common_relative_target=0.3)
     assert t == pytest.approx(1e6)
+
+
+def test_interp_area_numeric_string_target_behaves_like_float(make_problem):
+    kw = dict(
+        rare_area_threshold=1000.0,
+        common_area_threshold=10000.0,
+        rare_relative_target=1.0,
+        common_relative_target=0.1,
+        rare_method="min",
+        common_method="max",
+        interp="linear",
+    )
+    p = make_problem({1: 500.0, 2: 20000.0})
+    a = interp_area_targets(
+        p, km2_per_unit=1.0, rare_area_target="400", common_area_target="3000", **kw
+    )
+    b = interp_area_targets(
+        p, km2_per_unit=1.0, rare_area_target=400.0, common_area_target=3000.0, **kw
+    )
+    assert a == b
+
+
+def test_interp_absolute_numeric_string_target_behaves_like_float(make_problem):
+    kw = dict(
+        rare_absolute_threshold=1000.0,
+        common_absolute_threshold=10000.0,
+        rare_relative_target=1.0,
+        common_relative_target=0.1,
+        rare_method="min",
+        common_method="max",
+        interp="linear",
+    )
+    p = make_problem({1: 500.0, 2: 20000.0})
+    a = interp_absolute_targets(
+        p, rare_absolute_target="400", common_absolute_target="3000", **kw
+    )
+    b = interp_absolute_targets(
+        p, rare_absolute_target=400.0, common_absolute_target=3000.0, **kw
+    )
+    assert a == b

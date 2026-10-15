@@ -342,7 +342,7 @@ apply_targets(targeted, rodrigues_targets(targeted, km2_per_unit=KM2, features=o
 best = MIPSolver().solve(targeted, SolverConfig(num_solutions=1))[0]
 ```
 
-Mangrove (3,000 km²) gets Jung et al.'s `max(2,200 km², 77%)` = 2,310 km²
+Mangrove (3,000 km²) gets Jung et al.'s 2,200 km² floor with prioritizr's 77% term (`max(2,200 km², 77%)`) = 2,310 km²
 (2.31 units); coral and seagrass get Rodrigues et al.'s log-interpolated
 share between 100% (< 1,000 km²) and 10% (> 250,000 km²). Targets never
 exceed a feature's total, and most methods cap at 1,000,000 km²

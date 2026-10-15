@@ -11,6 +11,7 @@ import pandas as pd
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.targets._units import (
     PerFeatureFloat,
+    as_feature_id,
     check_cap,
     check_scalar,
     feature_totals,
@@ -104,9 +105,16 @@ def rule_targets(
             f"traits for feature(s) {bare} must be a collection of trait names, "
             'not a string; wrap it, e.g. {"endemic"}'
         )
-    unknown = sorted(
-        {str(t) for ts in feature_traits.values() for t in ts}.difference(rules)
-    )
+    malformed = [
+        fid
+        for fid, ts in feature_traits.items()
+        if not isinstance(ts, Collection) or any(not isinstance(t, str) for t in ts)
+    ]
+    if malformed:
+        raise ValueError(
+            f"traits for feature(s) {malformed} must be a collection of trait names (str)"
+        )
+    unknown = sorted({t for ts in feature_traits.values() for t in ts}.difference(rules))
     if unknown:
         raise ValueError(f"traits not in rules: {unknown}")
     totals = feature_totals(problem, fids)
@@ -127,17 +135,20 @@ def _combine(
 ) -> dict[int, float]:
     if len(results) < 2:
         raise ValueError(f"{name} needs at least 2 target mappings, got {len(results)}")
-    first = [int(k) for k in results[0]]
+    first = [as_feature_id(f"{name} keys", k) for k in results[0]]
     keys = set(first)
     for i, res in enumerate(results[1:], start=1):
-        other = {int(k) for k in res}
+        other = {as_feature_id(f"{name} keys", k) for k in res}
         if other != keys:
             raise ValueError(
                 f"{name}: input {i} has different features from input 0 "
                 f"(only in input 0: {sorted(keys - other)}, "
                 f"only in input {i}: {sorted(other - keys)})"
             )
-    norm = [{int(k): float(v) for k, v in res.items()} for res in results]
+    norm = [
+        {as_feature_id(f"{name} keys", k): float(v) for k, v in res.items()}
+        for res in results
+    ]
     out: dict[int, float] = {}
     for fid in first:
         value = norm[0][fid]

@@ -162,3 +162,20 @@ def test_finish_area_clips_caps_converts_and_zero():
     assert finish_area(5e6, 2e7, 1.0, 1e6) == 1e6
     assert finish_area(math.inf, 300.0, 1.0, None) == 300.0
     assert finish_area(10.0, 0.0, 1.0, 1e6) == 0.0
+
+
+def test_per_feature_rejects_default_rangeindex_series():
+    s = pd.Series(["CR", "EN", "VU", "VU"])
+    with pytest.raises(ValueError, match="default RangeIndex"):
+        per_feature("status", s, [1, 2])
+
+
+def test_per_feature_accepts_id_indexed_series():
+    df = pd.DataFrame({"id": [1, 2, 3, 4], "status": ["CR", "EN", "VU", "VU"]})
+    out = per_feature("status", df.set_index("id")["status"], [1, 2])
+    assert out == {1: "CR", 2: "EN"}
+
+
+def test_select_features_non_iterable_is_value_error(make_problem):
+    with pytest.raises(ValueError, match="features must be an iterable of feature ids, got 3"):
+        select_features(make_problem({1: 1.0}), 3)

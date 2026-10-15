@@ -209,3 +209,15 @@ def test_duran_validation(make_problem):
         duran_targets(pr, km2_per_unit=1.0, probability_target=1.2, historical_area_km2=5.0)
     with pytest.raises(ValueError, match="historical_area_km2"):
         duran_targets(pr, km2_per_unit=1.0, probability_target=0.5, historical_area_km2=0.0)
+
+
+def test_wilson_huge_beta_does_not_overflow(make_problem):
+    t = wilson_targets(
+        make_problem({1: 2e7}),
+        km2_per_unit=1.0,
+        mean_growth_rate=1.0,
+        var_growth_rate=1e-160,
+        density_per_km2=1.0,
+    )
+    # beta ~ 2e160: K = base**(1/beta) -> 1 individual -> 1 km2; the point is no OverflowError
+    assert t[1] == pytest.approx(1.0)

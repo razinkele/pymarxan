@@ -147,3 +147,22 @@ def test_presets_reject_fixed_settings(make_problem):
 def test_zero_total_is_zero(make_problem):
     p = make_problem({1: 0.0, 2: 5.0})
     assert jung_targets(p, km2_per_unit=1.0)[1] == 0.0
+
+
+def test_rl_species_targets_rejects_positional_series(make_problem):
+    problem = make_problem({1: 1e3, 2: 1e3, 3: 1e3, 4: 1e3})
+    problem.features["status"] = ["CR", "EN", "VU", "VU"]
+    with pytest.raises(ValueError, match="default RangeIndex"):
+        rl_species_targets(
+            problem, km2_per_unit=1.0, status=problem.features["status"],
+            criterion_a="A1", criterion_b="B1", features=[1, 2],
+        )
+    ok = rl_species_targets(
+        problem,
+        km2_per_unit=1.0,
+        status=problem.features.set_index("id")["status"],
+        criterion_a="A1",
+        criterion_b="B1",
+        features=[1, 2],
+    )
+    assert set(ok) == {1, 2}

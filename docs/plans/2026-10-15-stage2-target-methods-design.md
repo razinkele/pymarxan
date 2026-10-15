@@ -83,7 +83,8 @@ PUs, including locked-out ones, as prioritizr does); `k_j` = km² per native uni
    naming the feature id(s). Values are looked up **by feature id**, never by position. Keys
    and `features=` entries must be integral (int, numpy integer, integral float); names,
    non-integral floats and booleans raise `ValueError` naming the argument, a Series with a
-   duplicated index raises, and a boolean-mask Series passed as `features=` raises.
+   duplicated index raises, a Series with a default RangeIndex is rejected (it holds row
+   positions, not ids), and a boolean-mask Series passed as `features=` raises.
    (Added after the 2026-10-15 4-lens review.)
 6a. **Feature data.** A selected feature with any NaN, infinite or negative `pu_vs_features`
    amount raises `ValueError` naming it (pandas' sum would silently skip NaN). Totals include

@@ -55,7 +55,13 @@ def select_features(
             "features must be feature ids, not a boolean mask; "
             "use e.g. df.loc[mask, 'id']"
         )
-    wanted = {as_feature_id("features", f) for f in features}
+    try:
+        items = list(features)
+    except TypeError:
+        raise ValueError(
+            f"features must be an iterable of feature ids, got {features!r}"
+        ) from None
+    wanted = {as_feature_id("features", f) for f in items}
     unknown = sorted(wanted.difference(ids))
     if unknown:
         raise ValueError(f"features not in problem: {unknown}")
@@ -66,10 +72,21 @@ def per_feature(name: str, value: Any, fids: list[int]) -> dict[int, Any]:
     """Expand a scalar or a ``{feature_id: value}`` mapping to every id in ``fids``.
 
     A :class:`pandas.Series` is read as a mapping from its index (a duplicated
-    index raises). Keys must be feature ids. Extra keys are ignored; a missing
+    index raises, and so does a default ``RangeIndex``, which holds row
+    positions rather than ids: index it by feature id first). Keys must be
+    feature ids. Extra keys are ignored; a missing
     key raises ``ValueError`` naming the ids.
     """
     if isinstance(value, pd.Series):
+        if isinstance(value.index, pd.RangeIndex) and value.index.equals(
+            pd.RangeIndex(len(value))
+        ):
+            raise ValueError(
+                f"{name} is a pandas Series with a default RangeIndex (row positions, "
+                "not feature ids); index it by feature id, e.g. "
+                "df.set_index('id')[column], or pass .to_dict() if the ids really "
+                "are 0..n-1"
+            )
         dup = value.index[value.index.duplicated()]
         if len(dup):
             raise ValueError(
