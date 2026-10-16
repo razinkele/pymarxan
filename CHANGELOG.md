@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `solve_lexicographic` (the `min_penalties` two-pass solve in `MIPSolver`) now caps pass 2 at `opt + rel_tol·|opt| + max(abs_tol, 1e-9·|opt|)`, the relative floor v0.41.0 gave the hierarchical caps. PuLP writes MPS values to 13 significant figures, so with `rel_tol=0` a primary of about 1e5 or more could exclude its own pass-1 optimum and fall back to the pass-1 plan with a warning. `MIPSolver` uses the default `rel_tol=1e-9`, which already masked this; the cap is now at most `1e-9·|opt|` looser.
+
 ## [0.41.0] — 2026-10-16
 
 ### Added

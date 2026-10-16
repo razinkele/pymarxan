@@ -238,6 +238,11 @@ def set_objective(model: pulp.LpProblem, term: ObjectiveTerm) -> None:
     model.setObjective(term.expr if term.sense == pulp.LpMinimize else -term.expr)
 
 
+# MPS writes the RHS with 13 significant figures, so a cap at exactly v can exclude the stage
+# optimum itself once |v| >~ 1e5; the floor keeps that rounding inside the cap.
+_CAP_REL_FLOOR = 1e-9
+
+
 def solve_lexicographic(
     model: pulp.LpProblem,
     primary: pulp.LpAffineExpression,
@@ -249,7 +254,8 @@ def solve_lexicographic(
 ) -> int:
     """Exact two-pass lexicographic minimisation (primary >= 0 assumed).
 
-    Pass 1 minimises ``primary``. Pass 2 adds ``primary <= opt·(1+rel_tol)+abs_tol``
+    Pass 1 minimises ``primary``. Pass 2 adds
+    ``primary <= opt + rel_tol·|opt| + max(abs_tol, 1e-9·|opt|)``
     (``"lex_primary_cap"``) and minimises ``secondary``. If pass 2 yields no solution the
     pass-1 values are restored, one ``UserWarning`` is emitted and pass 1's status returned.
     A variable-free (constant) ``primary`` — no target terms — is a single solve of
@@ -268,7 +274,8 @@ def solve_lexicographic(
     status1 = int(model.status)
     snapshot = {v.name: v.varValue for v in variables}
     opt = float(pulp.value(primary) or 0.0)
-    model += primary <= opt * (1.0 + rel_tol) + abs_tol, "lex_primary_cap"
+    slack = rel_tol * abs(opt) + max(abs_tol, _CAP_REL_FLOOR * abs(opt))
+    model += primary <= opt + slack, "lex_primary_cap"
     model.setObjective(secondary)
     model.solve(solver)
     if model.status in NO_SOLUTION_STATUSES or any(
@@ -352,11 +359,6 @@ class HierarchicalResult:
     status: int
     sol_status: int
     stage_reached: int
-
-
-# MPS writes the RHS with 13 significant figures, so a cap at exactly v can exclude the stage
-# optimum itself once |v| >~ 1e5; the floor keeps that rounding inside the cap.
-_CAP_REL_FLOOR = 1e-9
 
 
 def solve_hierarchical(

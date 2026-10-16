@@ -202,6 +202,29 @@ def test_solve_lexicographic_variable_free_primary_is_single_pass(locked: bool) 
     assert (x1.varValue, x2.varValue) == ((1.0 if locked else 0.0), 0.0)
 
 
+@pytest.mark.parametrize("costs", [
+    [6732655.185893089, 3428080.4238748327, 1368761.715425752,
+     1148748.7197567618, 8319432.152802452, 9214800.195499497],
+    [5606394.622302311, 9554173.266933419, 2297436.514476704,
+     9537845.024235195, 3806483.0680943695, 4809938.040753181],
+    [1770842.5042926192, 3131294.559364897, 8211470.186857572,
+     6239458.32457931, 1847157.7801635927, 4898142.462128265],
+])
+def test_solve_lexicographic_zero_rel_tol_survives_mps_rounding(costs: list[float]) -> None:
+    # A primary of ~1e7 written to MPS at 13 significant figures: a cap at exactly opt
+    # (rel_tol=0, abs_tol=1e-9) excluded the pass-1 optimum, so pass 2 found no solution.
+    m = pulp.LpProblem("r", pulp.LpMinimize)
+    xs = [pulp.LpVariable(f"x_{i}", cat="Binary") for i in range(len(costs))]
+    m += pulp.lpSum(xs) >= 3, "pick3"
+    primary = pulp.lpSum(c * x for c, x in zip(costs, xs))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        warnings.simplefilter("error", UserWarning)
+        status = solve_lexicographic(m, primary, pulp.lpSum(xs), CBC, rel_tol=0.0)
+    assert status == pulp.LpStatusOptimal
+    assert pulp.value(primary) == pytest.approx(sum(sorted(costs)[:3]), rel=1e-12)
+
+
 def _two_pu(objective: str, shortfall: str, weights: dict[str, float]) -> tuple[list[int], float]:
     """One PU may be chosen. fa and fc are met only by PU1, fb only by PU2 (amount 10, R 10)."""
     m = pulp.LpProblem("w", pulp.LpMinimize)
