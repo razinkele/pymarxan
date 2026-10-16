@@ -89,6 +89,30 @@ def _warn_if_large_mip(n_pu: int, threshold: int | None) -> None:
         )
 
 
+def _mip_solver_for(
+    problem: ConservationProblem, backend: str, verbose: bool,
+) -> tuple[pulp.LpSolver, str]:
+    """The PuLP solver for ``backend`` with the problem's ``MIP_TIME_LIMIT`` (default 300 s)
+    and ``MIP_GAP`` (default 0), and the resolved backend name for metadata.
+
+    Phase 21: CBC is the default under ``"auto"`` but HiGHS wins if available, so the
+    concrete name is read from the solver, not from ``backend``. Shared by ``MIPSolver``
+    and ``MultiObjectiveMIP``.
+    """
+    solver = _make_pulp_solver(
+        backend,
+        time_limit=int(problem.parameters.get("MIP_TIME_LIMIT", 300)),
+        gap=float(problem.parameters.get("MIP_GAP", 0.0)),
+        verbose=verbose,
+    )
+    name = (
+        "highs" if isinstance(solver, pulp.HiGHS_CMD)
+        else "gurobi" if isinstance(solver, pulp.GUROBI_CMD)
+        else "cbc"
+    )
+    return solver, name
+
+
 def _core_spf(problem: ConservationProblem) -> dict[int, float]:
     """feature id -> spf; 1.0 when the column is absent (as the zone MIP's _spf_lookup)."""
     ids = problem.features["id"].values
@@ -620,6 +644,20 @@ class MIPSolver(Solver):
             has_sep_active=base.has_sep_active, lex=lex,
         )
 
+    def _strategy_metadata(
+        self, probmode: int, has_target2: bool, has_sep_active: bool,
+    ) -> dict[str, str]:
+        """The ``mip_*_strategy`` keys for the gaps this problem has (shared with
+        ``MultiObjectiveMIP``)."""
+        meta: dict[str, str] = {}
+        if probmode == 3:
+            meta["mip_chance_strategy"] = self.mip_chance_strategy
+        if has_target2:
+            meta["mip_clump_strategy"] = self.mip_clump_strategy
+        if has_sep_active:
+            meta["mip_sep_strategy"] = self.mip_sep_strategy
+        return meta
+
     def build_model(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> pulp.LpProblem:
@@ -649,24 +687,7 @@ class MIPSolver(Solver):
         probmode, has_target2 = built.probmode, built.has_target2
         has_sep_active, blm = built.has_sep_active, built.blm
 
-        # Solve
-        time_limit = int(problem.parameters.get("MIP_TIME_LIMIT", 300))
-        gap = float(problem.parameters.get("MIP_GAP", 0.0))
-        verbose = config.verbose
-        # Phase 21: dispatch through the backend factory. CBC remains default
-        # when mip_backend="auto" but HiGHS wins if available.
-        solver = _make_pulp_solver(
-            self.mip_backend,
-            time_limit=time_limit, gap=gap, verbose=verbose,
-        )
-        # Record the resolved backend in metadata so users can confirm
-        # which solver actually ran. "auto" gets resolved here, so capture
-        # the concrete name post-factory rather than self.mip_backend.
-        resolved_backend = (
-            "highs" if isinstance(solver, pulp.HiGHS_CMD)
-            else "gurobi" if isinstance(solver, pulp.GUROBI_CMD)
-            else "cbc"
-        )
+        solver, resolved_backend = _mip_solver_for(problem, self.mip_backend, config.verbose)
         if built.lex is not None:
             status = solve_lexicographic(model, built.lex[0], built.lex[1], solver)
         else:
@@ -708,11 +729,6 @@ class MIPSolver(Solver):
             "mip_objective_value": obj_value,
             "shortfall": self.shortfall,
         }
-        if probmode == 3:
-            meta["mip_chance_strategy"] = self.mip_chance_strategy
-        if has_target2:
-            meta["mip_clump_strategy"] = self.mip_clump_strategy
-        if has_sep_active:
-            meta["mip_sep_strategy"] = self.mip_sep_strategy
+        meta.update(self._strategy_metadata(probmode, has_target2, has_sep_active))
         sol = build_solution(problem, selected, blm, metadata=meta)
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]

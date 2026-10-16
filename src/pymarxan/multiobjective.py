@@ -21,18 +21,30 @@ from __future__ import annotations
 
 import math
 import numbers
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from typing import Any, ClassVar
 
+import numpy as np
+import pulp
+
+from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers._mip_objectives import (
+    ACCEPTED_SOL_STATUSES,
     BUILDERS,
     ObjectiveContext,
     ObjectiveTerm,
+    evaluate_implied,
+    set_objective,
+    solve_hierarchical,
     validate_shortfall,
 )
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, SolverConfig
+from pymarxan.solvers.mip_solver import MIPSolver, _mip_solver_for, _warn_if_large_mip
+from pymarxan.solvers.presolve import _emit_presolve, _presolve_data
+from pymarxan.solvers.utils import build_solution
 
 __all__ = [
     "Hierarchical",
@@ -43,6 +55,7 @@ __all__ = [
     "MinCost",
     "MinLargestShortfall",
     "MinShortfall",
+    "MultiObjectiveMIP",
     "ObjectiveSpec",
     "WeightedSum",
     "nondominated",
@@ -383,3 +396,206 @@ def nondominated(solutions: Sequence[Solution]) -> list[Solution]:
             continue
         kept.append(solutions[i])
     return kept
+
+
+# --- the solver -------------------------------------------------------------------
+
+
+def _no_solution(status: int) -> str:
+    """Why a solve has no accepted solution, for the RuntimeError text."""
+    if status == pulp.LpStatusUnbounded:
+        return (
+            "is unbounded: an objective can improve without limit (e.g. a negative SPF "
+            "on a shortfall objective, or negative boundary / connectivity values)"
+        )
+    return (
+        f"found no solution (status {pulp.LpStatus.get(status, status)}); run "
+        "presolve_check(problem) to look for infeasible data"
+    )
+
+
+class MultiObjectiveMIP:
+    """Exact multi-objective MIP over one single-zone ``ConservationProblem`` (spec §5).
+
+    ``objectives`` are specs; their effective keys (``label or name``) must be unique.
+    ``approach`` is ``Hierarchical`` or ``WeightedSum``. The base model is
+    ``MIPSolver``'s (locks, boundary, connectivity, probability, no-good cuts); targets are
+    soft and ``COSTBUDGET``, when set, binds every stage and run. Each objective's term is
+    built once per ``solve``.
+
+    ``solve`` returns one ``Solution`` per approach row. ``cost`` / ``boundary`` /
+    ``objective`` / ``targets_met`` are filled as ``MIPSolver`` fills them (Marxan-style);
+    ``metadata["objective_values"]`` holds each objective's value at the plan, from the
+    model's own expressions (so ``"min_cost"`` can differ from ``Solution.objective``, and
+    under PROBMODE 2 met counts use the scaled amounts). ``config.num_solutions`` is
+    ignored. ``MIP_TIME_LIMIT`` applies per stage and row, so a hierarchical sweep takes up
+    to rows × n × T; with ``MIP_GAP`` > 0 or a time limit a stage's v is an incumbent's
+    value. Stage 1 (or a weighted-sum row) with no solution raises ``RuntimeError``; a later
+    stage with no solution returns the previous stage's plan with a ``UserWarning``.
+
+    Met counts in ``objective_values`` follow the exact ``check_targets`` rule (A >= R), so
+    on data at a target's tolerance boundary (e.g. amounts 0.7 + 0.1 against 0.8) the
+    reported count can be below the value a hierarchical cap kept, which the solver reached
+    within its tolerance. When the implied point of a stage's plan violates a model row
+    (including an earlier stage's cap), that stage's cap falls back to the solver's own
+    value, and later stages can as well.
+    """
+
+    def __init__(
+        self,
+        objectives: Sequence[ObjectiveSpec],
+        approach: Hierarchical | WeightedSum,
+        *,
+        mip_backend: str = "auto",
+        mip_chance_strategy: str = "drop",
+        mip_clump_strategy: str = "drop",
+        mip_sep_strategy: str = "drop",
+        warn_above_pu: int | None = 200_000,
+        presolve_check: bool | str = False,
+    ) -> None:
+        specs = list(objectives)
+        if not specs:
+            raise ValueError("objectives must hold at least one ObjectiveSpec")
+        for spec in specs:
+            if not isinstance(spec, ObjectiveSpec) or spec.name not in BUILDERS:
+                raise TypeError(
+                    f"objectives must be ObjectiveSpec subclasses with a builder "
+                    f"(MinCost, MinShortfall, ...), got {spec!r}"
+                )
+        keys = [s.key for s in specs]
+        dupes = sorted({k for k in keys if keys.count(k) > 1})
+        if dupes:
+            raise ValueError(f"objectives have duplicate keys (label or name): {dupes}")
+        if not isinstance(approach, Hierarchical | WeightedSum):
+            raise TypeError(
+                f"approach must be Hierarchical or WeightedSum, got {type(approach).__name__}"
+            )
+        self.objectives = specs
+        self.approach = approach
+        self.rows = approach.rows(len(specs))
+        # Reuses MIPSolver's strategy, backend and presolve-flag validation.
+        self._mip = MIPSolver(
+            mip_backend=mip_backend, mip_chance_strategy=mip_chance_strategy,
+            mip_clump_strategy=mip_clump_strategy, mip_sep_strategy=mip_sep_strategy,
+            warn_above_pu=warn_above_pu, presolve_check=presolve_check,
+        )
+
+    def name(self) -> str:
+        return "MultiObjectiveMIP"
+
+    def _check(self, problem: ConservationProblem) -> None:
+        from pymarxan.zones.model import ZonalProblem
+
+        if isinstance(problem, ZonalProblem):
+            raise TypeError(
+                "MultiObjectiveMIP takes a single-zone ConservationProblem; ZonalProblem "
+                "support is a follow-on (use ZoneMIPSolver)"
+            )
+        if problem.boundary is None and any(isinstance(s, MinBoundary) for s in self.objectives):
+            raise ValueError(
+                "MinBoundary needs a boundary table (problem.boundary is None): its "
+                "objective would be the constant 0"
+            )
+        ids = {int(f) for f in problem.features["id"].values}
+        for spec in self.objectives:
+            if isinstance(spec, MaxWtdSum) and spec.weights is not None:
+                missing = sorted(ids - set(spec.weights))
+                unknown = sorted(set(spec.weights) - ids)
+                if missing or unknown:
+                    raise ValueError(
+                        f"MaxWtdSum {spec.key!r} weights must cover every problem feature: "
+                        f"missing {missing}, unknown {unknown}"
+                    )
+
+    def _weighted(self, terms: list[ObjectiveTerm], row: list[float]) -> ObjectiveTerm:
+        total = sum(row)
+        expr = pulp.LpAffineExpression()
+        for w, term in zip(row, terms, strict=True):
+            sign = 1.0 if term.sense == pulp.LpMinimize else -1.0
+            expr += (w / total) * sign * term.expr
+        return ObjectiveTerm(expr, pulp.LpMinimize)
+
+    def solve(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        if config is None:
+            config = SolverConfig()
+        self._check(problem)
+        mip = self._mip
+        _warn_if_large_mip(problem.n_planning_units, mip.warn_above_pu)
+        data = _presolve_data(mip.presolve_check, problem, self.name())
+        need_boundary = any(isinstance(s, MinBoundary) for s in self.objectives)
+        base = mip._build_base(problem, config, need_boundary=need_boundary)
+        model, x = base.model, base.x
+        budget = problem.parameters.get("COSTBUDGET")
+        if budget is not None:
+            model += base.cost_expr <= float(budget), "cost_budget"
+        ctx = base.context()
+        terms = [spec.build(ctx) for spec in self.objectives]  # once per solve (spec §3)
+        hierarchical = isinstance(self.approach, Hierarchical)
+        # P10 scans the first row's objective only (spec §9).
+        set_objective(model, terms[0] if hierarchical else self._weighted(terms, self.rows[0]))
+        _emit_presolve(mip.presolve_check, data, model, self.name(), stacklevel=3)
+
+        solver, backend = _mip_solver_for(problem, mip.mip_backend, config.verbose)
+        tracked = [*x.values(), *(v for v, _ in base.implied)]
+
+        def rounded() -> dict[int, float]:
+            return {pid: float(round(v.varValue or 0.0)) for pid, v in x.items()}
+
+        def evaluate(i: int) -> float | None:
+            values, feasible = evaluate_implied(
+                model, x, rounded(), base.implied, [terms[i]],
+            )
+            return values[0] if feasible else None
+
+        keys = [s.key for s in self.objectives]
+        senses = {s.key: s.sense for s in self.objectives}
+        solutions: list[Solution] = []
+        for r, row in enumerate(self.rows):
+            meta: dict[str, Any] = {"solver": self.name()}
+            if isinstance(self.approach, Hierarchical):
+                res = solve_hierarchical(
+                    model, terms, row, self.approach.abs_tol, solver, evaluate,
+                    tracked=tracked,
+                )
+                if res.stage_reached == 0:
+                    raise RuntimeError(
+                        f"hierarchical row {r}: stage 1 ({keys[0]}) {_no_solution(res.status)}"
+                    )
+                if res.stage_reached < len(terms):
+                    k = res.stage_reached + 1
+                    warnings.warn(
+                        f"hierarchical row {r}: stage {k} ({keys[k - 1]}) found no "
+                        f"solution; returning the stage {k - 1} plan",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                status, sol_status = res.status, res.sol_status
+                meta.update(approach="hierarchical", row=r, rel_tol=list(row),
+                            stage_reached=res.stage_reached)
+            else:
+                for var in [*model.variables(), *tracked]:
+                    var.varValue = None
+                set_objective(model, self._weighted(terms, row))
+                model.solve(solver)
+                if model.sol_status not in ACCEPTED_SOL_STATUSES:
+                    raise RuntimeError(
+                        f"weighted-sum row {r} (weights {list(row)}) "
+                        f"{_no_solution(int(model.status))}; the sweep is aborted"
+                    )
+                status, sol_status = int(model.status), int(model.sol_status)
+                meta.update(approach="weighted_sum", row=r, weights=list(row))
+            x_rounded = rounded()
+            values, _ = evaluate_implied(model, x, x_rounded, base.implied, terms)
+            selected = np.array([bool(x_rounded[pid]) for pid in base.pu_ids], dtype=bool)
+            meta.update(
+                status=pulp.LpStatus[status], sol_status=int(sol_status),
+                objective_values=dict(zip(keys, values, strict=True)),
+                objective_senses=senses, mip_backend=backend,
+            )
+            meta.update(
+                mip._strategy_metadata(base.probmode, base.has_target2, base.has_sep_active)
+            )
+            solutions.append(build_solution(problem, selected, base.blm, metadata=meta))
+        return solutions
