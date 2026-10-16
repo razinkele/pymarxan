@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-10-16
+
 ### Added
 
 - **Exact multi-objective optimisation** in `pymarxan.multiobjective` (prioritizr 9.0.1 concepts, Stage 3 of the prioritizr roadmap): `MultiObjectiveMIP(objectives, approach)` over one `ConservationProblem`, with objective specs `MinCost`, `MinBoundary`, `MinShortfall`, `MinLargestShortfall`, `MaxFeatures`, `MaxWeightedFeatures` and `MaxWtdSum`, and approaches `Hierarchical(rel_tol, abs_tol=1e-9)` (lexicographic, in list order; Williams & Kendall 2017, https://doi.org/10.1016/j.ecolmodel.2016.10.010; applied in Schuster et al. 2023, https://doi.org/10.1111/cobi.14048) and `WeightedSum(weights)` (one solve per weight row; unscaled, so objectives in different units need scaled weights: Das & Dennis 1997, https://doi.org/10.1007/BF01197559). As prioritizr cautions for its weighted-sum objectives, `MaxWtdSum` ignores complementarity (more of a well-held feature scores as much as a missing one), so pair it with a shortfall objective when representation matters. Both take a 2-D sequence for a sweep and return one `Solution` per row, with `metadata["objective_values"]`, `["objective_senses"]`, `["status"]`, `["sol_status"]` and, for hierarchical runs, `["stage_reached"]`. Targets are soft and `COSTBUDGET` is optional. `weights_matrix` / `rel_tol_matrix` reproduce prioritizr's parameter matrices row for row, and `nondominated` filters a sweep's solutions (Hanson et al. 2024, prioritizr, https://doi.org/10.1111/cobi.14376).
@@ -1437,7 +1439,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.0
 [0.40.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.40.0
 [0.39.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.39.0
 [0.38.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.38.0
