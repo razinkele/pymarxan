@@ -11,7 +11,7 @@ core-only: they read ``ObjectiveContext`` fields that ``MIPSolver`` fills from
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -22,6 +22,8 @@ OBJECTIVE_ALIASES = {"max_n_targets_met": "max_features"}  # prioritizr >= 9 nam
 NO_SOLUTION_STATUSES = frozenset(
     {pulp.LpStatusInfeasible, pulp.LpStatusUnbounded, pulp.LpStatusUndefined}
 )
+# A multi-objective solve is accepted only on these solution statuses (spec §4.1).
+ACCEPTED_SOL_STATUSES = frozenset({pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible})
 
 
 def resolve_objective(name: str, allowed: tuple[str, ...]) -> str:
@@ -283,3 +285,136 @@ def solve_lexicographic(
         )
         return status1
     return int(model.status)
+
+
+def constraint_map(model: pulp.LpProblem) -> dict[str, pulp.LpConstraint]:
+    """Name -> row of ``model``, without PuLP 3.3's deprecated mapping access.
+
+    PuLP 3.3 warns on every dict-style use of ``LpProblem.constraints`` (PuLP 4.0 makes
+    it a method returning a list) and has no public row deletion; PuLP 2.x stores the
+    dict on ``constraints`` itself. ``pyproject`` allows ``PuLP>=2.7,<4``.
+    """
+    rows = getattr(model, "_constraints", None)
+    if isinstance(rows, dict):
+        return rows
+    legacy: dict[str, pulp.LpConstraint] = model.constraints
+    return legacy
+
+
+def _tracked(
+    model: pulp.LpProblem, extra: Iterable[pulp.LpVariable]
+) -> list[pulp.LpVariable]:
+    """``model.variables()`` ∪ ``extra``, deduplicated (spec §5 tracked variable set).
+
+    A PU with zero cost and no rows, and an auxiliary in an empty row, are not in
+    ``model.variables()``; callers pass x and the registry as ``extra``.
+    """
+    seen: dict[int, pulp.LpVariable] = {}
+    for v in [*model.variables(), *extra]:
+        seen.setdefault(id(v), v)
+    return list(seen.values())
+
+
+def evaluate_implied(
+    model: pulp.LpProblem,
+    x: Mapping[int, pulp.LpVariable],
+    x_rounded: Mapping[int, float],
+    implied: Sequence[ImpliedRule],
+    terms: Sequence[ObjectiveTerm],
+) -> tuple[list[float], bool]:
+    """Each term's value at the implied point of ``x_rounded``, and whether that point is
+    feasible (spec §5).
+
+    Sets x to ``x_rounded``, applies every implied rule in registry order, reads each
+    ``term.expr``, checks **every** model row (``hier_cap_*`` included) with
+    ``valid(1e-6)``, and restores every tracked ``varValue``.
+    """
+    tracked = _tracked(model, [*x.values(), *(v for v, _ in implied)])
+    snapshot = [(v, v.varValue) for v in tracked]
+    try:
+        for pid, var in x.items():
+            var.varValue = float(x_rounded[pid])
+        for var, rule in implied:
+            var.varValue = rule()
+        values = [expr_value(t.expr) for t in terms]
+        feasible = all(c.valid(1e-6) for c in constraint_map(model).values())
+    finally:
+        for var, value in snapshot:
+            var.varValue = value
+    return values, feasible
+
+
+@dataclass(frozen=True)
+class HierarchicalResult:
+    """``status`` / ``sol_status`` of the last accepted stage; ``stage_reached`` = accepted
+    stages (n on full success, 0 when stage 1 has no solution)."""
+
+    status: int
+    sol_status: int
+    stage_reached: int
+
+
+def solve_hierarchical(
+    model: pulp.LpProblem,
+    terms: Sequence[ObjectiveTerm],
+    rel_tols: Sequence[float],
+    abs_tol: float,
+    solver: pulp.LpSolver,
+    evaluate: Callable[[int], float | None],
+    *,
+    tracked: Iterable[pulp.LpVariable],
+) -> HierarchicalResult:
+    """Lexicographic optimisation of ``terms`` in list order (spec §4.1).
+
+    Stage k < n is capped (row ``hier_cap_{k}``) at ``f ≤ v + r_k·|v| + abs_tol``
+    (minimise) or ``f ≥ v − (r_k·|v| + abs_tol)`` (maximise), ``r_k = rel_tols[k-1]``.
+    ``v`` is the better, in the stage's sense, of the model value of ``term.expr`` and
+    ``evaluate(k-1)`` (the implied value, ``None`` when the implied point is infeasible).
+    Values are reset to ``None`` before each solve, and a solve is accepted only when
+    ``model.sol_status`` is 1 or 2. On a failed stage the previous stage's values are
+    restored and the loop stops. Cap rows are removed before returning, also on failure.
+    ``tracked`` adds variables missing from ``model.variables()`` (x, the registry) to the
+    reset / snapshot / restore. Raises nothing itself.
+    """
+    extra = list(tracked)
+    caps: list[str] = []
+    snapshot: list[tuple[pulp.LpVariable, float | None]] | None = None
+    accepted = HierarchicalResult(0, 0, 0)
+    try:
+        for k, term in enumerate(terms, start=1):
+            variables = _tracked(model, extra)
+            for var in variables:
+                var.varValue = None
+            set_objective(model, term)
+            model.solve(solver)
+            if model.sol_status not in ACCEPTED_SOL_STATUSES:
+                if snapshot is None:
+                    return HierarchicalResult(int(model.status), int(model.sol_status), 0)
+                for var in variables:
+                    var.varValue = None
+                for var, value in snapshot:
+                    var.varValue = value
+                return accepted
+            snapshot = [(var, var.varValue) for var in _tracked(model, extra)]
+            accepted = HierarchicalResult(int(model.status), int(model.sol_status), k)
+            if k == len(terms):
+                break
+            v_model = expr_value(term.expr)
+            v_rec = evaluate(k - 1)
+            if v_rec is None:
+                v = v_model
+            elif term.sense == pulp.LpMinimize:
+                v = min(v_model, v_rec)
+            else:
+                v = max(v_model, v_rec)
+            slack = float(rel_tols[k - 1]) * abs(v) + abs_tol
+            name = f"hier_cap_{k}"
+            if term.sense == pulp.LpMinimize:
+                model += term.expr <= v + slack, name
+            else:
+                model += term.expr >= v - slack, name
+            caps.append(name)
+        return accepted
+    finally:
+        for name in caps:
+            del constraint_map(model)[name]
