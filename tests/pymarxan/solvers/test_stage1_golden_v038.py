@@ -1,6 +1,15 @@
 """v0.38 MIP models and selections that Stage 1 must not change (spec Testing 4, 5, 12).
 
-GOLDEN was recorded on unmodified v0.38 (e5a066c). Regenerate only with a written reason:
+GOLDEN was recorded on unmodified v0.38 (e5a066c). Regenerate only with a written reason.
+
+Regenerated for v0.41 (Stage 3, spec §2): ``core_mls_abs_relabs`` and
+``core_mls_abs_infeasible`` only. Absolute ``min_largest_shortfall`` moved onto
+``build_min_largest_shortfall``, which renames its rows and variables (``slack_{id}`` ->
+``s_f{id}`` / ``short_f{id}``, ``max_shortfall_{id}`` -> ``maxs_f{id}``) and drops R <= 0
+slack rows. The pinned selection ``[1, 0, 0]`` is unchanged; every other entry is
+byte-identical.
+
+Regenerate with:
     PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python \
         tests/pymarxan/solvers/test_stage1_golden_v038.py
 """

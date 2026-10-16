@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,8 +25,12 @@ from pymarxan.solvers._backends import (
 )
 from pymarxan.solvers._mip_objectives import (
     BUILDERS,
+    ImpliedRule,
     ObjectiveContext,
     TargetTerm,
+    build_min_cost,
+    build_min_shortfall,
+    expr_value,
     resolve_objective,
     set_objective,
     solve_lexicographic,
@@ -95,18 +100,6 @@ def _core_spf(problem: ConservationProblem) -> dict[int, float]:
     }
 
 
-def _feat_met_vars(problem: ConservationProblem) -> dict[int, pulp.LpVariable]:
-    """Binary met-indicator per feature with raw target > 0 (spec §1; as the zone
-    solver's ``_zone_target_terms``): a target-0 feature is no term and is not counted."""
-    ids = problem.features["id"].values
-    targets = problem.features["target"].values.astype(float)
-    return {
-        int(f): pulp.LpVariable(f"feat_met_{int(f)}", cat="Binary")
-        for f, t in zip(ids, targets, strict=True)
-        if t > 0
-    }
-
-
 MIP_OBJECTIVES = (
     "min_set",
     "max_features",
@@ -163,6 +156,53 @@ def _core_target_terms(
             required=t * misslevel, weight=spf[fid],
         ))
     return terms
+
+
+def _value(var: pulp.LpVariable) -> float:
+    return float(var.varValue or 0.0)
+
+
+def _abs_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
+    """Boundary auxiliary: |x_i − x_j|, as the abs rows bound it."""
+    return lambda: abs(_value(a) - _value(b))
+
+
+def _and_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
+    """Symmetric connectivity auxiliary: x_i·x_j."""
+    return lambda: _value(a) * _value(b)
+
+
+def _src_without_sink_rule(i: pulp.LpVariable, j: pulp.LpVariable) -> Callable[[], float]:
+    """Asymmetric connectivity auxiliary: x_i·(1 − x_j)."""
+    return lambda: _value(i) * (1.0 - _value(j))
+
+
+@dataclass
+class _BaseModel:
+    """Result of ``MIPSolver._build_base``: the model every objective shares (spec §2)."""
+
+    model: pulp.LpProblem
+    x: dict[int, pulp.LpVariable]
+    pu_ids: list[int]
+    blm: float
+    cost_expr: pulp.LpAffineExpression
+    boundary_expr: pulp.LpAffineExpression  # unweighted
+    conn_expr: pulp.LpAffineExpression
+    prob_expr: pulp.LpAffineExpression
+    amount_exprs: dict[int, pulp.LpAffineExpression]
+    terms: list[TargetTerm]
+    implied: list[ImpliedRule]
+    probmode: int
+    has_target2: bool
+    has_sep_active: bool
+
+    def context(self) -> ObjectiveContext:
+        """One ``ObjectiveContext`` sharing this base's expressions and registry."""
+        return ObjectiveContext(
+            self.model, self.cost_expr, self.terms, blm=self.blm,
+            boundary_expr=self.boundary_expr, conn_expr=self.conn_expr,
+            prob_expr=self.prob_expr, amount_exprs=self.amount_exprs, implied=self.implied,
+        )
 
 
 @dataclass
@@ -291,11 +331,19 @@ class MIPSolver(Solver):
     def available(self) -> bool:
         return True  # pulp is a core dependency
 
-    def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
-        """Build the PuLP model (no warnings, no solve)."""
-        objective_expr: pulp.LpAffineExpression | None = None
-        lex: tuple[pulp.LpAffineExpression, pulp.LpAffineExpression] | None = None
+    def _build_base(
+        self,
+        problem: ConservationProblem,
+        config: SolverConfig,
+        *,
+        need_boundary: bool = False,
+    ) -> _BaseModel:
+        """Everything every objective shares (spec §2); no targets, budget or objective.
 
+        The boundary rows are built when a boundary table exists and BLM > 0 or
+        ``need_boundary``. Every auxiliary variable is registered in ``implied`` with the
+        value its rows imply from x (spec §5).
+        """
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = int(problem.parameters.get("PROBMODE", 0))
         if probmode == 3:
@@ -351,6 +399,7 @@ class MIPSolver(Solver):
 
         blm = float(problem.parameters.get("BLM", 0.0))
         pu_ids = problem.planning_units["id"].tolist()
+        implied: list[ImpliedRule] = []
 
         # Build the LP model
         model = pulp.LpProblem("MarxanMIP", pulp.LpMinimize)
@@ -368,17 +417,17 @@ class MIPSolver(Solver):
             elif status == STATUS_LOCKED_OUT:
                 model += x[pid] == 0, f"locked_out_{pid}"
 
-        # Objective: cost component
+        # Cost component
         pu_cost_arr = problem.planning_units["cost"].values.astype(float)
         cost_expr = pulp.lpSum(
             float(pu_cost_arr[k]) * x[int(pu_id_arr[k])]
             for k in range(len(pu_id_arr))
         )
 
-        # Boundary component with auxiliary variables
-        boundary_expr = 0
+        # Unweighted boundary component with auxiliary variables
+        boundary_expr = pulp.LpAffineExpression()
         y = {}
-        if blm > 0 and problem.boundary is not None:
+        if (blm > 0 or need_boundary) and problem.boundary is not None:
             b_id1 = problem.boundary["id1"].values
             b_id2 = problem.boundary["id2"].values
             b_val = problem.boundary["boundary"].values.astype(float)
@@ -406,10 +455,11 @@ class MIPSolver(Solver):
                             y_var >= x[key[1]] - x[key[0]],
                             f"abs2_{key[0]}_{key[1]}",
                         )
+                        implied.append((y_var, _abs_rule(x[key[0]], x[key[1]])))
                     boundary_expr += bval * y[key]
 
         # Connectivity component with auxiliary variables
-        conn_expr = 0
+        conn_expr = pulp.LpAffineExpression()
         conn_weight = float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0))
         asymmetric = bool(
             int(problem.parameters.get("ASYMMETRIC_CONNECTIVITY", 0))
@@ -432,11 +482,13 @@ class MIPSolver(Solver):
                         f"zc_{i}_{j}", lowBound=0, cat="Continuous",
                     )
                     model += z >= x[i] - x[j], f"conn_asym_{i}_{j}"
+                    implied.append((z, _src_without_sink_rule(x[i], x[j])))
                     conn_expr += conn_weight * cval * z
             else:
                 # Reward both selected via binary-AND linearization:
                 #   z_ij <= x_i, z_ij <= x_j, z_ij >= x_i + x_j - 1
                 #   objective: -conn_weight * c_ij * z_ij
+                # The first row of a duplicated (i, j) / (j, i) pair wins.
                 seen: set[tuple[int, int]] = set()
                 for ck in range(len(c_id1)):
                     i = int(c_id1[ck])
@@ -453,10 +505,12 @@ class MIPSolver(Solver):
                         z >= x[key[0]] + x[key[1]] - 1,
                         f"conn_and3_{key[0]}_{key[1]}",
                     )
+                    implied.append((z, _and_rule(x[key[0]], x[key[1]])))
                     conn_expr += -conn_weight * cval * z
 
-        # Probability risk premium (Mode 1)
-        prob_expr = 0
+        # Probability risk premium (Mode 1). PROBMODE defaults to 1 here (0 for the
+        # PROBMODE 3 gate above): a probability table without PROBMODE is Mode 1.
+        prob_expr = pulp.LpAffineExpression()
         prob_mode = int(problem.parameters.get("PROBMODE", 1))
         if problem.probability is not None and prob_mode == 1:
             prob_weight = float(
@@ -488,162 +542,7 @@ class MIPSolver(Solver):
                 prob_map_m2[int(p_pu[pk])] = float(p_val[pk])
 
         amount_exprs = _core_amount_exprs(problem, x, prob_map_m2)
-
-        # Phase 23: select objective formulation. Default "min_set" preserves
-        # pre-Phase-23 behaviour.
-        feat_met: dict[int, pulp.LpVariable] = {}
-        slack: dict[int, pulp.LpVariable] = {}
-        t_var: pulp.LpVariable | None = None
-        feat_ids_init = problem.features["id"].values
-        builder_path = self.objective == "min_shortfall" or (
-            self.objective == "min_largest_shortfall" and self.shortfall == "relative"
-        )
-        if builder_path:
-            cost_budget = problem.parameters.get("COSTBUDGET")
-            if cost_budget is None:
-                raise ValueError(
-                    f"objective={self.objective!r} requires a COSTBUDGET parameter "
-                    "(problem.parameters['COSTBUDGET'] = ...); without a budget every "
-                    "shortfall is 0 by selecting all planning units."
-                )
-            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
-            ctx = ObjectiveContext(model, cost_expr, terms)
-            term = BUILDERS[self.objective](ctx, self.shortfall)
-            set_objective(model, term)
-            model += cost_expr <= float(cost_budget), "cost_budget"
-            objective_expr = term.expr
-        elif self.objective == "max_features":
-            # Binary z_j per feature; relaxed target ≥ target · z_j; cost
-            # cap from COSTBUDGET. Maximise Σ z_j (LpMinimize → negate).
-            cost_budget = problem.parameters.get("COSTBUDGET")
-            if cost_budget is None:
-                raise ValueError(
-                    "objective='max_features' requires a COSTBUDGET parameter "
-                    "on the problem (problem.parameters['COSTBUDGET'] = ...). "
-                    "Without a budget the formulation is degenerate — every "
-                    "feature target is trivially met by selecting all PUs."
-                )
-            cost_budget = float(cost_budget)
-            feat_met = _feat_met_vars(problem)
-            model += (
-                -pulp.lpSum(feat_met[fid] for fid in feat_met),
-                "objective",
-            )
-            model += cost_expr <= cost_budget, "cost_budget"
-        elif self.objective == "max_weighted_features":
-            # Binary z_j per feature; relaxed target ≥ target · z_j; cost cap
-            # from COSTBUDGET. Maximise Σ spf_j·z_j (LpMinimize → negate) — the
-            # spf-weighted count of targets met. With spf = branch length this
-            # maximises phylogenetic diversity. This weights the *target-met*
-            # indicator; it is NOT the objectives/ MaxUtility class (which sums
-            # held amounts). Like max_features, a feature with no pu_vs_features
-            # rows can never be met (feat_met is forced to 0 below). Solution.objective
-            # is recomputed min_set-style and is NOT the weighted objective value.
-            cost_budget = problem.parameters.get("COSTBUDGET")
-            if cost_budget is None:
-                raise ValueError(
-                    "objective='max_weighted_features' requires a COSTBUDGET "
-                    "parameter on the problem "
-                    "(problem.parameters['COSTBUDGET'] = ...). Without a budget "
-                    "the formulation is degenerate — every target is trivially "
-                    "met by selecting all PUs."
-                )
-            cost_budget = float(cost_budget)
-            spf_by_id = _core_spf(problem)
-            feat_met = _feat_met_vars(problem)
-            model += (
-                -pulp.lpSum(spf_by_id[fid] * feat_met[fid] for fid in feat_met),
-                "objective",
-            )
-            model += cost_expr <= cost_budget, "cost_budget"
-        elif self.objective == "min_largest_shortfall":
-            # Auxiliary slack_j ≥ 0, slack_j ≥ target_j - Σ amount·x;
-            # t ≥ slack_j for every feature. Minimise t.
-            cost_budget = problem.parameters.get("COSTBUDGET")
-            if cost_budget is None:
-                raise ValueError(
-                    "objective='min_largest_shortfall' requires a COSTBUDGET "
-                    "parameter (problem.parameters['COSTBUDGET'] = ...). "
-                    "Without a budget the objective is degenerate (buying "
-                    "every PU drives every shortfall to 0)."
-                )
-            cost_budget = float(cost_budget)
-            t_var = pulp.LpVariable("max_shortfall", lowBound=0)
-            for fi in range(len(feat_ids_init)):
-                fid = int(feat_ids_init[fi])
-                slack[fid] = pulp.LpVariable(f"slack_{fid}", lowBound=0)
-                # Coupling slack ≤ t handled below via t ≥ slack.
-            model += (t_var, "objective")
-            model += cost_expr <= cost_budget, "cost_budget"
-        elif self.objective == "min_penalties":
-            # Exact lexicographic (S2): pass 1 min Σ SPF·shortfall, pass 2 min cost at that
-            # optimum (solve_lexicographic). v0.38's big-M (Σ cost + 1) only dominated when
-            # SPF·Δshortfall >= 1, so fractional data could trade targets for cost. Not
-            # prioritizr's add_min_penalties_objective (penalty-only, hard targets).
-            terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
-            ctx = ObjectiveContext(model, cost_expr, terms)
-            primary = pulp.lpSum(t.weight * ctx.slack(t) for t in ctx.terms)
-            model.setObjective(primary)  # build_model exports the pass-1 model
-            lex = (primary, cost_expr)
-            objective_expr = primary
-        else:
-            model += (
-                cost_expr + blm * boundary_expr + conn_expr + prob_expr,
-                "objective",
-            )
-
-        # Constraints: feature targets
-        misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-
-        # Pre-group feature data for O(1) lookup instead of O(R) filtering
-        feat_groups = problem.pu_vs_features.groupby("species")
-
-        feat_ids = problem.features["id"].values
-        feat_targets = problem.features["target"].values.astype(float)
-        for fi in range(len(feat_ids)):
-            fid = int(feat_ids[fi])
-            target = float(feat_targets[fi]) * misslevel
-
-            if fid in feat_groups.groups and not (
-                builder_path or self.objective == "min_penalties"
-            ):
-                amount_expr = amount_exprs[fid]
-                if self.objective in ("max_features", "max_weighted_features"):
-                    if fid not in feat_met:
-                        continue  # target 0: no term (spec §1), no row
-                    # Relaxed target: only enforced when feat_met_j = 1.
-                    # Maximising Σ (weight·)feat_met_j therefore picks as many
-                    # (weighted) features as the cost budget will pay for.
-                    model += (
-                        amount_expr >= target * feat_met[fid],
-                        f"target_{fid}",
-                    )
-                elif self.objective == "min_largest_shortfall":
-                    # slack_j ≥ target_j − amount; t ≥ slack_j.
-                    model += (
-                        slack[fid] >= target - amount_expr,
-                        f"slack_{fid}",
-                    )
-                    assert t_var is not None  # for mypy: set in init block above
-                    model += t_var >= slack[fid], f"max_shortfall_{fid}"
-                else:
-                    model += amount_expr >= target, f"target_{fid}"
-
-        if feat_met:
-            # Ghost features (target > 0, no pu_vs_features rows) can never be met; v0.38
-            # left feat_met unconstrained so the maximiser counted them for free.
-            # feat_met exists for raw target > 0 (spec §1), but a ghost is forced to 0 only
-            # when target × MISSLEVEL > 0: at MISSLEVEL 0 the required amount is 0, so the
-            # term is met (the zone solver's 0 >= 0·y agrees) and the two conditions differ
-            # deliberately.
-            for fi in range(len(feat_ids)):
-                fid = int(feat_ids[fi])
-                if (
-                    fid in feat_met
-                    and fid not in feat_groups.groups
-                    and float(feat_targets[fi]) * misslevel > 0
-                ):
-                    feat_met[fid].upBound = 0
+        terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)
 
         # Phase 25: no-good cuts for portfolio generation. Each forbidden
         # selection vector contributes one constraint forcing at least
@@ -666,14 +565,59 @@ class MIPSolver(Solver):
                     diff_terms.append(x[pid])
             model += pulp.lpSum(diff_terms) >= 1, f"nogood_cut_{forbid_idx}"
 
-        if objective_expr is None:  # natural units: min_set / max_* / absolute minimax
-            objective_expr = model.objective
-            if self.objective in ("max_features", "max_weighted_features"):
-                objective_expr = -model.objective
+        return _BaseModel(
+            model=model, x=x, pu_ids=pu_ids, blm=blm, cost_expr=cost_expr,
+            boundary_expr=boundary_expr, conn_expr=conn_expr, prob_expr=prob_expr,
+            amount_exprs=amount_exprs, terms=terms, implied=implied, probmode=probmode,
+            has_target2=bool(has_target2), has_sep_active=bool(has_sep_active),
+        )
+
+    def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
+        """Build the PuLP model (no warnings, no solve): the base plus this objective."""
+        base = self._build_base(problem, config)
+        model = base.model
+        ctx = base.context()
+        lex: tuple[pulp.LpAffineExpression, pulp.LpAffineExpression] | None = None
+        if self.objective == "min_set":
+            term = build_min_cost(ctx, self.shortfall)
+            set_objective(model, term)
+            # Hard targets for every feature with pu_vs_features rows (a ghost adds none).
+            misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
+            for fid_raw, target in zip(
+                problem.features["id"].values,
+                problem.features["target"].values.astype(float),
+                strict=True,
+            ):
+                fid = int(fid_raw)
+                if fid in base.amount_exprs:
+                    model += (
+                        base.amount_exprs[fid] >= float(target) * misslevel,
+                        f"target_{fid}",
+                    )
+        elif self.objective == "min_penalties":
+            # Exact lexicographic (S2): pass 1 min Σ SPF·shortfall, pass 2 min cost at that
+            # optimum (solve_lexicographic). v0.38's big-M (Σ cost + 1) only dominated when
+            # SPF·Δshortfall >= 1, so fractional data could trade targets for cost. Not
+            # prioritizr's add_min_penalties_objective (penalty-only, hard targets).
+            term = build_min_shortfall(ctx, "absolute")
+            model.setObjective(term.expr)  # build_model exports the pass-1 model
+            lex = (term.expr, base.cost_expr)
+        else:
+            cost_budget = problem.parameters.get("COSTBUDGET")
+            if cost_budget is None:
+                raise ValueError(
+                    f"objective={self.objective!r} requires a COSTBUDGET parameter "
+                    "(problem.parameters['COSTBUDGET'] = ...); without a budget the "
+                    "objective is degenerate (selecting every planning unit meets "
+                    "every target)."
+                )
+            term = BUILDERS[self.objective](ctx, self.shortfall)
+            set_objective(model, term)
+            model += base.cost_expr <= float(cost_budget), "cost_budget"
         return _BuiltModel(
-            model=model, x=x, pu_ids=pu_ids, blm=blm, objective_expr=objective_expr,
-            probmode=probmode, has_target2=bool(has_target2),
-            has_sep_active=bool(has_sep_active), lex=lex,
+            model=model, x=base.x, pu_ids=base.pu_ids, blm=base.blm, objective_expr=term.expr,
+            probmode=base.probmode, has_target2=base.has_target2,
+            has_sep_active=base.has_sep_active, lex=lex,
         )
 
     def build_model(
@@ -754,12 +698,8 @@ class MIPSolver(Solver):
         # automatically when PROBMODE==3. Under the 'drop' strategy, the
         # MIP solved the deterministic relaxation; the chance-constraint
         # gap is what build_solution reports post-hoc.
-        # pulp.value() is None when any variable in the expression has no value (zero-cost
-        # x never written to the LP); evaluate the objective reading those as 0.
-        obj_expr = built.objective_expr
-        obj_value = float(obj_expr.constant or 0.0) + sum(
-            float(coef) * float(v.varValue or 0.0) for v, coef in obj_expr.items()
-        )
+        # A zero-cost x never written to the LP has no value: expr_value reads it as 0.
+        obj_value = expr_value(built.objective_expr)
         meta = {
             "solver": self.name(),
             "status": pulp.LpStatus[status],

@@ -409,38 +409,38 @@
     "rhs": 1.0,
     "sense": -1
    },
-   "max_shortfall_1": {
+   "maxs_f1": {
     "coefs": [
      [
       "max_shortfall",
       1.0
      ],
      [
-      "slack_1",
+      "s_f1",
       -1.0
      ]
     ],
-    "rhs": 0.0,
+    "rhs": -0.0,
     "sense": 1
    },
-   "max_shortfall_2": {
+   "maxs_f2": {
     "coefs": [
      [
       "max_shortfall",
       1.0
      ],
      [
-      "slack_2",
+      "s_f2",
       -1.0
      ]
     ],
-    "rhs": 0.0,
+    "rhs": -0.0,
     "sense": 1
    },
-   "slack_1": {
+   "short_f1": {
     "coefs": [
      [
-      "slack_1",
+      "s_f1",
       1.0
      ],
      [
@@ -455,10 +455,10 @@
     "rhs": 10.0,
     "sense": 1
    },
-   "slack_2": {
+   "short_f2": {
     "coefs": [
      [
-      "slack_2",
+      "s_f2",
       1.0
      ],
      [
@@ -490,13 +490,13 @@
     null
    ],
    [
-    "slack_1",
+    "s_f1",
     "Continuous",
     0,
     null
    ],
    [
-    "slack_2",
+    "s_f2",
     "Continuous",
     0,
     null
@@ -535,38 +535,38 @@
     "rhs": 1.0,
     "sense": -1
    },
-   "max_shortfall_1": {
+   "maxs_f1": {
     "coefs": [
      [
       "max_shortfall",
       1.0
      ],
      [
-      "slack_1",
+      "s_f1",
       -1.0
      ]
     ],
-    "rhs": 0.0,
+    "rhs": -0.0,
     "sense": 1
    },
-   "max_shortfall_2": {
+   "maxs_f2": {
     "coefs": [
      [
       "max_shortfall",
       1.0
      ],
      [
-      "slack_2",
+      "s_f2",
       -1.0
      ]
     ],
-    "rhs": 0.0,
+    "rhs": -0.0,
     "sense": 1
    },
-   "slack_1": {
+   "short_f1": {
     "coefs": [
      [
-      "slack_1",
+      "s_f1",
       1.0
      ],
      [
@@ -581,10 +581,10 @@
     "rhs": 100.0,
     "sense": 1
    },
-   "slack_2": {
+   "short_f2": {
     "coefs": [
      [
-      "slack_2",
+      "s_f2",
       1.0
      ],
      [
@@ -616,13 +616,13 @@
     null
    ],
    [
-    "slack_1",
+    "s_f1",
     "Continuous",
     0,
     null
    ],
    [
-    "slack_2",
+    "s_f2",
     "Continuous",
     0,
     null

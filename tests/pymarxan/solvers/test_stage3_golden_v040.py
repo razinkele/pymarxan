@@ -196,9 +196,21 @@ def _assert_same(got: dict[str, Any], want: dict[str, Any]) -> None:
             assert got[key] == want[key], key
 
 
+# Spec §2 Fixed: absolute min_largest_shortfall now counts a ghost feature (target > 0, no
+# pu_vs_features rows) as m >= R = target × MISSLEVEL (10 × 0.9), as relative mode, the zone
+# solver and the v0.39 max_* ghost fix do. v0.40 reported 0.0 (all real targets met).
+# Every plan ties at m = R, so only the value is pinned.
+STAGE3_FIXED = {"ghost_misslevel09|min_largest_shortfall|absolute": 9.0}
+
+
 @pytest.mark.parametrize("case", CASES)
 def test_mip_solver_result_unchanged(golden: dict[str, Any], case: str) -> None:
-    _assert_same(_run(case), golden[case])
+    got = _run(case)
+    if case in STAGE3_FIXED:
+        assert golden[case]["mip_objective_value"] == 0.0  # the v0.40 value
+        assert got["mip_objective_value"] == pytest.approx(STAGE3_FIXED[case], abs=1e-9)
+        return
+    _assert_same(got, golden[case])
 
 
 def test_simple_min_set_anchor_in_golden(golden: dict[str, Any]) -> None:
@@ -210,13 +222,16 @@ def test_simple_min_set_anchor_in_golden(golden: dict[str, Any]) -> None:
 
 
 def test_ghost_absolute_min_largest_shortfall(golden: dict[str, Any]) -> None:
-    """v0.40 ignores the ghost (target 50, no rows) and reports a largest shortfall of 5.0."""
-    rec = golden["ghost_absolute_mls_v040"]
-    assert rec["mip_objective_value"] == 5.0
+    """Spec §2 Fixed: v0.40 ignored the ghost (target 50, no rows) and reported 5.0.
+
+    The builder counts it (m >= 50). The ghost holds m at 50, so every plan ties and CBC
+    returns the empty plan where v0.40 returned a cost-23 one: pin only the value.
+    """
+    assert golden["ghost_absolute_mls_v040"]["mip_objective_value"] == 5.0
     got = _result(
         _ghost_absolute_mls(), ONE, objective="min_largest_shortfall", shortfall="absolute",
     )
-    _assert_same(got, rec)
+    assert got["mip_objective_value"] == 50.0
 
 
 if __name__ == "__main__":

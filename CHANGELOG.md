@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `MIPSolver` internals are refactored onto the objective builders in `solvers/_mip_objectives.py`: `_build` is now a shared base model (`_build_base`: locks, cost, boundary, connectivity, probability, amounts, no-good cuts) plus one builder per objective. Solutions are unchanged (pinned by `tests/data/golden/stage3_v040.json`), except the ghost-feature fix below. LP variable and constraint names in exported models (`build_model`, `write_problem`) change for `max_features` / `max_weighted_features` / absolute `min_largest_shortfall`: `feat_met_{id}` → `y_f{id}`, `slack_{id}` → `s_f{id}`, the relaxed `target_{id}` → `met_f{id}`, `slack_{id}` rows → `short_f{id}`, `max_shortfall_{id}` → `maxs_f{id}`; the objective is no longer named `"objective"`. `min_set`'s hard `target_{id}` rows keep their names. The missing-`COSTBUDGET` error for `max_features`, `max_weighted_features` and absolute `min_largest_shortfall` now uses the shared `objective=... requires a COSTBUDGET parameter` text. Absolute `min_largest_shortfall` and `min_penalties` no longer add slack rows for a feature with target × MISSLEVEL ≤ 0, and `max_*` ghost features get a `met_f{id}` row instead of a fixed `upBound`.
+
+### Fixed
+
+- Absolute `min_largest_shortfall` now counts a ghost feature (target > 0, no `pu_vs_features` rows): its whole target is unmet, so the largest shortfall is at least target × MISSLEVEL, as in relative mode, `ZoneMIPSolver` and the v0.39 `max_*` ghost fix. v0.40 ignored it: the simple fixture plus a ghost with target 50 and COSTBUDGET 30 reported 5.0 (now 50.0), and with a ghost of target 10 at MISSLEVEL 0.9 and COSTBUDGET 33 it reported 0.0 (now 9.0). With a ghost present every plan ties on the minimax, so the returned plan degenerates (CBC may return the empty plan); `presolve_check` (P5) flags ghost features.
+
 ## [0.40.0] — 2026-10-15
 
 ### Added
