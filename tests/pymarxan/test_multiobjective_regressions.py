@@ -267,3 +267,90 @@ def test_implied_point_is_feasible_and_attains_the_reported_values() -> None:
             best = score if best is None else min(best, score)
     v = vals(sol)
     assert (v["min_cost"] + 3 * v["min_shortfall"]) / 4 == pytest.approx(best, abs=1e-9)
+
+
+# --- final-review fixes ----------------------------------------------------------
+
+
+def _big_problem(seed: int, scale: float) -> ConservationProblem:
+    """12 PUs, 2 features, costs/amounts ~1e6 (probe6 `mk`): objective values >> 1e5."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    n = 12
+    ids = np.arange(1, n + 1)
+    pu = {"id": ids.tolist(), "cost": (rng.uniform(1, 10, n) * scale).tolist(),
+          "status": [0] * n}
+    feat = {"id": [1, 2], "name": ["a", "b"], "target": [5.0, 5.0], "spf": [1.0, 1.0]}
+    rows = [(fid, int(i), float(rng.uniform(0, 3) * scale)) for fid in (1, 2) for i in ids]
+    pvf = {"species": [r[0] for r in rows], "pu": [r[1] for r in rows],
+           "amount": [r[2] for r in rows]}
+    return P(pu, feat, pvf, params={"COSTBUDGET": float(sum(pu["cost"]) * 0.4)})
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_large_values_reach_the_last_stage_with_zero_rel_tol(seed: int) -> None:
+    """MPS writes the cap RHS with 13 significant figures; a cap exactly at v can exclude
+    the stage optimum at |v| >~ 1e5, so the cap carries a relative floor of 1e-9·|v|."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warnings.simplefilter("ignore", DeprecationWarning)
+        sol = run([MaxWtdSum(), MinCost(), MinShortfall()], Hierarchical(0.0),
+                  _big_problem(seed, 1e6))[0]
+    assert sol.metadata["stage_reached"] == 3
+
+
+def test_hierarchical_accepts_0d_numpy_rel_tol() -> None:
+    import numpy as np
+
+    assert Hierarchical(np.array(0.1)).rows(3) == [[0.1, 0.1]]
+    assert Hierarchical(np.float64(0.1)).rows(3) == [[0.1, 0.1]]
+
+
+@pytest.mark.parametrize("bad", [{1.7: 1.0}, {"1": 1.0}, {True: 1.0}, {float("nan"): 1.0}])
+def test_max_wtd_sum_rejects_non_integral_keys(bad: dict[Any, float]) -> None:
+    with pytest.raises(ValueError, match="feature id"):
+        MaxWtdSum(weights=bad)
+
+
+def test_max_wtd_sum_rejects_keys_that_collapse() -> None:
+    from collections.abc import Mapping
+
+    class Pairs(Mapping):  # type: ignore[type-arg]
+        # numeric keys that compare equal hash alike, so only a custom Mapping can repeat one
+        def __init__(self, items: list[tuple[Any, float]]) -> None:
+            self._items = items
+
+        def __getitem__(self, k: Any) -> float:
+            return dict(self._items)[k]
+
+        def __iter__(self) -> Any:
+            return (k for k, _ in self._items)
+
+        def __len__(self) -> int:
+            return len(self._items)
+
+        def items(self) -> Any:
+            return list(self._items)
+
+        def values(self) -> Any:
+            return [w for _, w in self._items]
+
+    with pytest.raises(ValueError, match="duplicate"):
+        MaxWtdSum(weights=Pairs([(1, 1.0), (1.0, 2.0)]))
+
+
+def test_max_wtd_sum_accepts_numpy_and_integral_float_keys() -> None:
+    import numpy as np
+
+    assert MaxWtdSum(weights={np.int64(1): 1.0, 2.0: 3}).weights == {1: 1.0, 2: 3.0}  # type: ignore[dict-item]
+
+
+def test_objective_senses_are_per_solution_copies() -> None:
+    p = P({"id": [1, 2], "cost": [1.0, 2.0], "status": [0, 0]},
+          {"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]},
+          {"species": [1, 1], "pu": [1, 2], "amount": [1.0, 1.0]})
+    sols = run([MinCost(), MinShortfall()], WeightedSum([[1, 0], [0, 1]]), p)
+    assert len(sols) == 2
+    sols[0].metadata["objective_senses"]["extra"] = "x"
+    assert "extra" not in sols[1].metadata["objective_senses"]

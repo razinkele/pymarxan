@@ -400,7 +400,8 @@ return either plan, so the set can differ between backends.
 
 The hierarchical pick gives up 0.133 of shortfall to save one cost unit:
 stage 1 finds the best shortfall v, stage 2 minimises cost subject to
-`shortfall <= v + 0.1·|v| + abs_tol`. When the best value is 0 (for example
+`shortfall <= v + 0.1·|v| + max(abs_tol, 1e-9·|v|)` (the relative floor absorbs the
+rounding of the cap in the solver's MPS file at large values). When the best value is 0 (for example
 with no budget), `rel_tol` gives no slack; raise `abs_tol` (default 1e-9)
 instead. `objective_values` are each objective's own value at the plan;
 `Solution.cost` and `Solution.objective` are filled as `MIPSolver` fills

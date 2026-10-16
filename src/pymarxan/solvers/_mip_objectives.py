@@ -354,6 +354,11 @@ class HierarchicalResult:
     stage_reached: int
 
 
+# MPS writes the RHS with 13 significant figures, so a cap at exactly v can exclude the stage
+# optimum itself once |v| >~ 1e5; the floor keeps that rounding inside the cap.
+_CAP_REL_FLOOR = 1e-9
+
+
 def solve_hierarchical(
     model: pulp.LpProblem,
     terms: Sequence[ObjectiveTerm],
@@ -366,8 +371,9 @@ def solve_hierarchical(
 ) -> HierarchicalResult:
     """Lexicographic optimisation of ``terms`` in list order (spec §4.1).
 
-    Stage k < n is capped (row ``hier_cap_{k}``) at ``f ≤ v + r_k·|v| + abs_tol``
-    (minimise) or ``f ≥ v − (r_k·|v| + abs_tol)`` (maximise), ``r_k = rel_tols[k-1]``.
+    Stage k < n is capped (row ``hier_cap_{k}``) at ``f ≤ v + r_k·|v| + s``
+    (minimise) or ``f ≥ v − (r_k·|v| + s)`` (maximise), ``r_k = rel_tols[k-1]`` and
+    ``s = max(abs_tol, 1e-9·|v|)``.
     ``v`` is the better, in the stage's sense, of the model value of ``term.expr`` and
     ``evaluate(k-1)`` (the implied value, ``None`` when the implied point is infeasible).
     Values are reset to ``None`` before each solve, and a solve is accepted only when
@@ -407,7 +413,7 @@ def solve_hierarchical(
                 v = min(v_model, v_rec)
             else:
                 v = max(v_model, v_rec)
-            slack = float(rel_tols[k - 1]) * abs(v) + abs_tol
+            slack = float(rel_tols[k - 1]) * abs(v) + max(abs_tol, _CAP_REL_FLOOR * abs(v))
             name = f"hier_cap_{k}"
             if term.sense == pulp.LpMinimize:
                 model += term.expr <= v + slack, name

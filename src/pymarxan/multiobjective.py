@@ -4,8 +4,9 @@ Objectives are specs (``MinCost``, ``MinBoundary``, ``MinShortfall``, ``MinLarge
 ``MaxFeatures``, ``MaxWeightedFeatures``, ``MaxWtdSum``) combined by an approach:
 
 - ``Hierarchical(rel_tol, abs_tol=1e-9)``: lexicographic, in list order. Each stage caps the
-  objective just solved at ``v + r·|v| + abs_tol`` (minimise) or ``v − (r·|v| + abs_tol)``
-  (maximise) and solves the next. At ``v = 0`` only ``abs_tol`` is allowed.
+  objective just solved at ``v + r·|v| + s`` (minimise) or ``v − (r·|v| + s)``
+  (maximise) and solves the next, with ``s = max(abs_tol, 1e-9·|v|)`` (the relative floor
+  absorbs MPS rounding at large |v|). At ``v = 0`` only ``abs_tol`` is allowed.
 - ``WeightedSum(weights)``: one solve of ``Σ (w/Σw)·s·f`` per weight row (s = −1 for a
   maximised objective). Objectives are **not** scaled: objectives in different units need
   weights scaled to their magnitudes (Das & Dennis 1997,
@@ -170,6 +171,15 @@ class MaxWeightedFeatures(ObjectiveSpec):
     sense: ClassVar[str] = "max"
 
 
+def _feature_id(k: object) -> int:
+    """An int, a numpy integer or an integral float; never a bool or str."""
+    if isinstance(k, numbers.Integral) and not isinstance(k, bool):
+        return int(k)
+    if isinstance(k, numbers.Real) and not isinstance(k, bool) and float(k).is_integer():
+        return int(float(k))
+    raise ValueError(f"weights keys must be integral feature ids, got {k!r}")
+
+
 @dataclass(frozen=True)
 class MaxWtdSum(ObjectiveSpec):
     """Σ w_j · amount held_j (prioritizr ``max_wtd_sum``).
@@ -193,8 +203,13 @@ class MaxWtdSum(ObjectiveSpec):
             bad = sorted(k for k, w in self.weights.items() if not _finite(w))
             if bad:
                 raise ValueError(f"weights must be finite numbers; bad feature ids {bad}")
+            keys = [_feature_id(k) for k in self.weights]
+            dupes = sorted({k for k in keys if keys.count(k) > 1})
+            if dupes:
+                raise ValueError(f"weights has duplicate feature ids after coercion: {dupes}")
             object.__setattr__(
-                self, "weights", {int(k): float(w) for k, w in self.weights.items()},
+                self, "weights",
+                {k: float(w) for k, w in zip(keys, self.weights.values(), strict=True)},
             )
 
     def _params(self) -> dict[str, Any]:
@@ -212,6 +227,12 @@ def _nonneg(name: str, v: object) -> float:
     if not _finite(v) or float(v) < 0:  # type: ignore[arg-type]
         raise ValueError(f"{name} values must be finite and >= 0, got {v!r}")
     return float(v)  # type: ignore[arg-type]
+
+
+def _is_scalar(x: object) -> bool:
+    return (isinstance(x, numbers.Real) and not isinstance(x, bool)) or (
+        getattr(x, "ndim", None) == 0
+    )
 
 
 def _as_rows(name: str, value: object) -> list[list[float]]:
@@ -245,8 +266,8 @@ class Hierarchical:
 
     def rows(self, n: int) -> list[list[float]]:
         """One rel_tol row of n−1 values per run."""
-        if isinstance(self.rel_tol, numbers.Real):
-            return [[float(self.rel_tol)] * (n - 1)]
+        if _is_scalar(self.rel_tol):
+            return [[float(self.rel_tol)] * (n - 1)]  # type: ignore[arg-type]
         rows = _as_rows("rel_tol", self.rel_tol)
         for i, row in enumerate(rows):
             if len(row) != n - 1:
@@ -425,6 +446,9 @@ class MultiObjectiveMIP:
 
     ``solve`` returns one ``Solution`` per approach row. ``cost`` / ``boundary`` /
     ``objective`` / ``targets_met`` are filled as ``MIPSolver`` fills them (Marxan-style);
+    ``metadata["sol_status"]`` is PuLP's solution status (1 optimal, 2 feasible); under the
+    Gurobi backend PuLP's ``GUROBI_CMD`` reports no solution status, so a time-limited
+    incumbent may show 1 rather than 2.
     ``metadata["objective_values"]`` holds each objective's value at the plan, from the
     model's own expressions (so ``"min_cost"`` can differ from ``Solution.objective``, and
     under PROBMODE 2 met counts use the scaled amounts). ``config.num_solutions`` is
@@ -567,7 +591,8 @@ class MultiObjectiveMIP:
                     k = res.stage_reached + 1
                     warnings.warn(
                         f"hierarchical row {r}: stage {k} ({keys[k - 1]}) found no "
-                        f"solution; returning the stage {k - 1} plan",
+                        f"solution; returning the stage {k - 1} plan (a small positive "
+                        f"rel_tol, e.g. 1e-9, or a larger abs_tol usually helps)",
                         UserWarning,
                         stacklevel=2,
                     )
@@ -592,7 +617,7 @@ class MultiObjectiveMIP:
             meta.update(
                 status=pulp.LpStatus[status], sol_status=int(sol_status),
                 objective_values=dict(zip(keys, values, strict=True)),
-                objective_senses=senses, mip_backend=backend,
+                objective_senses=dict(senses), mip_backend=backend,
             )
             meta.update(
                 mip._strategy_metadata(base.probmode, base.has_target2, base.has_sep_active)
