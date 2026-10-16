@@ -1,14 +1,19 @@
-"""Solver-agnostic MIP objective builders shared by MIPSolver and ZoneMIPSolver (Stage 1).
+"""MIP objective builders shared by MIPSolver and ZoneMIPSolver (Stage 1), and the
+multi-objective machinery used by ``pymarxan.multiobjective`` (Stage 3).
 
 Each target is one ``TargetTerm`` (prioritizr: one row per target). Builders return an
 ``ObjectiveTerm`` in the objective's natural units and sense; the solver sets the model
-objective (``set_objective``) and adds ``COSTBUDGET`` once. Imports only pulp and the stdlib.
+objective (``set_objective``) and adds ``COSTBUDGET`` once. The four target builders work
+on any context. ``build_min_cost``, ``build_min_boundary`` and ``build_max_wtd_sum`` are
+core-only: they read ``ObjectiveContext`` fields that ``MIPSolver`` fills from
+``_build_base`` and that zone contexts leave empty. Imports only pulp and the stdlib.
 """
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 import pulp
 
@@ -51,12 +56,50 @@ class ObjectiveTerm:
     sense: int  # pulp.LpMinimize | pulp.LpMaximize
 
 
+ImpliedRule = tuple[pulp.LpVariable, Callable[[], float]]
+
+
+def expr_value(expr: pulp.LpAffineExpression) -> float:
+    """Value of ``expr`` at the current ``varValue``s, reading ``None`` as 0.
+
+    ``pulp.value`` returns ``None`` when any variable has no value (a zero-cost PU in no
+    row is never written to the LP).
+    """
+    return float(expr.constant or 0.0) + sum(
+        float(a) * float(v.varValue or 0.0) for v, a in expr.items()
+    )
+
+
+def _slack_rule(term: TargetTerm) -> Callable[[], float]:
+    """s = max(0, R − A)."""
+    return lambda: max(0.0, term.required - expr_value(term.achieved))
+
+
+def _met_rule(term: TargetTerm) -> Callable[[], float]:
+    """y = 1 iff A >= R exactly: the ``check_targets`` rule."""
+    return lambda: 1.0 if expr_value(term.achieved) >= term.required else 0.0
+
+
 @dataclass
 class ObjectiveContext:
+    """Shared state for building objectives on one model (spec §2).
+
+    ``implied`` is the implied-value registry (spec §5): each auxiliary variable a builder
+    creates is registered with a rule giving its value implied by x, after every variable
+    the rule reads. ``MIPSolver`` fills the expression fields from ``_build_base``; zone
+    contexts keep the defaults.
+    """
+
     model: pulp.LpProblem
     cost_expr: pulp.LpAffineExpression
     terms: list[TargetTerm]
     prefix: str = ""
+    blm: float = 0.0
+    boundary_expr: pulp.LpAffineExpression = field(default_factory=pulp.LpAffineExpression)
+    conn_expr: pulp.LpAffineExpression = field(default_factory=pulp.LpAffineExpression)
+    prob_expr: pulp.LpAffineExpression = field(default_factory=pulp.LpAffineExpression)
+    amount_exprs: dict[int, pulp.LpAffineExpression] = field(default_factory=dict)
+    implied: list[ImpliedRule] = field(default_factory=list)
     _slack: dict[str, pulp.LpVariable] = field(default_factory=dict, repr=False)
     _met: dict[str, pulp.LpVariable] = field(default_factory=dict, repr=False)
 
@@ -66,6 +109,7 @@ class ObjectiveContext:
             s = pulp.LpVariable(f"{self.prefix}s_{term.key}", lowBound=0)
             self.model += s >= term.required - term.achieved, f"{self.prefix}short_{term.key}"
             self._slack[term.key] = s
+            self.implied.append((s, _slack_rule(term)))
         return self._slack[term.key]
 
     def met(self, term: TargetTerm) -> pulp.LpVariable:
@@ -74,6 +118,7 @@ class ObjectiveContext:
             y = pulp.LpVariable(f"{self.prefix}y_{term.key}", cat="Binary")
             self.model += term.achieved >= term.required * y, f"{self.prefix}met_{term.key}"
             self._met[term.key] = y
+            self.implied.append((y, _met_rule(term)))
         return self._met[term.key]
 
 
@@ -86,17 +131,23 @@ def _shortfall_terms(ctx: ObjectiveContext) -> list[TargetTerm]:
     return [t for t in ctx.terms if t.required > 0]
 
 
-def build_max_features(ctx: ObjectiveContext, shortfall: str) -> ObjectiveTerm:
+def build_max_features(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
     return ObjectiveTerm(pulp.lpSum(ctx.met(t) for t in ctx.terms), pulp.LpMaximize)
 
 
-def build_max_weighted_features(ctx: ObjectiveContext, shortfall: str) -> ObjectiveTerm:
+def build_max_weighted_features(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
     return ObjectiveTerm(
         pulp.lpSum(t.weight * ctx.met(t) for t in ctx.terms), pulp.LpMaximize,
     )
 
 
-def build_min_shortfall(ctx: ObjectiveContext, shortfall: str) -> ObjectiveTerm:
+def build_min_shortfall(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
     """Σ w·s/R (relative, prioritizr) or Σ w·s (absolute)."""
     return ObjectiveTerm(
         pulp.lpSum(
@@ -106,19 +157,76 @@ def build_min_shortfall(ctx: ObjectiveContext, shortfall: str) -> ObjectiveTerm:
     )
 
 
-def build_min_largest_shortfall(ctx: ObjectiveContext, shortfall: str) -> ObjectiveTerm:
-    """m >= s/R (or s) for every term; minimise m. Unweighted, as in prioritizr."""
-    m = pulp.LpVariable(f"{ctx.prefix}max_shortfall", lowBound=0)
-    for t in _shortfall_terms(ctx):
-        ctx.model += m >= _scale(t, shortfall) * ctx.slack(t), f"{ctx.prefix}maxs_{t.key}"
+def build_min_largest_shortfall(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
+    """m >= s/R (or s) for every term with R > 0; minimise m. Unweighted, as in prioritizr.
+
+    ``m`` is registered in ``ctx.implied`` after the loop, so its rule reads slacks whose
+    rules have already run (spec §5).
+    """
+    m = pulp.LpVariable(f"{ctx.prefix}{owner}max_shortfall", lowBound=0)
+    short = _shortfall_terms(ctx)
+    for t in short:
+        ctx.model += m >= _scale(t, shortfall) * ctx.slack(t), f"{ctx.prefix}{owner}maxs_{t.key}"
+    slacks = [(_scale(t, shortfall), ctx.slack(t)) for t in short]
+    ctx.implied.append(
+        (m, lambda: max((k * float(s.varValue or 0.0) for k, s in slacks), default=0.0))
+    )
     return ObjectiveTerm(pulp.lpSum([m]), pulp.LpMinimize)
 
 
-BUILDERS: dict[str, Callable[[ObjectiveContext, str], ObjectiveTerm]] = {
+def build_min_cost(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
+    """cost + BLM·boundary + connectivity + probability: what ``min_set`` minimises."""
+    return ObjectiveTerm(
+        ctx.cost_expr + ctx.blm * ctx.boundary_expr + ctx.conn_expr + ctx.prob_expr,
+        pulp.LpMinimize,
+    )
+
+
+def build_min_boundary(
+    ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+) -> ObjectiveTerm:
+    """The boundary term alone, unweighted by BLM (compactness as its own objective)."""
+    return ObjectiveTerm(ctx.boundary_expr.copy(), pulp.LpMinimize)
+
+
+def build_max_wtd_sum(
+    ctx: ObjectiveContext,
+    shortfall: str,
+    *,
+    owner: str = "",
+    weights: Mapping[int, float] | None = None,
+    **params: Any,
+) -> ObjectiveTerm:
+    """Σ_j w_j·A_j, the weighted amount held (prioritizr ``max_wtd_sum``); w = 1 by default.
+
+    A feature without ``pu_vs_features`` rows contributes 0.
+    """
+    if weights is None:
+        weights = {fid: 1.0 for fid in ctx.amount_exprs}
+    expr = pulp.LpAffineExpression()
+    for fid, w in weights.items():
+        expr += float(w) * ctx.amount_exprs.get(fid, pulp.LpAffineExpression())
+    return ObjectiveTerm(expr, pulp.LpMaximize)
+
+
+class BuilderFn(Protocol):
+    def __call__(
+        self, ctx: ObjectiveContext, shortfall: str, *, owner: str = "", **params: Any
+    ) -> ObjectiveTerm: ...
+
+
+BUILDERS: dict[str, BuilderFn] = {
     "max_features": build_max_features,
     "max_weighted_features": build_max_weighted_features,
     "min_shortfall": build_min_shortfall,
     "min_largest_shortfall": build_min_largest_shortfall,
+    "min_cost": build_min_cost,
+    "min_boundary": build_min_boundary,
+    "max_wtd_sum": build_max_wtd_sum,
 }
 
 
