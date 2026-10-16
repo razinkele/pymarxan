@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1] — 2026-10-16
+
 ### Fixed
 - `solve_lexicographic` (the `min_penalties` two-pass solve in `MIPSolver`) now caps pass 2 at `opt + rel_tol·|opt| + max(abs_tol, 1e-9·|opt|)`, the relative floor v0.41.0 gave the hierarchical caps. PuLP writes MPS values to 13 significant figures, so with `rel_tol=0` a primary of about 1e5 or more could exclude its own pass-1 optimum and fall back to the pass-1 plan with a warning. `MIPSolver` uses the default `rel_tol=1e-9`, which already masked this; the cap is now at most `1e-9·|opt|` looser.
 
@@ -1442,7 +1444,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.41.1...HEAD
+[0.41.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.1
 [0.41.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.0
 [0.40.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.40.0
 [0.39.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.39.0
