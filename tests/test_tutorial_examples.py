@@ -298,6 +298,65 @@ def test_section_target_methods():
 
 
 # --------------------------------------------------------------------
+# Section: "10. Multi-objective planning (v0.41)"
+# --------------------------------------------------------------------
+
+
+def test_section_multi_objective():
+    problem = build_minimal_problem()
+
+    # --- tutorial block (verbatim) ---
+    from pymarxan.multiobjective import (
+        Hierarchical,
+        MinCost,
+        MinShortfall,
+        MultiObjectiveMIP,
+        WeightedSum,
+        nondominated,
+        weights_matrix,
+    )
+
+    # A budget that cannot meet every target, so the best shortfall is above 0.
+    budgeted = problem.copy_with(parameters={**problem.parameters, "COSTBUDGET": 6.0})
+
+    # Weighted sums are not scaled: divide each weight by a typical magnitude
+    # (total cost 20; relative shortfall of at most SPF per feature: 3 features at SPF 1).
+    scale = [1 / 20.0, 1 / 3.0]
+    rows = [[w * s for w, s in zip(row, scale)] for row in weights_matrix(2, 5)]
+    sweep = MultiObjectiveMIP([MinCost(), MinShortfall()], WeightedSum(rows)).solve(budgeted)
+    frontier = nondominated(sweep)
+    for sol in frontier:
+        v = sol.metadata["objective_values"]
+        print(f"cost {v['min_cost']:.0f}  shortfall {v['min_shortfall']:.3f}")
+
+    # The cheapest plan within 10% of the best achievable shortfall.
+    pick = MultiObjectiveMIP(
+        [MinShortfall(), MinCost()], Hierarchical(rel_tol=0.1),
+    ).solve(budgeted)[0]
+    # --- end tutorial block ---
+
+    points = sorted(
+        (s.metadata["objective_values"]["min_cost"],
+         round(s.metadata["objective_values"]["min_shortfall"], 4))
+        for s in frontier
+    )
+    # Two weight rows tie between plans on a hull edge (enumerated over all 4,096 plans),
+    # so the exact set depends on the backend's tie-breaking (CBC finds 0, 2, 3, 5, 6).
+    # Every row's optimum lies on this enumerated supported frontier:
+    supported = {(0.0, 3.0), (1.0, 2.55), (2.0, 2.2167), (3.0, 1.9667), (4.0, 1.7667),
+                 (5.0, 1.5667), (6.0, 1.4333)}
+    assert set(points) <= supported
+    assert {(0.0, 3.0), (2.0, 2.2167), (6.0, 1.4333)} <= set(points)  # unique row optima
+    assert [p[1] for p in points] == sorted((p[1] for p in points), reverse=True)
+    best = min(p[1] for p in points)
+    assert best > 0  # the budget makes rel_tol meaningful
+    v = pick.metadata["objective_values"]
+    assert v["min_cost"] == 5.0 and pick.cost == 5.0
+    assert v["min_shortfall"] == pytest.approx(1.5667, abs=1e-4)
+    assert v["min_shortfall"] <= 1.4333334 * 1.1
+
+
+# --------------------------------------------------------------------
 # Section: "River connectivity and barrier restoration"
 # --------------------------------------------------------------------
 

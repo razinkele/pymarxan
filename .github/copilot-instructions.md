@@ -43,6 +43,7 @@ pymarxan is a three-layer monorepo:
 | `spatial/` | Grid generation, feature intersection, boundary generation, GeoPackage export |
 | `io/` | Marxan file readers/writers (binary & zone formats), output controller |
 | `calibration/` | BLM calibration & sensitivity analysis |
+| `multiobjective.py` | `MultiObjectiveMIP` (hierarchical / weighted-sum over one `ConservationProblem`), objective specs, `weights_matrix` / `rel_tol_matrix`, `nondominated`; builds on `MIPSolver._build_base` and `solvers/_mip_objectives.py` |
 | `analysis/` | Selection frequency, portfolio analysis |
 
 ### Data flow

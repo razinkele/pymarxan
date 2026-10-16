@@ -22,6 +22,7 @@ covered by `docs/USER_MANUAL.md`; this file is for the Python API.
 7. [Solution portfolios via no-good cuts (Phase 25)](#7-solution-portfolios-via-no-good-cuts-phase-25)
 8. [BLM calibration with Pareto filter (Phase 25)](#8-blm-calibration-with-pareto-filter-phase-25)
 9. [Published target-setting methods (v0.40)](#9-published-target-setting-methods-v040)
+10. [Multi-objective planning (v0.41)](#10-multi-objective-planning-v041)
 
 ---
 
@@ -352,6 +353,64 @@ flags that. Per-feature inputs accept a dict or a pandas Series indexed by
 feature id. See each function's docstring for its source.
 `loglinear_targets` is deprecated: use
 `interp_absolute_targets(..., interp="log10")`.
+
+## 10. Multi-objective planning (v0.41)
+
+`pymarxan.multiobjective` trades objectives against each other exactly, on
+one problem. List the objectives (`MinCost`, `MinBoundary`, `MinShortfall`,
+`MinLargestShortfall`, `MaxFeatures`, `MaxWeightedFeatures`, `MaxWtdSum`)
+and pick an approach: `WeightedSum` (one solve per weight row) or
+`Hierarchical` (lexicographic, in list order). Targets are soft here, and
+`COSTBUDGET` is optional; when set, it binds every solve.
+
+```python
+from pymarxan.multiobjective import (
+    Hierarchical,
+    MinCost,
+    MinShortfall,
+    MultiObjectiveMIP,
+    WeightedSum,
+    nondominated,
+    weights_matrix,
+)
+
+# A budget that cannot meet every target, so the best shortfall is above 0.
+budgeted = problem.copy_with(parameters={**problem.parameters, "COSTBUDGET": 6.0})
+
+# Weighted sums are not scaled: divide each weight by a typical magnitude
+# (total cost 20; relative shortfall of at most SPF per feature: 3 features at SPF 1).
+scale = [1 / 20.0, 1 / 3.0]
+rows = [[w * s for w, s in zip(row, scale)] for row in weights_matrix(2, 5)]
+sweep = MultiObjectiveMIP([MinCost(), MinShortfall()], WeightedSum(rows)).solve(budgeted)
+frontier = nondominated(sweep)
+for sol in frontier:
+    v = sol.metadata["objective_values"]
+    print(f"cost {v['min_cost']:.0f}  shortfall {v['min_shortfall']:.3f}")
+
+# The cheapest plan within 10% of the best achievable shortfall.
+pick = MultiObjectiveMIP(
+    [MinShortfall(), MinCost()], Hierarchical(rel_tol=0.1),
+).solve(budgeted)[0]
+```
+
+The sweep finds the cost-vs-shortfall trade-offs, from the empty plan
+(cost 0, shortfall 3.0) to the best shortfall the budget allows (1.433 at
+cost 6); with CBC, five of them. Weight rows that tie between plans can
+return either plan, so the set can differ between backends.
+
+The hierarchical pick gives up 0.133 of shortfall to save one cost unit:
+stage 1 finds the best shortfall v, stage 2 minimises cost subject to
+`shortfall <= v + 0.1·|v| + abs_tol`. When the best value is 0 (for example
+with no budget), `rel_tol` gives no slack; raise `abs_tol` (default 1e-9)
+instead. `objective_values` are each objective's own value at the plan;
+`Solution.cost` and `Solution.objective` are filled as `MIPSolver` fills
+them. Met counts use the exact rule (amount >= target), so on data at a
+target's tolerance boundary (0.7 + 0.1 against 0.8) the reported count can
+sit below what a hierarchical cap kept, which the solver reached within its
+tolerance; and when a plan's implied point breaks a model row (such as an
+earlier cap), that stage's cap falls back to the solver's own value. A weighted sum only finds plans on the convex hull of the frontier
+(Das & Dennis 1997), so `Hierarchical` with a `rel_tol_matrix` sweep can
+reach trade-offs a weight grid misses.
 
 ---
 

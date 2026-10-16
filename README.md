@@ -74,6 +74,7 @@ pymarxan (three-layer monorepo)
 │   ├── constraints/       Contiguity, feature contiguity, neighbor, linear, budget
 │   ├── objectives/        Deprecated (v0.39, removal v0.42): use MIPSolver(objective=...)
 │   ├── targets/           Target rules: relative, group, range-size, IUCN Red List, population, composition
+│   ├── multiobjective.py  Exact multi-objective MIP: hierarchical / weighted-sum sweeps, nondominated filter
 │   ├── spatial/           Grid generation, feature intersection, boundary, export
 │   ├── io/                Marxan file readers/writers (binary & zone formats)
 │   ├── calibration/       BLM calibration & sensitivity analysis
@@ -146,6 +147,7 @@ pymarxan (three-layer monorepo)
 - Distributional **equity** analysis (per-group totals/shares + Gini coefficient)
 - Published **target-setting** methods (Rodrigues, Watson, Polak, Sreekar, IUCN Red List species/ecosystems, Jung, Ward, population size, Wilson, Durán, rule-based, min/max) with explicit km² units
 - Multi-scenario **robustness** (minimax-regret no-regrets plan selection)
+- Exact **multi-objective** planning (cost vs representation vs boundary): hierarchical and weighted-sum approaches with prioritizr's parameter sweeps and a nondominated filter (`MaxWtdSum` ignores complementarity, as prioritizr cautions: pair it with a shortfall objective)
 
 ### Constraints
 - **Contiguity**: selected PUs must form a connected subgraph (MIP network flow)

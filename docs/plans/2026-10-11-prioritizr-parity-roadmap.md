@@ -122,7 +122,9 @@ models.
 
 ---
 
-## Stage 3 — v0.41.0: Multi-objective optimisation
+## Stage 3 — v0.41.0: Multi-objective optimisation (SHIPPED, v0.41)
+
+**As built (v0.41.0):** see docs/plans/2026-10-15-stage3-multi-objective-design.md. The API is `pymarxan.multiobjective.MultiObjectiveMIP(objectives, approach)` over an ordinary `ConservationProblem` (not `MultiObjectiveProblem`); hierarchical and weighted-sum approaches, prioritizr's parameter matrices, and `nondominated` (new code: `calibration.pareto` filters a 2-objective `BLMResult`). **Descoped:** the reference-point approach and its acceptance item — prioritizr 9.0.1's implementation is broken (its max rows are written `t − w·d ≤ 0`), so there is no correct reference to match; a Chebyshev/achievement version can be built on the same builders later.
 
 **Goal:** trade off several objectives (e.g. cost vs representation vs connectivity) exactly,
 the way prioritizr 9's `multi_problem()` does.
