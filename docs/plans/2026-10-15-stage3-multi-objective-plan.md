@@ -10,6 +10,8 @@
 
 **Spec:** `docs/plans/2026-10-15-stage3-multi-objective-design.md` (approved 2026-10-15 after 8 review rounds). Executors read it. The spec is the authority, and this plan argues from it.
 
+> **As-built amendment (final review):** the hierarchical cap slack is `r·|v| + max(abs_tol, 1e-9·|v|)`, not `r·|v| + abs_tol` as written in Task 4: PuLP writes MPS values to 13 significant figures, so a zero-slack cap excluded the stage optimum at |v| ≳ 1e5. The mutation script's M2 string below matches the amended line.
+
 **Provenance:** every code block below is extracted (`git show` / `git diff`) from a prototype built task by task in a scratch worktree, one commit per task, and run there under the commands shown. Prototype commits: Task 1 `0b0812a`, 2 `69a77f1`, 3 `5401951`, 4 `6926715`, 5 `fe8ff47`, 6 `69eb9fa`, 7 `b435c0d`, 8 `39618bf` (base `00d01a3`; rebuilt after two rounds of 4-lens plan review and one fresh-eyes loop round). Diffs apply with `git apply --whitespace=nowarn` (or `--3way`) on the previous task's tree; editors that strip trailing whitespace from pasted context lines break a plain `git apply`.
 
 ## Global Constraints
@@ -4225,8 +4227,8 @@ MUTATIONS = [
      "model += term.expr >= v + slack, name"),
     ("M1b flip max cap (>= to <=)", OBJ, "model += term.expr >= v - slack, name",
      "model += term.expr <= v - slack, name"),
-    ("M2 drop |v|", OBJ, "float(rel_tols[k - 1]) * abs(v) + abs_tol",
-     "float(rel_tols[k - 1]) * v + abs_tol"),
+    ("M2 drop |v|", OBJ, "float(rel_tols[k - 1]) * abs(v) + max(",
+     "float(rel_tols[k - 1]) * v + max("),
     ("M3a flip weighted-sum sign", MO, "sign = 1.0 if term.sense == pulp.LpMinimize else -1.0",
      "sign = -1.0 if term.sense == pulp.LpMinimize else 1.0"),
     ("M3b drop weighted-sum sign (s = +1)", MO,
