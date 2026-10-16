@@ -1,0 +1,2435 @@
+{
+ "conn_asym|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 78.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 78.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_set|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 57.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_set|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 57.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_asym|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 78.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 78.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_set|absolute": {
+  "cost": 41.0,
+  "mip_objective_value": 33.0,
+  "objective": 47.0,
+  "selected": [
+   0,
+   1,
+   0,
+   0,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_set|relative": {
+  "cost": 41.0,
+  "mip_objective_value": 33.0,
+  "objective": 47.0,
+  "selected": [
+   0,
+   1,
+   0,
+   0,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "conn_sym|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 42.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_absolute_mls_v040": {
+  "cost": 23.0,
+  "mip_objective_value": 5.0,
+  "objective": 88.0,
+  "selected": [
+   0,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false,
+   "4": false
+  },
+  "unique_optimum": false
+ },
+ "ghost_misslevel09|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 3.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 3.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 3.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 3.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 0.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_largest_shortfall|relative": {
+  "cost": 0.0,
+  "mip_objective_value": 1.0,
+  "objective": 76.5,
+  "selected": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false,
+   "4": false
+  },
+  "unique_optimum": false
+ },
+ "ghost_misslevel09|min_penalties|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 18.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_penalties|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 18.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_set|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 40.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_set|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 40.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 18.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "ghost_misslevel09|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 58.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true,
+   "4": false
+  },
+  "unique_optimum": true
+ },
+ "locks|max_features|absolute": {
+  "cost": 20.0,
+  "mip_objective_value": 0.0,
+  "objective": 65.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": false
+ },
+ "locks|max_features|relative": {
+  "cost": 20.0,
+  "mip_objective_value": 0.0,
+  "objective": 65.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": false
+ },
+ "locks|max_weighted_features|absolute": {
+  "cost": 20.0,
+  "mip_objective_value": 0.0,
+  "objective": 65.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": false
+ },
+ "locks|max_weighted_features|relative": {
+  "cost": 20.0,
+  "mip_objective_value": 0.0,
+  "objective": 65.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": false
+ },
+ "locks|min_largest_shortfall|absolute": {
+  "cost": 32.0,
+  "mip_objective_value": 13.0,
+  "objective": 59.0,
+  "selected": [
+   0,
+   0,
+   1,
+   1,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "locks|min_largest_shortfall|relative": {
+  "cost": 32.0,
+  "mip_objective_value": 0.45,
+  "objective": 59.0,
+  "selected": [
+   0,
+   0,
+   1,
+   1,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "locks|min_penalties|absolute": {
+  "cost": 45.0,
+  "mip_objective_value": 0.0,
+  "objective": 50.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "locks|min_penalties|relative": {
+  "cost": 45.0,
+  "mip_objective_value": 0.0,
+  "objective": 50.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "locks|min_set|absolute": {
+  "cost": 45.0,
+  "mip_objective_value": 50.0,
+  "objective": 50.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "locks|min_set|relative": {
+  "cost": 45.0,
+  "mip_objective_value": 50.0,
+  "objective": 50.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "locks|min_shortfall|absolute": {
+  "cost": 32.0,
+  "mip_objective_value": 23.0,
+  "objective": 59.0,
+  "selected": [
+   0,
+   0,
+   1,
+   1,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "locks|min_shortfall|relative": {
+  "cost": 32.0,
+  "mip_objective_value": 0.9500000000000001,
+  "objective": 59.0,
+  "selected": [
+   0,
+   0,
+   1,
+   1,
+   0,
+   0
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 35.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 35.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_set|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 35.0,
+  "objective": 35.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_set|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 35.0,
+  "objective": 35.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "no_blm|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 34.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_penalties|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 0.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_penalties|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 0.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_set|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_set|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "nogood|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 66.8,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 66.8,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_set|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 55.6,
+  "objective": 55.6,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_set|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 55.6,
+  "objective": 55.6,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "prob_no_probmode|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 66.8,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 66.8,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_set|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 55.6,
+  "objective": 55.6,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_set|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 55.6,
+  "objective": 55.6,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode1|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 59.8,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode2|max_features|absolute": {
+  "cost": 28.0,
+  "mip_objective_value": 1.0,
+  "objective": 54.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode2|max_features|relative": {
+  "cost": 28.0,
+  "mip_objective_value": 1.0,
+  "objective": 54.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode2|max_weighted_features|absolute": {
+  "cost": 28.0,
+  "mip_objective_value": 1.0,
+  "objective": 54.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode2|max_weighted_features|relative": {
+  "cost": 28.0,
+  "mip_objective_value": 1.0,
+  "objective": 54.0,
+  "selected": [
+   0,
+   0,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": false,
+   "2": false,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "probmode2|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 5.8,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode2|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.38666667,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode2|min_penalties|absolute": {
+  "cost": 53.0,
+  "mip_objective_value": 0.0,
+  "objective": 61.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": false
+ },
+ "probmode2|min_penalties|relative": {
+  "cost": 53.0,
+  "mip_objective_value": 0.0,
+  "objective": 61.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": false
+ },
+ "probmode2|min_set|absolute": {
+  "cost": 53.0,
+  "mip_objective_value": 61.0,
+  "objective": 61.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": false
+ },
+ "probmode2|min_set|relative": {
+  "cost": 53.0,
+  "mip_objective_value": 61.0,
+  "objective": 61.0,
+  "selected": [
+   1,
+   1,
+   1,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": false
+ },
+ "probmode2|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 15.399999999999999,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "probmode2|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.7833333333333333,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|max_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|max_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|max_weighted_features|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|max_weighted_features|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 2.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|min_largest_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|min_largest_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.066666667,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|min_penalties|absolute": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 44.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "simple|min_penalties|relative": {
+  "cost": 35.0,
+  "mip_objective_value": 0.0,
+  "objective": 44.0,
+  "selected": [
+   0,
+   1,
+   0,
+   1,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "simple|min_set|absolute": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "simple|min_set|relative": {
+  "cost": 38.0,
+  "mip_objective_value": 43.0,
+  "objective": 43.0,
+  "selected": [
+   0,
+   0,
+   0,
+   1,
+   1,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": true
+  },
+  "unique_optimum": true
+ },
+ "simple|min_shortfall|absolute": {
+  "cost": 33.0,
+  "mip_objective_value": 1.0,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ },
+ "simple|min_shortfall|relative": {
+  "cost": 33.0,
+  "mip_objective_value": 0.06666666666666667,
+  "objective": 41.0,
+  "selected": [
+   1,
+   1,
+   0,
+   0,
+   0,
+   1
+  ],
+  "solutions": 1,
+  "targets_met": {
+   "1": true,
+   "2": true,
+   "3": false
+  },
+  "unique_optimum": true
+ }
+}
