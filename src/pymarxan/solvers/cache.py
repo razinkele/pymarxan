@@ -21,6 +21,14 @@ states (Phase 19 ClumpState for ``target2 > 0``; Phase 20 SepState for
 precomputed as ``_det_spf`` and consumed by both ``compute_full_objective``
 and ``compute_delta_objective``. When adding a new constraint type, edit
 the single mask definition in ``from_problem`` — not the call sites.
+
+Connectivity
+------------
+``CONNECTIVITY_WEIGHT > 0`` with a connectivity table builds CSR adjacency arrays
+(``conn_out_*``; asymmetric also ``conn_in_*``) plus symmetric self-pair rewards
+(``conn_self``), mirroring ``compute_connectivity_penalty`` (the MIP's term). Both
+``compute_full_objective`` and ``compute_delta_objective`` read them; when ``conn_mode``
+is 0 (off) the delta pays one integer comparison.
 """
 from __future__ import annotations
 
@@ -29,7 +37,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.utils import compute_cost_threshold_penalty
@@ -141,6 +149,24 @@ class ProblemCache:
     # and compute_delta_objective read this rather than reconstructing the
     # mask. Falls back to feat_spf when neither constraint is active.
     _det_spf: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # Connectivity (CONNECTIVITY_WEIGHT; mirrors compute_connectivity_penalty / the MIP).
+    # conn_mode: 0 off (no table or weight <= 0), 1 symmetric, 2 asymmetric. CSR layout
+    # as for boundary. Symmetric: each de-duplicated pair stored in both directions in
+    # conn_out_*, self-pair rewards in conn_self, conn_in_* empty. Asymmetric: out-edges
+    # i -> j and in-edges k -> i, duplicate rows summed, self-rows dropped.
+    # conn_out_row[e] = source row of CSR entry e (full objective, no per-call rebuild);
+    # conn_out_rowsum[i] = Σ out-values of row i (asymmetric delta; zeros otherwise).
+    conn_mode: int = 0
+    conn_weight: float = 0.0
+    conn_self: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    conn_out_start: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int32))
+    conn_out_idx: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    conn_out_val: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    conn_in_start: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int32))
+    conn_in_idx: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    conn_in_val: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    conn_out_row: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
+    conn_out_rowsum: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     @cached_property
     def pu_feat_matrix(self) -> np.ndarray:
@@ -436,6 +462,20 @@ class ProblemCache:
         if separation_active:
             det_spf = det_spf * (feat_sepnum <= 1).astype(np.float64)
 
+        (
+            conn_mode, conn_weight, conn_self,
+            conn_out_start, conn_out_idx, conn_out_val,
+            conn_in_start, conn_in_idx, conn_in_val,
+        ) = _build_connectivity(problem, pu_id_to_idx, n_pu)
+        conn_out_row = np.repeat(
+            np.arange(n_pu, dtype=np.int32), np.diff(conn_out_start),
+        ).astype(np.int32)
+        conn_out_rowsum = (
+            np.bincount(conn_out_row, weights=conn_out_val, minlength=n_pu)
+            if conn_mode == 2
+            else np.zeros(n_pu, dtype=np.float64)
+        )
+
         return cls(
             n_pu=n_pu,
             n_feat=n_feat,
@@ -470,6 +510,17 @@ class ProblemCache:
             separation_active=separation_active,
             pu_to_sep_feats=pu_to_sep_feats,
             _det_spf=det_spf,
+            conn_mode=conn_mode,
+            conn_weight=conn_weight,
+            conn_self=conn_self,
+            conn_out_start=conn_out_start,
+            conn_out_idx=conn_out_idx,
+            conn_out_val=conn_out_val,
+            conn_in_start=conn_in_start,
+            conn_in_idx=conn_in_idx,
+            conn_in_val=conn_in_val,
+            conn_out_row=conn_out_row,
+            conn_out_rowsum=conn_out_rowsum,
         )
 
     # ------------------------------------------------------------------
@@ -548,6 +599,7 @@ class ProblemCache:
         """Compute the full Marxan objective value.
 
         objective = cost + BLM * boundary + penalty [+ cost_threshold_penalty]
+        [+ connectivity]
 
         Parameters
         ----------
@@ -590,6 +642,10 @@ class ProblemCache:
             held_expected = self.expected_matrix[selected].sum(axis=0)
             held_variance = self.var_matrix[selected].sum(axis=0)
             obj += self._compute_zscore_penalty(held_expected, held_variance)
+
+        # Connectivity term (no-op when conn_mode == 0)
+        if self.conn_mode:
+            obj += self._compute_connectivity(selected)
 
         return obj
 
@@ -732,6 +788,25 @@ class ProblemCache:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _compute_connectivity(self, selected: np.ndarray) -> float:
+        """Connectivity term for a binary selection; equals ``compute_connectivity_penalty``.
+
+        Symmetric: ``-w * (sum of conn_self over selected + sum over pairs with both ends
+        selected)`` (each pair counted once via ``nbr > row``). Asymmetric: ``w * sum over
+        out-edges whose source is selected and sink is not``.
+        """
+        if self.conn_mode == 0:
+            return 0.0
+        sel = np.asarray(selected, dtype=bool)
+        rows = self.conn_out_row
+        nbrs = self.conn_out_idx
+        if self.conn_mode == 1:
+            both = sel[rows] & sel[nbrs] & (nbrs > rows)
+            total = float(np.sum(self.conn_self[sel])) + float(np.sum(self.conn_out_val[both]))
+            return -self.conn_weight * total
+        broken = sel[rows] & ~sel[nbrs]
+        return self.conn_weight * float(np.sum(self.conn_out_val[broken]))
+
     def _compute_boundary(self, selected: np.ndarray) -> float:
         """Compute total boundary for a selection using cached arrays.
 
@@ -782,3 +857,90 @@ class ProblemCache:
         # Correct.
         
         return total
+
+
+_ConnArrays = tuple[
+    int, float, np.ndarray,
+    np.ndarray, np.ndarray, np.ndarray,
+    np.ndarray, np.ndarray, np.ndarray,
+]
+
+
+def _build_connectivity(
+    problem: ConservationProblem,
+    pu_id_to_idx: dict[int, int],
+    n_pu: int,
+) -> _ConnArrays:
+    """Build the connectivity arrays (see the ``conn_*`` fields of ``ProblemCache``).
+
+    Semantics are exactly ``compute_connectivity_penalty``: off when there is no table or
+    ``CONNECTIVITY_WEIGHT <= 0``; rows with an id that is not a planning unit are skipped;
+    symmetric pairs are de-duplicated by unordered key with the first row winning (a
+    self-pair goes to ``conn_self``); asymmetric duplicate rows add up and self-rows
+    (always 0) are dropped. Returns ``(mode, weight, conn_self, out_start, out_idx,
+    out_val, in_start, in_idx, in_val)``.
+    """
+    conn_self = np.zeros(n_pu, dtype=np.float64)
+    empty_idx = np.zeros(0, dtype=np.int32)
+    empty_val = np.zeros(0, dtype=np.float64)
+    weight = float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0))
+    if problem.connectivity is None or weight <= 0.0:
+        return (
+            0, 0.0, conn_self,
+            np.zeros(n_pu + 1, dtype=np.int32), empty_idx, empty_val,
+            np.zeros(n_pu + 1, dtype=np.int32), empty_idx, empty_val,
+        )
+    asymmetric = bool(int(problem.parameters.get("ASYMMETRIC_CONNECTIVITY", 0)))
+
+    conn = problem.connectivity
+    n_rows = len(conn)
+    src = np.fromiter(
+        (pu_id_to_idx.get(int(i), -1) for i in conn["id1"].values), np.int64, n_rows,
+    )
+    dst = np.fromiter(
+        (pu_id_to_idx.get(int(j), -1) for j in conn["id2"].values), np.int64, n_rows,
+    )
+    val = np.asarray(conn["value"].values, dtype=np.float64)
+    known = (src >= 0) & (dst >= 0)
+    src, dst, val = src[known], dst[known], val[known]
+
+    if asymmetric:
+        mode = 2
+        nonself = src != dst
+        src, dst, val = src[nonself], dst[nonself], val[nonself]
+    else:
+        mode = 1
+        lo = np.minimum(src, dst)
+        hi = np.maximum(src, dst)
+        # First row of each unordered pair wins (np.unique's index is the first occurrence).
+        _, first = np.unique(lo * n_pu + hi, return_index=True)
+        first.sort()
+        lo, hi, val = lo[first], hi[first], val[first]
+        is_self = lo == hi
+        conn_self[lo[is_self]] = val[is_self]
+        lo, hi, val = lo[~is_self], hi[~is_self], val[~is_self]
+        src = np.concatenate([lo, hi])
+        dst = np.concatenate([hi, lo])
+        val = np.concatenate([val, val])
+
+    # COO -> CSR sums duplicate (i, j) entries (asymmetric duplicates add up).
+    out = coo_matrix((val, (src, dst)), shape=(n_pu, n_pu)).tocsr()
+    out.sum_duplicates()
+    out.sort_indices()
+    out_start = out.indptr.astype(np.int32)
+    out_idx = out.indices.astype(np.int32)
+    out_val = out.data.astype(np.float64)
+    if mode == 2:
+        inc = out.transpose().tocsr()
+        inc.sort_indices()
+        in_start = inc.indptr.astype(np.int32)
+        in_idx = inc.indices.astype(np.int32)
+        in_val = inc.data.astype(np.float64)
+    else:
+        in_start = np.zeros(n_pu + 1, dtype=np.int32)
+        in_idx, in_val = empty_idx, empty_val
+    return (
+        mode, weight, conn_self,
+        out_start, out_idx, out_val,
+        in_start, in_idx, in_val,
+    )
