@@ -452,8 +452,9 @@ class ClumpState:
                 comp_occ.append(occs)
                 held_eff[j] = _held_eff_for_feature(cache, j, occs)
             else:
-                # Non-clumping feature: held_eff is raw amount sum so callers
-                # can treat held_effective() as a single source of truth.
+                # Non-clumping feature: held_eff is the raw pu_feat_matrix sum
+                # (equals cache.compute_held except under PROBMODE 2, where
+                # compute_held holds expected amounts).
                 comp_id_per_pu.append(np.full(cache.n_pu, -1, dtype=np.int32))
                 comp_occ.append({})
                 held_eff[j] = float(
@@ -524,7 +525,7 @@ class ClumpState:
             target2 = float(cache.feat_target2[j])
             if target2 <= 0:
                 # Non-clumping: keep held_eff as the raw selected-amount sum
-                # so callers can compare against compute_held().
+                # (equals compute_held() except under PROBMODE 2).
                 if amt != 0:
                     self.held_eff[j] += sign * amt
                 continue

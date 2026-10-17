@@ -29,6 +29,22 @@ Connectivity
 (``conn_self``), mirroring ``compute_connectivity_penalty`` (the MIP's term). Both
 ``compute_full_objective`` and ``compute_delta_objective`` read them; when ``conn_mode``
 is 0 (off) the delta pays one integer comparison.
+
+Per-PU probabilities (PROBMODE 1 / 2)
+-------------------------------------
+pymarxan extensions over ``problem.probability`` (``prob.dat``), with the MIP's semantics;
+``PROBMODE`` defaults to 1 when a probability table is present. Mode 1 adds the risk
+premium ``γ·p_i·c_i`` per selected PU from ``prob_cost`` (read only when ``prob_active``:
+mode 1, a table and ``PROBABILITYWEIGHTING`` γ > 0). Mode 2 judges targets on expected
+amounts ``a_ij·(1 − p_i)``: ``held_csr`` is a copy of ``pu_feat_csr`` with the same
+structure and scaled ``.data``, read by ``compute_held``, ``apply_flip_to_held`` and the
+penalty delta. In every other case ``held_csr`` *is* ``pu_feat_csr``, so both are resolved
+at build time and no flip pays a check. ``pu_feat_csr`` / ``pu_feat_matrix`` stay raw for
+``ClumpState`` / ``SepState`` (a documented PROBMODE 2 limitation; the build warns when
+PROBMODE 2 meets active clumping or separation — once per cache build, i.e. once per SA solve
+and once per solution iterative improvement improves). The table is read through the shared
+helpers in ``solvers/utils.py`` (``_probmode``, ``_probability_vector``), as the evaluator,
+the MIP and the greedy heuristic do.
 """
 from __future__ import annotations
 
@@ -40,7 +56,11 @@ import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.utils import compute_cost_threshold_penalty
+from pymarxan.solvers.utils import (
+    _probability_vector,
+    _probmode,
+    compute_cost_threshold_penalty,
+)
 
 
 @dataclass(frozen=True)
@@ -167,6 +187,22 @@ class ProblemCache:
     conn_in_val: np.ndarray = field(default_factory=lambda: np.zeros(0))
     conn_out_row: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
     conn_out_rowsum: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # PROBMODE 1 risk premium: prob_cost[i] = γ·p_i·c_i; read only when prob_active (mode 1,
+    # a probability table and γ > 0). ``costs`` stays the base cost.
+    prob_cost: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    prob_active: bool = False
+    # Amounts behind held / shortfall: under PROBMODE 2 with a table a copy of pu_feat_csr
+    # with identical indptr / indices and .data scaled by (1 − p_i) (explicit zeros kept);
+    # otherwise pu_feat_csr itself. Never None after construction (__post_init__). When
+    # deriving a cache with dataclasses.replace(..., pu_feat_csr=X), pass held_csr=None so
+    # it is re-derived (an explicit held_csr is kept as given).
+    held_csr: csr_matrix = field(  # type: ignore[assignment]
+        default=None, compare=False, repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        if self.held_csr is None:
+            object.__setattr__(self, "held_csr", self.pu_feat_csr)
 
     @cached_property
     def pu_feat_matrix(self) -> np.ndarray:
@@ -276,8 +312,9 @@ class ProblemCache:
         thresh_pen1 = float(params.get("THRESHPEN1", 0.0))
         thresh_pen2 = float(params.get("THRESHPEN2", 0.0))
 
-        # PROBMODE 3 state (zero-cost when probmode != 3)
-        probmode = int(params.get("PROBMODE", 0))
+        # PROBMODE: default 1 with a probability table (the MIP's and greedy's rule), else 0.
+        # Mode 3 state below is zero-cost when probmode != 3.
+        probmode = _probmode(problem)
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
 
         # Per-cell probability of PRESENCE — read once into a dense matrix.
@@ -476,6 +513,18 @@ class ProblemCache:
             else np.zeros(n_pu, dtype=np.float64)
         )
 
+        prob_cost, prob_active, held_csr = _build_probability(
+            problem, pu_id_to_idx, costs, pu_feat_csr, probmode, prob_weight,
+        )
+        if held_csr is not pu_feat_csr and (clumping_active or separation_active):
+            warnings.warn(
+                "PROBMODE 2 expected amounts are not applied to clumping/separation "
+                "features; SA optimises them on raw amounts while reports use expected "
+                "amounts.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         return cls(
             n_pu=n_pu,
             n_feat=n_feat,
@@ -521,6 +570,9 @@ class ProblemCache:
             conn_in_val=conn_in_val,
             conn_out_row=conn_out_row,
             conn_out_rowsum=conn_out_rowsum,
+            prob_cost=prob_cost,
+            prob_active=prob_active,
+            held_csr=held_csr,
         )
 
     # ------------------------------------------------------------------
@@ -529,6 +581,8 @@ class ProblemCache:
 
     def compute_held(self, selected: np.ndarray) -> np.ndarray:
         """Compute the amount held per feature for the given selection.
+
+        Expected amounts ``a·(1 − p)`` under PROBMODE 2 with a table (``held_csr``).
 
         Parameters
         ----------
@@ -541,7 +595,7 @@ class ProblemCache:
             (n_feat,) float64 — total amount held for each feature.
         """
         rows = np.flatnonzero(selected)
-        result: np.ndarray = np.asarray(self.pu_feat_csr[rows].sum(axis=0)).ravel()
+        result: np.ndarray = np.asarray(self.held_csr[rows].sum(axis=0)).ravel()
         return result
 
     def apply_flip_to_held(self, held: np.ndarray, idx: int, sign: float) -> None:
@@ -552,7 +606,7 @@ class ProblemCache:
         unique column indices per row (guaranteed by ``build_pu_feature_csr``'s
         ``sum_duplicates()`` — numpy fancy in-place add is last-wins, not accumulate).
         """
-        csr = self.pu_feat_csr
+        csr = self.held_csr
         s, e = csr.indptr[idx], csr.indptr[idx + 1]
         cols = csr.indices[s:e]
         held[cols] += sign * csr.data[s:e]
@@ -630,6 +684,10 @@ class ProblemCache:
         penalty = float(np.dot(self._det_spf, shortfalls))
 
         obj = total_cost + blm * boundary + penalty
+
+        # PROBMODE 1 risk premium (separate from cost; COSTTHRESH sees base cost)
+        if self.prob_active:
+            obj += float(np.sum(self.prob_cost[selected]))
 
         # Cost threshold penalty
         if self.cost_thresh > 0:
@@ -731,10 +789,12 @@ class ProblemCache:
         # so restrict to the CSR row's columns → O(nnz_row). Integer-exact vs the dense
         # full-width dot; ≤ a few ULP for arbitrary floats (the retained terms regroup in a
         # non-associative np.dot — same float-sum regime as compute_held).
-        s = self.pu_feat_csr.indptr[idx]
-        e = self.pu_feat_csr.indptr[idx + 1]
-        cols = self.pu_feat_csr.indices[s:e]
-        amts = self.pu_feat_csr.data[s:e]
+        # held_csr: expected amounts under PROBMODE 2, else pu_feat_csr (resolved at build).
+        hc = self.held_csr
+        s = hc.indptr[idx]
+        e = hc.indptr[idx + 1]
+        cols = hc.indices[s:e]
+        amts = hc.data[s:e]
         eff = self.feat_targets[cols] * self.misslevel
         old_shortfalls = np.maximum(0.0, eff - held[cols])
         new_shortfalls = np.maximum(0.0, eff - (held[cols] + sign * amts))
@@ -743,6 +803,10 @@ class ProblemCache:
         )
 
         delta = cost_delta + blm * boundary_delta + penalty_delta
+
+        # --- PROBMODE 1 risk premium delta (one bool check when off) ---
+        if self.prob_active:
+            delta += sign * self.prob_cost[idx]
 
         # --- Cost threshold delta ---
         if self.cost_thresh > 0:
@@ -885,6 +949,36 @@ class ProblemCache:
         # Correct.
         
         return total
+
+
+def _build_probability(
+    problem: ConservationProblem,
+    pu_id_to_idx: dict[int, int],
+    costs: np.ndarray,
+    pu_feat_csr: csr_matrix,
+    probmode: int,
+    prob_weight: float,
+) -> tuple[np.ndarray, bool, csr_matrix]:
+    """``(prob_cost, prob_active, held_csr)`` for PROBMODE 1 / 2 (see the module docstring).
+
+    ``p`` comes from the shared ``_probability_vector`` (missing PU → 0, unknown ids
+    skipped, last row wins, non-finite values raise ``ValueError``).
+    """
+    n_pu = len(costs)
+    prob_cost = np.zeros(n_pu, dtype=np.float64)
+    if problem.probability is None or probmode not in (1, 2):
+        return prob_cost, False, pu_feat_csr
+    if probmode == 1 and prob_weight <= 0.0:
+        return prob_cost, False, pu_feat_csr
+    p = _probability_vector(problem, pu_id_to_idx, n_pu)
+    if probmode == 1:
+        return prob_weight * p * costs, True, pu_feat_csr
+    # Mode 2: copy and scale .data row by row, so held_csr stays structurally identical to
+    # pu_feat_csr (same indptr / indices, a p = 1 row keeps explicit zeros) — unlike
+    # diags(1 − p) @ csr, which drops those zeros and changes the per-row nnz.
+    held_csr = pu_feat_csr.copy()
+    held_csr.data = held_csr.data * np.repeat(1.0 - p, np.diff(held_csr.indptr))
+    return prob_cost, False, held_csr
 
 
 _ConnArrays = tuple[
