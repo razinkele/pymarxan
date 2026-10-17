@@ -253,6 +253,19 @@ Upload a connectivity matrix describing spatial relationships between planning u
 
 After upload, the matrix shape, non-zero count, and density are displayed.
 
+**How connectivity enters the objective** (scaled by `CONNECTIVITY_WEIGHT`; a weight of 0 or
+below switches it off):
+
+- **Symmetric** (default): a reward of `v` for each connected pair with both units selected.
+  A pair listed twice, as `(i, j)` and `(j, i)` (as in a full matrix), counts once: the first
+  row wins.
+- **Asymmetric** (`ASYMMETRIC_CONNECTIVITY = 1`): a penalty of `v` for each row whose source
+  `id1` is selected without its sink `id2`. Repeated `(id1, id2)` rows add up.
+
+These are prioritizr's connectivity and asymmetric-connectivity penalties. The MIP solver
+optimises them; simulated annealing and the other heuristics report them in the objective but
+do not optimise them.
+
 ### Connectivity Metrics
 
 Compute graph-theoretic metrics from the loaded connectivity matrix:
@@ -395,10 +408,9 @@ amount `Σ r·x`. Held amounts assume each feature is spread evenly within a uni
 assumption prioritizr makes. Boundary is `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|`, the optimiser's own
 term; with Marxan's boundary convention it equals prioritizr's default (non-knapsack) boundary
 formulation, whose evaluators instead report `x_i·x_j`. For fractional plans the boundary is a
-linear compactness penalty, not a measured perimeter. Connectivity is
-`−v·min(x_i, x_j) + v·|x_i − x_j|` per row. The connectivity evaluator differs from the MIP's
-connectivity term (also for binary plans, a pre-existing difference), so with connectivity the
-reported objective is not the MIP objective.
+linear compactness penalty, not a measured perimeter. Connectivity is the optimiser's own
+term: `−v·min(x_i, x_j)` per pair (symmetric) or `v·max(0, x_i − x_j)` per row (asymmetric), so
+the reported objective equals the MIP objective with connectivity too.
 
 A target counts as met when the held amount is within `1e-7·|target|` of it (relative only;
 a target of 0 is always met), because a linear-program optimum leaves active targets a solver

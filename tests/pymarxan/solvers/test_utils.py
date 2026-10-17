@@ -338,28 +338,77 @@ class TestConnectivityObjectiveTerm:
         pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
         # Select PU 1 and 2 (connected with value 3.0)
         # Edge 1-2: both selected → -3.0
-        # Edge 2-3: only PU 2 selected → +2.0
+        # Edge 2-3: only PU 2 selected → 0 (reward-only, as in the MIP)
         # Edge 3-4: neither selected → 0
-        # Total = 1.0 * (-3.0 + 2.0) = -1.0
         selected = np.array([True, True, False, False])
         terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
-        assert terms["connectivity"] == pytest.approx(-1.0)
+        assert terms["connectivity"] == pytest.approx(-3.0)
 
-    def test_one_selected_penalty(self):
-        """Only one PU in a connected pair selected → positive (penalty)."""
+    def test_one_selected_no_reward(self):
+        """Only one PU in a connected pair selected → no term (symmetric is reward-only)."""
         problem = self._make_problem(
             connectivity=self.conn,
             parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0},
         )
         pu_index = {1: 0, 2: 1, 3: 2, 4: 3}
-        # Select only PU 2
-        # Edge 1-2: only PU 2 → +3.0
-        # Edge 2-3: only PU 2 → +2.0
-        # Edge 3-4: neither → 0
-        # Total = 1.0 * (3.0 + 2.0) = 5.0
         selected = np.array([False, True, False, False])
         terms = compute_objective_terms(problem, selected, pu_index, blm=0.0)
-        assert terms["connectivity"] == pytest.approx(5.0)
+        assert terms["connectivity"] == 0.0
+
+    def test_symmetric_duplicate_pair_first_row_wins(self):
+        """(1, 2) then (2, 1): the first row's value counts, as in the MIP."""
+        import pandas as pd
+
+        conn = pd.DataFrame({"id1": [1, 2], "id2": [2, 1], "value": [3.0, 5.0]})
+        problem = self._make_problem(
+            connectivity=conn, parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0},
+        )
+        selected = np.array([True, True, False, False])
+        terms = compute_objective_terms(problem, selected, {1: 0, 2: 1, 3: 2, 4: 3}, blm=0.0)
+        assert terms["connectivity"] == pytest.approx(-3.0)
+
+    @pytest.mark.parametrize(
+        "selected, expected",
+        [
+            # 1→2 (3.0), 2→3 (2.0), 3→4 (1.0): charge source selected without sink
+            ([False, True, False, False], 2.0),  # 2 without 3
+            ([True, True, False, False], 2.0),  # 1→2 kept; 2 without 3
+            ([True, False, True, False], 3.0 + 1.0),  # 1 without 2; 3 without 4
+            ([False, False, True, True], 0.0),  # 2→3: source 2 not selected
+            ([True, True, True, True], 0.0),
+        ],
+    )
+    def test_asymmetric_source_without_sink(self, selected, expected):
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0, "ASYMMETRIC_CONNECTIVITY": 1},
+        )
+        terms = compute_objective_terms(
+            problem, np.array(selected), {1: 0, 2: 1, 3: 2, 4: 3}, blm=0.0,
+        )
+        assert terms["connectivity"] == pytest.approx(expected)
+
+    def test_asymmetric_duplicate_rows_sum(self):
+        import pandas as pd
+
+        conn = pd.DataFrame({"id1": [1, 1], "id2": [2, 2], "value": [4.0, 7.0]})
+        problem = self._make_problem(
+            connectivity=conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": 1.0, "ASYMMETRIC_CONNECTIVITY": 1},
+        )
+        selected = np.array([True, False, False, False])
+        terms = compute_objective_terms(problem, selected, {1: 0, 2: 1, 3: 2, 4: 3}, blm=0.0)
+        assert terms["connectivity"] == pytest.approx(11.0)
+
+    def test_negative_weight_ignored(self):
+        """The MIP drops connectivity when CONNECTIVITY_WEIGHT <= 0; so does the evaluator."""
+        problem = self._make_problem(
+            connectivity=self.conn,
+            parameters={"BLM": 0.0, "CONNECTIVITY_WEIGHT": -1.0},
+        )
+        selected = np.array([True, True, False, False])
+        terms = compute_objective_terms(problem, selected, {1: 0, 2: 1, 3: 2, 4: 3}, blm=0.0)
+        assert terms["connectivity"] == 0.0
 
     def test_all_selected_full_bonus(self):
         """All PUs selected → maximum connectivity bonus."""

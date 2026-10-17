@@ -27,6 +27,11 @@ matter are restated here.
 > - **Layout:** decision validation and extraction live in the leaf module
 >   `solvers/_decisions.py`, and `presolve_check` validates its bound arguments. The helpers
 >   `compute_held` and `require_binary_solver` are public.
+> - **§5.3 connectivity divergence, closed in v0.43:** `compute_connectivity_penalty` now
+>   mirrors the MIP term: symmetric `−v·min(x_i, x_j)` with the first row of a pair winning,
+>   asymmetric `v·max(0, x_i − x_j)` per row, and weight ≤ 0 ignored. `Solution.objective ==
+>   mip_objective_value` now holds with connectivity too. Binary reported objectives on
+>   connectivity problems changed; the `conn_*` golden objectives were re-recorded in place.
 
 ## 1. Intent
 

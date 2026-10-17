@@ -316,23 +316,21 @@ def compute_connectivity_penalty(
     selected: np.ndarray,
     pu_index: dict[int, int],
 ) -> float:
-    """Compute connectivity penalty for selected planning units.
+    """Compute the connectivity term for selected planning units.
 
-    Connectivity penalizes *loss* of connections between selected PUs.
-    For each edge (i,j) with value v where both i and j are selected,
-    v contributes negatively (bonus). Where only one is selected,
-    v contributes positively (penalty for broken connection).
+    Mirrors the MIP's connectivity term (and prioritizr's formulations), so for
+    an optimal plan the reported objective equals ``mip_objective_value``:
 
-    Total = CONNECTIVITY_WEIGHT * Σ edges where exactly one PU selected * value
-          - CONNECTIVITY_WEIGHT * Σ edges where both PUs selected * value
+    * symmetric (default): reward connected pairs held together,
+      ``−CONNECTIVITY_WEIGHT · Σ v·min(x_i, x_j)``. Rows are de-duplicated by
+      unordered pair; the first of ``(i, j)`` / ``(j, i)`` wins.
+    * ``ASYMMETRIC_CONNECTIVITY = 1``: charge a source held without its sink,
+      ``+CONNECTIVITY_WEIGHT · Σ v·max(0, x_i − x_j)`` per row; duplicate
+      ``(i, j)`` rows add up.
 
-    If ASYMMETRIC_CONNECTIVITY is set, directionality is preserved.
-
-    Fractional selections, per row: ``−v·min(x_i, x_j) + v·|x_i − x_j|`` (today's ``−v`` /
-    ``+v`` on 0/1). This evaluator differs from the MIP's connectivity term (pre-existing;
-    spec §5.3).
-
-    Returns 0.0 if no connectivity data.
+    On 0/1 plans ``min`` is "both selected" and ``max(0, x_i − x_j)`` is
+    "i selected without j". Returns 0.0 if there is no connectivity data or
+    ``CONNECTIVITY_WEIGHT <= 0`` (the MIP ignores connectivity then too).
     """
     if problem.connectivity is None:
         return 0.0
@@ -340,32 +338,34 @@ def compute_connectivity_penalty(
     conn_weight = float(
         problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0)
     )
-    if conn_weight == 0.0:
+    if conn_weight <= 0.0:
         return 0.0
+    asymmetric = bool(int(problem.parameters.get("ASYMMETRIC_CONNECTIVITY", 0)))
 
     conn = problem.connectivity
     id1_col = conn["id1"].values
     id2_col = conn["id2"].values
     val_col = conn["value"].values.astype(np.float64)
 
-    fractional = _is_fractional(selected)
+    x = np.asarray(selected, dtype=np.float64)
+    seen: set[tuple[int, int]] = set()
     total = 0.0
     for k in range(len(id1_col)):
-        idx1 = pu_index.get(int(id1_col[k]))
-        idx2 = pu_index.get(int(id2_col[k]))
+        i = int(id1_col[k])
+        j = int(id2_col[k])
+        idx1 = pu_index.get(i)
+        idx2 = pu_index.get(j)
         if idx1 is None or idx2 is None:
             continue
         val = float(val_col[k])
-        if fractional:
-            x1, x2 = float(selected[idx1]), float(selected[idx2])
-            total += -val * min(x1, x2) + val * abs(x1 - x2)
+        if asymmetric:
+            total += val * max(0.0, float(x[idx1] - x[idx2]))
             continue
-        s1 = selected[idx1]
-        s2 = selected[idx2]
-        if s1 and s2:
-            total -= val  # bonus for connected pair
-        elif s1 or s2:
-            total += val  # penalty for broken connection
+        key = (min(i, j), max(i, j))
+        if key in seen:
+            continue
+        seen.add(key)
+        total -= val * min(float(x[idx1]), float(x[idx2]))
     return conn_weight * total
 
 

@@ -7,6 +7,10 @@ probed at record time by re-solving with the found selection forbidden (a no-goo
 tie means CBC may legitimately return another optimal plan once LP names or row order change.
 The absolute ``min_largest_shortfall`` ghost cases are the one deliberate change (spec §2).
 
+v0.43 (written reason): ``compute_connectivity_penalty`` now mirrors the MIP's
+connectivity term, so the ``objective`` (and stored ``connectivity``) of the ``conn_*``
+entries were re-recorded in place; every other field is unchanged.
+
 Regenerate only with a written reason:
     PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python \
         tests/pymarxan/solvers/test_stage3_golden_v040.py

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Reported connectivity now matches the MIP's connectivity term, so reported objectives
+  change on every problem with connectivity, for every solver.** `compute_connectivity_penalty`
+  (behind `Solution.objective` and `compute_objective_terms`) used its own rule: it rewarded
+  pairs with both units selected, charged pairs with exactly one, and ignored
+  `ASYMMETRIC_CONNECTIVITY`. It now evaluates what the MIP optimises (prioritizr's
+  formulations):
+  - symmetric connectivity is a reward only, `−w·v·min(x_i, x_j)`, and a pair listed as both
+    `(i, j)` and `(j, i)` counts once, by its first row;
+  - asymmetric connectivity charges a source selected without its sink, `w·v·max(0, x_i − x_j)`
+    per row, and duplicate rows add up;
+  - a `CONNECTIVITY_WEIGHT` of 0 or below now switches connectivity off, as it already did in
+    the MIP; negative weights previously flipped the sign of the reported term.
+
+  `Solution.objective` now equals `mip_objective_value` with connectivity too. Selections do
+  not change: the MIP is untouched, and simulated annealing and the other heuristics do not
+  optimise connectivity (they only report it). On the golden fixture a symmetric MIP plan's
+  objective goes from 47 to 33. The `conn_*` golden objectives were re-recorded in place, and
+  no other field changed.
+
 ## [0.42.1] — 2026-10-17
 
 ### Fixed

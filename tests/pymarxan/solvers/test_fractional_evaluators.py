@@ -42,8 +42,12 @@ def test_hand_calculation() -> None:
     assert held == pytest.approx({1: 6.0 + 8.0 + 5.0, 2: 4.8 + 4.0})  # 19.0, 8.8
     # 3·0.6 + 2·|0.6 − 0.2| + 4·|0.2 − 1| + 1·1
     assert compute_boundary(p, X, PU_INDEX) == pytest.approx(6.8)
-    # rows: (1,2,3): −3·0.2 + 3·0.4 = 0.6; (2,1,1): −0.2 + 0.4 = 0.2; (1,3,2): −1.2 + 0.8
-    assert compute_connectivity_penalty(p, X, PU_INDEX) == pytest.approx(2.0 * 0.4)
+    # symmetric, reward-only −v·min(x_i, x_j): (1,2,3): −3·0.2; (2,1,1) repeats the pair
+    # (first row wins); (1,3,2): −2·0.6
+    assert compute_connectivity_penalty(p, X, PU_INDEX) == pytest.approx(2.0 * -1.8)
+    # asymmetric v·max(0, x_i − x_j): (1,2,3): 3·0.4; (2,1,1): 0; (1,3,2): 0
+    asym = p.copy_with(parameters={**p.parameters, "ASYMMETRIC_CONNECTIVITY": 1})
+    assert compute_connectivity_penalty(asym, X, PU_INDEX) == pytest.approx(2.0 * 1.2)
     assert check_targets(p, X, PU_INDEX) == {1: True, 2: False}
     assert compute_feature_shortfalls(p, X, PU_INDEX) == pytest.approx({1: 0.0, 2: 1.2})
     s = build_solution(p, X, 1.0)
@@ -53,7 +57,7 @@ def test_hand_calculation() -> None:
     assert s.boundary == pytest.approx(6.8)
     assert s.penalty == pytest.approx(1.2)
     assert s.shortfall == pytest.approx(1.2)
-    assert s.objective == pytest.approx(40.0 + 6.8 + 1.2 + 0.8)
+    assert s.objective == pytest.approx(40.0 + 6.8 + 1.2 - 3.6)
     assert s.n_selected == 3
     assert s.selected_sum == pytest.approx(1.8)
 

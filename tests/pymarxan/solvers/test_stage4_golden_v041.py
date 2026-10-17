@@ -6,6 +6,10 @@ binary ``MultiObjectiveMIP`` hierarchical solve hands to the backend, binary
 ``presolve_check`` messages, and ``build_solution`` outputs for fixed binary selections
 (connectivity included). Every entry must reproduce exactly.
 
+v0.43 (written reason): ``compute_connectivity_penalty`` now mirrors the MIP's
+connectivity term, so the ``objective`` (and stored ``connectivity``) of the ``conn_*``
+entries were re-recorded in place; every other field is unchanged.
+
 Regenerate only with a written reason:
     PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python \
         tests/pymarxan/solvers/test_stage4_golden_v041.py

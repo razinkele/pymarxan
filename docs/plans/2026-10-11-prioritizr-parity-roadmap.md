@@ -215,8 +215,10 @@ Fold these into a stage when one touches the same code:
   lack.
 - `simulate_data` / `simulate_species` / `simulate_cost` synthetic project generator, useful for
   tutorials and the JOSS paper.
-- Align `compute_connectivity_penalty` with the MIP connectivity term (symmetric: reward-only,
-  pairs de-duplicated; asymmetric: `x_i ∧ ¬x_j`, reading `ASYMMETRIC_CONNECTIVITY`). Changes
-  binary numbers, so it needs its own golden-tested release (Stage 4 §5.3).
+- ~~Align `compute_connectivity_penalty` with the MIP connectivity term~~ — done in v0.43
+  (symmetric reward-only, first row of a pair wins; asymmetric `v·max(0, x_i − x_j)`; weight
+  ≤ 0 ignored). Goldens' `conn_*` objectives re-recorded in place.
+- SA / heuristics do not optimise connectivity (ProblemCache has no connectivity delta); they
+  only report it.
 - Per-PU decision bounds (prioritizr `add_manual_bounded_constraints`) and fractional zone
   shares for `ZoneMIPSolver`.

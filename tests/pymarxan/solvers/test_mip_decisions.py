@@ -324,6 +324,23 @@ def test_objective_agreement_min_set(tiny_problem: ConservationProblem, kw: dict
         assert abs(s.objective - obj) <= tol
 
 
+@pytest.mark.parametrize("asymmetric", [False, True])
+@pytest.mark.parametrize(
+    "kw", [{}, {"decisions": "proportion"}, {"decisions": "semicontinuous", "lower": 0.4}],
+)
+def test_objective_agreement_connectivity(
+    tiny_problem: ConservationProblem, kw: dict, asymmetric: bool,
+) -> None:
+    """The reported objective uses the MIP's connectivity term, so the two agree."""
+    kind = "asym" if asymmetric else "sym"
+    for p in (with_conn(tiny_problem, asymmetric=asymmetric),
+              random_problem(11, connectivity=kind), random_problem(12, connectivity=kind)):
+        s = _one(p, **kw)
+        obj = float(s.metadata["mip_objective_value"])
+        tol = 1e-6 * max(1.0, abs(obj)) + SNAP_TOL * float(p.planning_units["cost"].sum())
+        assert abs(s.objective - obj) <= tol, (kind, kw)
+
+
 def test_infeasible_returns_empty() -> None:
     """upper 0.5 cannot reach targets equal to the full amounts: [] as for binary."""
     p = identity_problem()

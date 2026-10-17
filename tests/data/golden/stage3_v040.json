@@ -2,7 +2,7 @@
  "conn_asym|max_features|absolute": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -22,7 +22,7 @@
  "conn_asym|max_features|relative": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -42,7 +42,7 @@
  "conn_asym|max_weighted_features|absolute": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -62,7 +62,7 @@
  "conn_asym|max_weighted_features|relative": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -82,7 +82,7 @@
  "conn_asym|min_largest_shortfall|absolute": {
   "cost": 33.0,
   "mip_objective_value": 1.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -102,7 +102,7 @@
  "conn_asym|min_largest_shortfall|relative": {
   "cost": 33.0,
   "mip_objective_value": 0.066666667,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -122,7 +122,7 @@
  "conn_asym|min_penalties|absolute": {
   "cost": 35.0,
   "mip_objective_value": 0.0,
-  "objective": 78.0,
+  "objective": 62.0,
   "selected": [
    0,
    1,
@@ -142,7 +142,7 @@
  "conn_asym|min_penalties|relative": {
   "cost": 35.0,
   "mip_objective_value": 0.0,
-  "objective": 78.0,
+  "objective": 62.0,
   "selected": [
    0,
    1,
@@ -162,7 +162,7 @@
  "conn_asym|min_set|absolute": {
   "cost": 38.0,
   "mip_objective_value": 43.0,
-  "objective": 57.0,
+  "objective": 43.0,
   "selected": [
    0,
    0,
@@ -182,7 +182,7 @@
  "conn_asym|min_set|relative": {
   "cost": 38.0,
   "mip_objective_value": 43.0,
-  "objective": 57.0,
+  "objective": 43.0,
   "selected": [
    0,
    0,
@@ -202,7 +202,7 @@
  "conn_asym|min_shortfall|absolute": {
   "cost": 33.0,
   "mip_objective_value": 1.0,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -222,7 +222,7 @@
  "conn_asym|min_shortfall|relative": {
   "cost": 33.0,
   "mip_objective_value": 0.06666666666666667,
-  "objective": 42.0,
+  "objective": 53.0,
   "selected": [
    1,
    1,
@@ -242,7 +242,7 @@
  "conn_sym|max_features|absolute": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -262,7 +262,7 @@
  "conn_sym|max_features|relative": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -282,7 +282,7 @@
  "conn_sym|max_weighted_features|absolute": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -302,7 +302,7 @@
  "conn_sym|max_weighted_features|relative": {
   "cost": 33.0,
   "mip_objective_value": 2.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -322,7 +322,7 @@
  "conn_sym|min_largest_shortfall|absolute": {
   "cost": 33.0,
   "mip_objective_value": 1.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -342,7 +342,7 @@
  "conn_sym|min_largest_shortfall|relative": {
   "cost": 33.0,
   "mip_objective_value": 0.066666667,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -362,7 +362,7 @@
  "conn_sym|min_penalties|absolute": {
   "cost": 35.0,
   "mip_objective_value": 0.0,
-  "objective": 78.0,
+  "objective": 44.0,
   "selected": [
    0,
    1,
@@ -382,7 +382,7 @@
  "conn_sym|min_penalties|relative": {
   "cost": 35.0,
   "mip_objective_value": 0.0,
-  "objective": 78.0,
+  "objective": 44.0,
   "selected": [
    0,
    1,
@@ -402,7 +402,7 @@
  "conn_sym|min_set|absolute": {
   "cost": 41.0,
   "mip_objective_value": 33.0,
-  "objective": 47.0,
+  "objective": 33.0,
   "selected": [
    0,
    1,
@@ -422,7 +422,7 @@
  "conn_sym|min_set|relative": {
   "cost": 41.0,
   "mip_objective_value": 33.0,
-  "objective": 47.0,
+  "objective": 33.0,
   "selected": [
    0,
    1,
@@ -442,7 +442,7 @@
  "conn_sym|min_shortfall|absolute": {
   "cost": 33.0,
   "mip_objective_value": 1.0,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
@@ -462,7 +462,7 @@
  "conn_sym|min_shortfall|relative": {
   "cost": 33.0,
   "mip_objective_value": 0.06666666666666667,
-  "objective": 42.0,
+  "objective": 33.0,
   "selected": [
    1,
    1,
