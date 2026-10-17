@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, require_binary
 
 
 def _validate_non_empty(solutions: list[Solution]) -> None:
@@ -53,6 +53,8 @@ def solution_diversity(solutions: list[Solution]) -> float:
     solutions are provided the diversity is 0.0.
     """
     _validate_non_empty(solutions)
+    for sol in solutions:
+        require_binary(sol, "solution_diversity")
     n = len(solutions)
     if n < 2:
         return 0.0

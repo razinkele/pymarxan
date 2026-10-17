@@ -18,7 +18,10 @@ class SelectionFrequency:
 
 
 def compute_selection_frequency(solutions: list[Solution]) -> SelectionFrequency:
-    """Compute how often each planning unit is selected across solutions."""
+    """Compute how often each planning unit is selected across solutions.
+
+    With proportion decisions ``counts`` is Σ x (float) and ``frequencies`` the mean x.
+    """
     if not solutions:
         return SelectionFrequency(
             frequencies=np.array([]),
@@ -28,10 +31,11 @@ def compute_selection_frequency(solutions: list[Solution]) -> SelectionFrequency
         )
 
     n_pu = len(solutions[0].selected)
-    counts = np.zeros(n_pu, dtype=int)
+    dtype = np.float64 if any(s.is_fractional for s in solutions) else int
+    counts = np.zeros(n_pu, dtype=dtype)
 
     for sol in solutions:
-        counts += sol.selected.astype(int)
+        counts += sol.selected.astype(dtype)
 
     n = len(solutions)
     frequencies = counts / n

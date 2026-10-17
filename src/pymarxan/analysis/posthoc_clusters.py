@@ -12,7 +12,7 @@ PU is its own cluster (no adjacency information to merge them).
 from __future__ import annotations
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, require_binary
 
 
 def compute_solution_clusters(
@@ -43,6 +43,7 @@ def compute_solution_clusters(
 
     pu_ids = problem.planning_units["id"].astype(int).to_numpy()
     pu_id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
+    require_binary(solution, "compute_solution_clusters")
     selected_ids = [
         int(pid) for i, pid in enumerate(pu_ids) if solution.selected[i]
     ]

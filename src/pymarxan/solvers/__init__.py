@@ -4,6 +4,7 @@ from pymarxan.solvers.base import (
     Solver,
     SolverConfig,
     require_binary,
+    require_binary_solver,
 )
 from pymarxan.solvers.export import write_problem
 from pymarxan.solvers.heuristic import HeuristicSolver
@@ -31,5 +32,6 @@ __all__ = [
     "compute_held",
     "presolve_check",
     "require_binary",
+    "require_binary_solver",
     "write_problem",
 ]

@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, require_binary
 from pymarxan.solvers.utils import compute_objective_terms
 
 
@@ -56,6 +56,7 @@ def compute_rank_importance(
     pu_ids = problem.planning_units["id"].astype(int).to_numpy()
     blm = float(problem.parameters.get("BLM", 0.0))
 
+    require_binary(solution, "compute_rank_importance")
     selected = solution.selected.copy()
     pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
 

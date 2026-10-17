@@ -87,7 +87,13 @@ def compute_representation(
     }
     puvspr = problem.pu_vs_features
     mask = puvspr["pu"].isin(selected_ids)
-    if mask.any():
+    if solution.is_fractional:
+        # Proportion decisions: represented amount Σ r·x (Stage 4 §6.1).
+        from pymarxan.solvers.utils import compute_held
+
+        held = compute_held(problem, solution.selected)
+        represented_amount = {fid: float(held.get(fid, 0.0)) for fid in feature_ids}
+    elif mask.any():
         rep_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
         represented_amount = {
             fid: float(rep_totals.get(fid, 0.0)) for fid in feature_ids

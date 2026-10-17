@@ -23,7 +23,7 @@ infeasibility.
 from __future__ import annotations
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution, SolverConfig
+from pymarxan.solvers.base import Solution, SolverConfig, require_binary_solver
 from pymarxan.solvers.mip_solver import MIPSolver
 
 
@@ -61,6 +61,7 @@ def generate_portfolio_cuts(
         raise ValueError(f"k must be a positive int; got {k!r}.")
     if solver is None:
         solver = MIPSolver()
+    require_binary_solver(solver, "generate_portfolio_cuts")
     if config is None:
         config = SolverConfig(num_solutions=1)
 

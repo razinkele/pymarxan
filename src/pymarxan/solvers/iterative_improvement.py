@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.base import Solution, Solver, SolverConfig, require_binary
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.utils import build_solution
 
@@ -103,7 +103,10 @@ class IterativeImprovementSolver(Solver):
         -------
         Solution
             The improved solution (or the original if ITIMPTYPE=0).
+
+        Raises ``FractionalSolutionError`` for a proportion-decision solution.
         """
+        require_binary(solution, "IterativeImprovementSolver.improve")
         itimptype = int(
             problem.parameters.get("ITIMPTYPE", self._itimptype)
         )

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, require_binary
 
 if TYPE_CHECKING:
     from pymarxan.models.problem import ConservationProblem
@@ -192,6 +192,8 @@ class ScenarioSet:
 
     def overlap_matrix(self) -> np.ndarray:
         """Compute pairwise selection overlap (Jaccard index)."""
+        for scenario in self._scenarios:
+            require_binary(scenario.solution, "ScenarioSet.overlap_matrix")
         n = len(self._scenarios)
         matrix = np.zeros((n, n))
         for i in range(n):

@@ -75,6 +75,17 @@ class FractionalSolutionError(ValueError):
     """A binary-only tool was given a solution holding proportion decisions."""
 
 
+def require_binary_solver(solver: object, context: str) -> None:
+    """``FractionalSolutionError`` up front for a solver configured with non-binary
+    decisions (tools that re-solve and read 0/1 plans, spec §6.2)."""
+    decisions = getattr(solver, "decisions", "binary")
+    if decisions != "binary":
+        raise FractionalSolutionError(
+            f"{context} needs a binary solver, but this solver uses "
+            f"decisions={decisions!r}. Use decisions='binary'."
+        )
+
+
 def require_binary(solution: Solution, context: str) -> None:
     """Raise ``FractionalSolutionError`` unless ``solution.selected`` is binary (spec §5.2)."""
     if solution.is_fractional:

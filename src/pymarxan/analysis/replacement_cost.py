@@ -26,7 +26,7 @@ from pymarxan.models.problem import (
     STATUS_LOCKED_OUT,
     ConservationProblem,
 )
-from pymarxan.solvers.base import SolverConfig
+from pymarxan.solvers.base import SolverConfig, require_binary_solver
 from pymarxan.solvers.mip_solver import MIPSolver
 
 
@@ -63,6 +63,7 @@ def compute_replacement_cost(
     """
     if solver is None:
         solver = MIPSolver()
+    require_binary_solver(solver, "compute_replacement_cost")
 
     pu_ids = problem.planning_units["id"].astype(int).to_numpy()
     scores: dict[int, float] = {int(pid): 0.0 for pid in pu_ids}

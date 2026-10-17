@@ -8,7 +8,7 @@ import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.phylo.tree import NodeId, PhylogeneticTree
-from pymarxan.solvers.base import Solution
+from pymarxan.solvers.base import Solution, require_binary
 
 
 @dataclass
@@ -85,6 +85,7 @@ def compute_phylogenetic_diversity(
     """
     resolved = _resolve_tips(problem, tree, tip_feature_map)
 
+    require_binary(solution, "compute_phylogenetic_diversity")  # Faith PD is presence-based
     selected_ids = {
         int(pid)
         for pid, sel in zip(problem.planning_units["id"], solution.selected)

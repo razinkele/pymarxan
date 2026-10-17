@@ -131,7 +131,12 @@ def evaluate_plans_across_scenarios(
         n_pu = len(problem.planning_units)
         pu_index = {int(pid): k for k, pid in enumerate(problem.planning_units["id"])}
         for i, plabel in enumerate(plan_labels):
-            selected = np.asarray(solutions[plabel].selected, dtype=bool)
+            # Proportions are evaluated as they are (no silent rounding; Stage 4 §6.1).
+            plan = solutions[plabel]
+            selected = (
+                np.asarray(plan.selected) if plan.is_fractional
+                else np.asarray(plan.selected, dtype=bool)
+            )
             if selected.shape[0] != n_pu:
                 raise ValueError(
                     f"plan {plabel!r} has {selected.shape[0]} selections but "

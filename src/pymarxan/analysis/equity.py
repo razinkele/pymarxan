@@ -92,11 +92,13 @@ def compute_equity(
 
     # Initialize every group that appears, in first-seen order.
     group_values: dict[str, float] = {g: 0.0 for g in dict.fromkeys(groups.values())}
+    fractional = solution.is_fractional  # proportions: a group gets Σ x·value
     for pid, sel in zip(pu_ids, solution.selected):
         if sel:
             g = groups.get(int(pid))
             if g is not None:
-                group_values[g] += values_map.get(int(pid), 0.0)
+                v = values_map.get(int(pid), 0.0)
+                group_values[g] += v * float(sel) if fractional else v
 
     total = sum(group_values.values())
     if total > 0:
