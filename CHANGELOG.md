@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CI installs HiGHS (`highsbox`) and fails if it is not detected, so the HiGHS-parametrized
+  tests run in CI. The v0.42.0 notes implied they did, but they had been skipped everywhere.
+  Locally all 102 now pass under HiGHS 1.13.1, confirming the 1e-7 relative target tolerance
+  holds there too. Five parameter-forwarding tests that mock CBC now pin `mip_backend="cbc"`,
+  because `"auto"` correctly prefers HiGHS when it is installed.
+
 ## [0.42.0] — 2026-10-17
 
 ### Added

@@ -94,7 +94,7 @@ def test_mip_solver_accepts_params():
     ) as mock_cbc:
         mock_cbc.return_value = mock_cbc
         try:
-            MIPSolver().solve(p, SolverConfig(verbose=True))
+            MIPSolver(mip_backend="cbc").solve(p, SolverConfig(verbose=True))
         except Exception:
             pass
         mock_cbc.assert_called_once_with(

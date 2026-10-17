@@ -27,7 +27,7 @@ def _tiny_problem(**params: str) -> ConservationProblem:
 def test_default_params(mock_cmd: MagicMock) -> None:
     """Default call uses msg=0, timeLimit=300, gapRel=0.0."""
     mock_cmd.return_value = MagicMock()
-    solver = MIPSolver()
+    solver = MIPSolver(mip_backend="cbc")
     problem = _tiny_problem()
     try:
         solver.solve(problem, SolverConfig(num_solutions=1))
@@ -40,7 +40,7 @@ def test_default_params(mock_cmd: MagicMock) -> None:
 def test_custom_time_limit(mock_cmd: MagicMock) -> None:
     """MIP_TIME_LIMIT='60' in parameters -> timeLimit=60."""
     mock_cmd.return_value = MagicMock()
-    solver = MIPSolver()
+    solver = MIPSolver(mip_backend="cbc")
     problem = _tiny_problem(MIP_TIME_LIMIT="60")
     try:
         solver.solve(problem, SolverConfig(num_solutions=1))
@@ -53,7 +53,7 @@ def test_custom_time_limit(mock_cmd: MagicMock) -> None:
 def test_custom_gap(mock_cmd: MagicMock) -> None:
     """MIP_GAP='0.05' in parameters -> gapRel=0.05."""
     mock_cmd.return_value = MagicMock()
-    solver = MIPSolver()
+    solver = MIPSolver(mip_backend="cbc")
     problem = _tiny_problem(MIP_GAP="0.05")
     try:
         solver.solve(problem, SolverConfig(num_solutions=1))
@@ -66,7 +66,7 @@ def test_custom_gap(mock_cmd: MagicMock) -> None:
 def test_verbose_flag(mock_cmd: MagicMock) -> None:
     """SolverConfig(verbose=True) -> msg=1."""
     mock_cmd.return_value = MagicMock()
-    solver = MIPSolver()
+    solver = MIPSolver(mip_backend="cbc")
     problem = _tiny_problem()
     try:
         solver.solve(problem, SolverConfig(num_solutions=1, verbose=True))

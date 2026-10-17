@@ -42,6 +42,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[all]"
+      # HiGHS binary for PuLP's HiGHS_CMD, so the backend-parametrized tests
+      # (Stage 4 tolerance cases) run here instead of skipping. highsbox ships
+      # the `highs` executable but does not put it on PATH or the loader path.
+      - name: Install HiGHS
+        run: |
+          pip install highsbox
+          python - <<'EOF' >> "$GITHUB_ENV"
+          import os, highsbox
+          print(f"LD_LIBRARY_PATH={highsbox.highs_lib_dir()}")
+          EOF
+          python -c "import os, highsbox; print(os.path.dirname(highsbox.highs_bin_path()))" >> "$GITHUB_PATH"
+      # Fail loudly if HiGHS is not detected, rather than silently skipping its tests.
+      - run: python -c "from pymarxan.solvers._backends import _available_backends as a; assert a()['highs'], a()"
       # `-m "not bench"` skips perf-budget benchmarks (sized for the dev
       # machine; could fail on slower CI runners). Run manually via
       # `make bench` against the canonical environment.
