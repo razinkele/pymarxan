@@ -218,7 +218,27 @@ Fold these into a stage when one touches the same code:
 - ~~Align `compute_connectivity_penalty` with the MIP connectivity term~~ — done in v0.43
   (symmetric reward-only, first row of a pair wins; asymmetric `v·max(0, x_i − x_j)`; weight
   ≤ 0 ignored). Goldens' `conn_*` objectives re-recorded in place.
-- SA / heuristics do not optimise connectivity (ProblemCache has no connectivity delta); they
-  only report it.
+- ~~SA / heuristics do not optimise connectivity~~ — done in v0.44 for SA and iterative
+  improvement (`ProblemCache` connectivity arrays in the full objective and the per-flip
+  delta; `docs/plans/2026-10-17-sa-connectivity-design.md`). Greedy heuristics still only
+  report it.
+- SA / iterative improvement ignore the PROBMODE 1 risk premium: the `ProblemCache` objective
+  has no PROBMODE 1 term, so SA's tracked objective disagrees with the reported one (cache 44.0
+  vs reported 69.2 on `simple` with PROBMODE 1, PROBABILITYWEIGHTING 2, probabilities
+  `linspace(0.1, 0.6)`, selection {2, 4, 6}).
+- One shared connectivity normaliser for the evaluator, the MIP and `ProblemCache` (today each
+  re-implements the rules). Fold in two MIP gaps: a connectivity row naming an unknown planning
+  unit raises `KeyError` (the evaluator and SA skip it), and negative asymmetric values leave
+  the MIP unbounded / raise `IndexError` (SA and the evaluator accept them).
+- String PU ids split SA's reported and tracked objectives (pre-existing, not connectivity
+  specific): `build_solution` keys `pu_index` on the raw id while the cache uses `int(id)`.
+  Normalise the PU id dtype at load or in `build_solution`.
+- Marxan's `ASYMMETRICCONNECTIVITY 1` in input.dat is ignored: the boundary file is run as a
+  symmetric boundary penalty. pymarxan's asymmetric term applies only to the connectivity table.
+- Marxan's greedy heuristics (`GreedyScore` / `RareScore`, `heuristics.cpp`) include
+  `BLM · ConnectionCost2` in the unit's cost; `HeuristicSolver._score_pu` uses cost only.
+- Zone SA: `ZoneProblemCache` full objective and delta disagree on connectivity self-pairs
+  (verified by probe: a self-row `(i, i, v)` gives full-objective difference 0 but a delta of
+  `+2v` when `i` leaves a zone). Drop self-rows at build or give them the binary rule.
 - Per-PU decision bounds (prioritizr `add_manual_bounded_constraints`) and fractional zone
   shares for `ZoneMIPSolver`.

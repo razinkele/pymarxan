@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Simulated annealing and iterative improvement now optimise connectivity (the
+  `CONNECTIVITY_WEIGHT` term; connectivity encoded in the boundary file under `BLM` was already
+  optimised), so their plans change on every problem with `CONNECTIVITY_WEIGHT > 0` and a
+  connectivity table.** The `ProblemCache` behind SA and iterative improvement had no
+  connectivity term: they searched as if it did not exist and only the MIP optimised it. The
+  cache now holds connectivity adjacency arrays and adds the term `compute_connectivity_penalty`
+  reports to its full objective and its O(degree) per-flip delta: symmetric pairs rewarded when
+  both units are selected (first row of a pair wins, a self-pair rewards its unit), asymmetric
+  rows charged when the source is selected without the sink (duplicate rows add up, self-rows
+  ignored). Expect SA/II plans to gain strongly connected units (symmetric) or the sinks of
+  selected sources (asymmetric), at higher cost, as the MIP's already do. Everything built on
+  SA inherits the change: BLM calibration, replacement cost, the automatic starting
+  temperature and RUNMODEs that chain SA into iterative improvement. SA's tracked
+  current/best objective and its history now equal the reported `Solution.objective` on
+  connectivity problems. The term equals the MIP's on input the MIP accepts; the MIP still
+  raises on connectivity rows that name unknown planning units and cannot solve negative
+  asymmetric values, both of which SA and the evaluator accept. Problems without connectivity,
+  or with a weight of 0 or below, are unaffected (the delta pays one integer comparison).
+  Greedy heuristics (HEURTYPE 0–7), the Zonation solver, the external Marxan binary and the
+  zone solvers are unchanged.
+
 ## [0.43.0] — 2026-10-17
 
 ### Changed

@@ -262,9 +262,27 @@ below switches it off):
 - **Asymmetric** (`ASYMMETRIC_CONNECTIVITY = 1`): a penalty of `v` for each row whose source
   `id1` is selected without its sink `id2`. Repeated `(id1, id2)` rows add up.
 
-These are prioritizr's connectivity and asymmetric-connectivity penalties. The MIP solver
-optimises them; simulated annealing and the other heuristics report them in the objective but
-do not optimise them.
+These follow prioritizr's `add_connectivity_penalties()` and
+`add_asym_connectivity_penalties()` (each symmetric pair counted once, as prioritizr does by
+using one triangle of the matrix). Edge cases differ: for a pair given twice with different
+values prioritizr keeps the `id1 > id2` row and sums repeated rows, where pymarxan keeps the
+first row; prioritizr treats an asymmetric self-row `(i, i)` as a reward for selecting `i`,
+where pymarxan, like Marxan's `ASYMMETRICCONNECTIVITY`, ignores it; and rows naming unknown
+planning units are skipped here but are an error in prioritizr. For clean input (no
+conflicting reversed rows, no repeated symmetric rows, no self-rows, no unknown ids) the terms
+are the same.
+
+pymarxan's MIP solver, simulated annealing and iterative improvement optimise them. Every other
+solver — the greedy heuristics (HEURTYPE 0–7), the Zonation solver and the external Marxan
+executable (which has no `CONNECTIVITY_WEIGHT`) — only reports them in the objective.
+
+This term is separate from Marxan's own way of using connectivity, which Marxan Connect also
+follows (Beger et al. 2010; Daigle et al. 2020): connection strengths written into the boundary
+file and weighted by `BLM`, penalising a unit selected without the units it is connected to.
+That boundary-based connectivity has always been optimised by simulated annealing. pymarxan
+does not read Marxan's `ASYMMETRICCONNECTIVITY` option; its asymmetric term has the same form
+(source selected without sink, self-rows ignored, repeated rows added) but applies to the
+connectivity table and `CONNECTIVITY_WEIGHT`.
 
 ### Connectivity Metrics
 
