@@ -616,15 +616,20 @@ class MIPSolver(Solver):
                 # Penalize selecting source i without sink j:
                 #   z_ij >= x_i - x_j, z_ij >= 0
                 #   objective: +conn_weight * c_ij * z_ij
+                # Duplicate (i, j) rows share one z, so their values add up.
+                asym_z: dict[tuple[int, int], pulp.LpVariable] = {}
                 for ck in range(len(c_id1)):
                     i = int(c_id1[ck])
                     j = int(c_id2[ck])
                     cval = float(c_val[ck])
-                    z = pulp.LpVariable(
-                        f"zc_{i}_{j}", lowBound=0, cat="Continuous",
-                    )
-                    model += z >= x[i] - x[j], f"conn_asym_{i}_{j}"
-                    implied.append((z, _src_without_sink_rule(x[i], x[j])))
+                    z = asym_z.get((i, j))
+                    if z is None:
+                        z = pulp.LpVariable(
+                            f"zc_{i}_{j}", lowBound=0, cat="Continuous",
+                        )
+                        asym_z[(i, j)] = z
+                        model += z >= x[i] - x[j], f"conn_asym_{i}_{j}"
+                        implied.append((z, _src_without_sink_rule(x[i], x[j])))
                     conn_expr += conn_weight * cval * z
             else:
                 # Reward both selected via binary-AND linearization:

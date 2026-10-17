@@ -86,6 +86,19 @@ class TestAsymmetricConnectivity:
             f"PU 1 selected without PU 2 despite asymmetric penalty, got {selected}"
         )
 
+    def test_duplicate_rows_sum(self):
+        """Duplicate (i, j) rows used to crash with 'overlapping constraint names'.
+        They share one auxiliary, so the model equals one row with the summed value."""
+        params = {"CONNECTIVITY_WEIGHT": 1.0, "ASYMMETRIC_CONNECTIVITY": 1}
+        dup = pd.DataFrame({"id1": [1, 1, 3], "id2": [2, 2, 2], "value": [4.0, 7.0, 3.0]})
+        summed = pd.DataFrame({"id1": [1, 3], "id2": [2, 2], "value": [11.0, 3.0]})
+        sol_dup = _solve(_make_problem(connectivity=dup, params=params))
+        sol_sum = _solve(_make_problem(connectivity=summed, params=params))
+        assert sol_dup.metadata["mip_objective_value"] == sol_sum.metadata["mip_objective_value"]
+        assert list(sol_dup.selected) == list(sol_sum.selected)
+        model = MIPSolver().build_model(_make_problem(connectivity=dup, params=params))
+        assert sum(name.startswith("conn_asym_1_2") for name in model.constraints) == 1
+
 
 class TestZeroWeight:
     def test_zero_weight_no_effect(self):

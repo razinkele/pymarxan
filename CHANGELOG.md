@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `MIPSolver` with `ASYMMETRIC_CONNECTIVITY=1` no longer crashes on duplicate `(id1, id2)`
+  connectivity rows (`PulpError: overlapping constraint names`). Duplicate rows share one
+  auxiliary, so their values add up, as each row already counts separately in the
+  connectivity penalty evaluator. Symmetric connectivity is unchanged: the first of a
+  duplicated pair still wins.
+
 ### Changed
 - CI installs HiGHS (`highsbox`) and fails if it is not detected, so the HiGHS-parametrized
   tests run in CI. The v0.42.0 notes implied they did, but they had been skipped everywhere.
