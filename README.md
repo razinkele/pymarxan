@@ -135,11 +135,11 @@ pymarxan (three-layer monorepo)
   `snap_barriers` (snap barrier points to nearest segment)
 
 ### Probability
-- Three probability modes:
-  - Mode 1: risk premium weighted by cost
-  - Mode 2: persistence-adjusted feature amounts
-  - Mode 3: Marxan-faithful Z-score **chance constraints** (PROB2D, per-feature
-    probability targets)
+- Probability is the probability of **loss** per planning unit. Three modes:
+  - Mode 1 (pymarxan extension): risk premium `γ·Σp·c·x` added to the objective
+  - Mode 2 (pymarxan extension): targets judged on expected amounts `Σ a·(1−p)`
+  - Mode 3: based on Marxan's Probability 2D (per-cell probability of presence,
+    Z-score soft penalty against per-feature `ptarget`)
 - Integrated in SA, heuristic, and MIP solvers
 
 ### Modern conservation planning

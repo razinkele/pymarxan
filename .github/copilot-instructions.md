@@ -64,7 +64,7 @@ File (*.dat) → load_project() → ConservationProblem → Solver.solve(problem
 | `features` | `id`, `name`, `target`, `spf` | |
 | `pu_vs_features` | `species`, `pu`, `amount` | |
 | `boundary` (optional) | `id1`, `id2`, `boundary` | |
-| `probability` (optional, kw_only) | `pu`, `probability` | Risk/persistence per PU |
+| `probability` (optional, kw_only) | `pu`, `probability` | Probability of loss per PU (PROBMODE 1/2 are pymarxan extensions; 3 is based on Marxan Probability 2D) |
 | `connectivity` (optional, kw_only) | `id1`, `id2`, `value` | Connectivity matrix |
 
 Plus a `parameters: dict` for Marxan settings (e.g., `{"BLM": 1.0}`).

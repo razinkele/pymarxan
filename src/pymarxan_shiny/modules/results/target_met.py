@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
+from pymarxan.solvers.utils import _probmode
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
@@ -48,7 +49,7 @@ def target_met_server(
         # solution carries a clump evaluation. Same for separation when
         # any feature is sep-active. Keeps the table tidy for legacy runs.
         is_probmode3 = (
-            int(p.parameters.get("PROBMODE", 0)) == 3
+            _probmode(p) == 3
             and s.prob_shortfalls is not None
         )
         has_clumping = (

@@ -713,7 +713,7 @@ def build_solution(
     # via compute_probability_penalty.
     prob_shortfalls: dict[int, float] | None = None
     prob_penalty_val: float | None = None
-    if int(problem.parameters.get("PROBMODE", 0)) == 3:
+    if _probmode(problem) == 3:
         from pymarxan.solvers.probability import evaluate_solution_chance
         prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
             problem, selected,

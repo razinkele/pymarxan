@@ -73,7 +73,7 @@ def _reject_nonbinary(
     if decisions == "binary":
         return
     causes: list[str] = []
-    if int(problem.parameters.get("PROBMODE", 0)) == 3:
+    if _probmode(problem) == 3:
         causes.append("PROBMODE 3 (Z-score chance constraints)")
     causes += _nonbinary_conflicts(problem)
     if config.metadata and config.metadata.get("forbidden_selections"):
