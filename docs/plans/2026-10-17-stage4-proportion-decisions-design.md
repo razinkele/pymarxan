@@ -115,6 +115,11 @@ test). Non-binary changes:
    `A ≥ R − tol(R)`; slack `max(0, R − A)` zeroed when `≤ tol(R)`): every active row of an LP
    optimum sits at `R − O(1e-7)`, so exact rules would systematically undercount
    `max_features` / `max_weighted_features` and leave `1e-7` shortfalls in `objective_values`.
+   `evaluate_implied` keeps its absolute `valid(1e-6)` row check: with the tolerant rules the
+   `~1e-7·R` residual on `A ≥ R·y` / `s ≥ R − A` marks the implied point infeasible once `R` is
+   above roughly 10–200, so `evaluate()` returns `None` and the hierarchical cap uses the model
+   value. That fallback is by design and expected in fractional mode; **do not** widen `valid()`
+   (it would touch binary). Final `objective_values` ignore feasibility.
    The tolerance is chosen when the context is built (`ObjectiveContext` gains a
    `fractional: bool` field, default False); binary rules are unchanged.
 7. **Presolve data checks scale with the bounds.** `presolve_check(problem, *,
@@ -145,8 +150,10 @@ test). Non-binary changes:
   - `upper − SNAP_TOL ≤ x < upper` → `upper` (`SNAP_TOL = 1e-6`);
   - semicontinuous, `lower − SNAP_TOL ≤ x < lower` → `lower`;
   - semicontinuous, `round(s_i) == 0` → 0.0 (the rows force `x ≤ upper·s ≈ 0`).
-- `MultiObjectiveMIP`'s `evaluate`/`evaluate_implied` receive the extracted (snapped) values
-  instead of `rounded()` for non-binary modes.
+- `MultiObjectiveMIP`'s `evaluate`/`evaluate_implied` receive the extracted (snapped) values,
+  as `dict(zip(base.pu_ids, arr))`, instead of `rounded()` for non-binary modes.
+- Known limit of `ZERO_TOL`: a genuine optimum `x* ≤ 1e-9` (one PU holding ≥ 1e9× a target) is
+  snapped to 0 and that target is missed; documented, not handled.
 
 ## 5. Solution model and evaluators
 
@@ -188,7 +195,7 @@ comparisons, so every existing number is unchanged.
 | `compute_connectivity_penalty` | per row (no de-duplication, as today): `−v·min(x_i, x_j) + v·|x_i − x_j|`; on 0/1 this is today's `−v` (both) / `+v` (exactly one) |
 | PROBMODE 1 risk premium | `Σ w·p_i·c_i·x_i` |
 | `check_targets` | met iff `held ≥ R − tol(R)`, `R = T·MISSLEVEL` |
-| `compute_feature_shortfalls` | today's `max(0, T − held)`, set to 0 when the feature is met by the rule above (so `met ⇔ shortfall == 0` holds exactly) |
+| `compute_feature_shortfalls` | today's `max(0, R − held)`, set to 0 when the feature is met by the rule above (so `met ⇔ shortfall == 0` holds exactly) |
 
 **Connectivity divergence (pre-existing, documented, not fixed here).** The binary
 `compute_connectivity_penalty` already differs from the MIP's connectivity term: the MIP's
@@ -219,16 +226,17 @@ binary-only post-hoc evaluators.
 |---|---|
 | `io/output.py` `write_run`, `write_best`, `write_solution_matrix` | Solution column written with `format(v, ".10g")`; binary unchanged (ints) |
 | `io/output.py` `write_summary`, `io/writers.py` `write_sum` | `n_selected` (count, as today); no format change |
-| `io/writers.py` `write_mvbest` | held from `_compute_achieved` (§5.3), `Target_Met` from `solution.targets_met` — no local `>=` recomputation (today it builds a truthiness `sel_set` and recomputes `held >= T·MISSLEVEL` exactly) |
+| `io/writers.py` `write_mvbest` | held from `_compute_achieved` (§5.3), `Target_Met` from `check_targets(problem, solution.selected, pu_index, _achieved=held)` — the shared rule (exact for binary, tolerant for fractional) recomputed against the current problem (today it builds a truthiness `sel_set` and recomputes `held >= T·MISSLEVEL` exactly). Not `solution.targets_met`: an existing test (`test_write_mvbest_respects_misslevel`) changes MISSLEVEL after the solve and expects the file to follow it |
 | `io/writers.py` `write_ssoln` | `Number` = Σ x over solutions (float when any solution is fractional; ints otherwise, as today) |
 | `analysis/selection_freq.py`, `io/spatial_export.py` `export_frequency_spatial` | sums as float; frequency = mean of x |
 | `io/readers.py` `read_ssoln` | `Number` kept int when every value is integral, float otherwise |
 | `io/exporters.py` `export_solution_csv`; `io/spatial_export.py` `export_solution_spatial` | float column (`.10g`) when fractional |
-| `io/exporters.py` `export_summary_csv` | held from `_compute_achieved`, met from `solution.targets_met` |
+| `io/exporters.py` `export_summary_csv` | held from `_compute_achieved`, met from `check_targets(..., _achieved=held)` |
 | `analysis/representation.py` `compute_representation` | represented amount `Σ r·x` |
 | `analysis/equity.py` `compute_equity` | group value `Σ x·value` |
+| `analysis/robustness.py` `evaluate_plans_across_scenarios` | drop the `np.asarray(..., dtype=bool)` cast (line 134, a silent rounding today); it only calls `compute_objective`, which is fraction-aware |
 | `analysis/portfolio.py` `selection_frequency`, `summary_statistics` | already float / count |
-| `pymarxan_shiny` `results/summary_table.py` | held from `_compute_achieved`, met from `solution.targets_met` (today: truthiness + exact `>=` without MISSLEVEL) |
+| `pymarxan_shiny` `results/summary_table.py` | logic pulled out of the `@render.ui` closure into a pure helper `_target_rows(problem, solution) -> list[dict]` (testable); held from `_compute_achieved`, met from `check_targets(..., _achieved=held)` (today: truthiness + exact `>=` without MISSLEVEL) |
 | `pymarxan_shiny` `mapping/solution_map.py` | colour interpolated between unselected and selected by `x`; listing shows the fraction |
 | Shiny solver config + `pymarxan_app/app.py` | MIP panel gets `decisions` select and `upper` / `lower` inputs passed to `MIPSolver` |
 
@@ -237,11 +245,17 @@ binary-only post-hoc evaluators.
 SA / iterative improvement `improve()` and `run_mode` chains; `analysis/portfolio_cuts.py`;
 `analysis/portfolio.py` `solution_diversity`; `analysis/scenarios.py` `overlap_matrix`;
 `analysis/posthoc_clusters.py`; `analysis/replacement_cost.py`; `analysis/rank_importance.py`;
-`analysis/robustness.py` `robustness_matrix`; `phylo/diversity.py`
+`phylo/diversity.py`
 `compute_phylogenetic_diversity` (Faith PD is presence-based — "a tip is represented if its
 feature occurs in a selected PU"; a fractional analogue is a research choice, so it is guarded,
 which narrows the brainstorm's list); `pymarxan_shiny` `mapping/comparison_map.py` (four-colour
 categorical); `zones/writers.py` fallbacks.
+
+Guard placement for the two that take a **solver**, not a `Solution`:
+`compute_replacement_cost` and `generate_portfolio_cuts` raise `FractionalSolutionError` up front
+when `getattr(solver, "decisions", "binary") != "binary"` (otherwise `portfolio_cuts` would die on
+iteration 2 with the §3.5 `forbidden_selections` `ValueError`), and call `require_binary` on any
+baseline `Solution` they are given.
 
 ### 6.3 Internal state and count-only readers (no change)
 
@@ -265,7 +279,7 @@ the guarded function names, and the per-function guard tests (§8) pin the split
 ### 6.5 Binary behaviour change (one, intended)
 
 `results/summary_table.py` today recomputes met as `held >= target` **without MISSLEVEL**; taking
-met from `solution.targets_met` makes it honour MISSLEVEL for binary solutions too. This is a
+met from `check_targets` makes it honour MISSLEVEL for binary solutions too. This is a
 display fix, recorded under CHANGELOG *Fixed*. `write_mvbest` and `export_summary_csv` already
 apply MISSLEVEL exactly, so their binary output is unchanged.
 
@@ -285,35 +299,43 @@ apply MISSLEVEL exactly, so their binary output is unchanged.
 - **Binary unchanged:** `build_model` MPS for binary byte-identical to v0.41.1 on
   `tests/data/simple` and a connectivity fixture; binary `presolve_check` messages unchanged;
   every v0.37–v0.41 golden and the 35.0 anchor stay green untouched.
-- **LP bound:** `decisions="proportion"` objective ≤ binary objective on `tiny_problem` and on
+- **LP bound:** `decisions="proportion", upper=1.0` objective ≤ binary objective on `tiny_problem` and on
   ≥ 20 seeded random problems (boundary + symmetric + asymmetric connectivity on).
 - **Integral LP:** a named fixture with one feature per PU (identity `rij`, targets = amounts)
   whose LP optimum is integral; proportion objective == binary objective and every `x ∈ {0, 1}`.
-- **Semicontinuous floor:** every `x_i ∈ {0} ∪ [lower, upper]`; objective between the
-  proportion and binary objectives.
+- **Semicontinuous floor:** every `x_i ∈ {0} ∪ [lower, upper]`; with `upper=1.0` the objective
+  lies between the proportion and binary objectives (review R2 probe: 35.58 ≤ 37.08 / 39.9 /
+  43.0 ≤ 43.0 for lower 0.3 / 0.6 / 0.9). With `upper < 1` neither bound holds (upper 0.5 gave
+  45.5 > 43.0).
 - **Upper cap:** `proportion, upper=0.5` → every `x ≤ 0.5`; locked-in PUs at exactly 0.5.
 - **Hand calculation (roadmap acceptance):** a 3-PU fixture with given fractions: held, cost,
   boundary (`|x_i − x_j|`), connectivity (`−v·min + v·|Δ|` per row),
   `compute_representation` and `compute_equity` checked against hand-written numbers.
-- **Objective agreement:** on problems **without connectivity**, `Solution.objective` equals
-  the MIP objective value within `1e-6·max(1, |obj|)` for proportion and semicontinuous solves.
+- **Objective agreement:** `objective="min_set"`, no connectivity, no COSTTHRESH (the MIP does
+  not model it): `Solution.objective` equals `mip_objective_value` within
+  `1e-6·max(1, |obj|) + SNAP_TOL·Σc` for proportion and semicontinuous solves (other objectives'
+  `mip_objective_value` is a count or a shortfall, not `Solution.objective`).
 - **Targets met at the LP optimum:** `all_targets_met` is True and `shortfall == 0` for the
   `min_set` proportion solve on `tiny_problem` and on 20 random problems at amount scales 1,
   1e4 and 1e8 (CBC locally; the same test runs under HiGHS where installed, i.e. CI).
 - **Snapping:** `_extract_selected` unit tests — dust → 0, near-upper → upper, near-lower →
-  lower, `s = 0` → 0, never lowers a value above `ZERO_TOL`.
+  lower, `s = 0` → 0, `x > upper` → upper; it never lowers a value in any other case.
 - **Connectivity reward survives:** with symmetric connectivity, fractional `z > 0` occurs and
   the objective is below the same model with `z` forced binary.
 - **Presolve:** `strict` with `upper=0.5` and `0.5·Σc_locked ≤ COSTBUDGET < Σc_locked` does
   not raise P9a; P6 fires when `T > upper·avail`.
 - **Guards:** every §6.2 function raises `FractionalSolutionError`; every §3.5 combination
   raises from `MIPSolver.solve`, `MIPSolver.build_model` and `MultiObjectiveMIP.solve`.
-- **Multi-objective:** a hierarchical `MinCost` + `MaxFeatures` run with
-  `decisions="proportion"` returns float selections whose `objective_values` match
-  recomputation (feature count not undercounted).
+- **Multi-objective:** a hierarchical `[MaxFeatures, MinCost]` run with
+  `decisions="proportion"` and a COSTBUDGET at which the LP optimum has active target rows (the
+  multi-objective path has no hard targets, so `MinCost` first would select nothing): float
+  selections; the `MaxFeatures` value in `objective_values` is > 0, equals the number of `True`s
+  the tolerant `check_targets` gives on the returned selection, and is not below the model's
+  `Σ y`.
 - **Readers:** completeness test (§6.4); `write_mvbest` `Target_Met` column equals
-  `solution.targets_met` on a fractional solution; `write_ssoln` → `read_ssoln` float
-  round-trip; Shiny summary table on a fractional solution.
+  `check_targets(...)` on a fractional solution, and `test_write_mvbest_respects_misslevel` stays
+  green; `write_ssoln` → `read_ssoln` float
+  round-trip; `_target_rows` on a fractional solution.
 
 ## 9. Docs
 
