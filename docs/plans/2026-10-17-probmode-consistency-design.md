@@ -1,6 +1,6 @@
 # PROBMODE 1/2 consistency across solvers (v0.45.0) — design
 
-**Date:** 2026-10-17 · **Status:** approved in conversation; revised after spec-review rounds 1 (C1, I1–I7, M1–M13) 2 (N1–N8) and 3 (clean; R3-M1, R3-M2 applied)
+**Date:** 2026-10-17 · **Status:** approved in conversation; revised after spec-review rounds 1 (C1, I1–I7, M1–M13) 2 (N1–N8) and 3 (clean; R3-M1, R3-M2 applied) and a fresh-eyes final review (F1, F2, M1–M6 applied)
 **Follows:** v0.44.0 (SA optimises connectivity). **Precedes:** a separate stage implementing
 Marxan's Probability 1D (chance constraint) — out of scope here.
 
@@ -109,6 +109,33 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
 (probmode comments) and `objectives/base.py` (`effective_amounts`); roadmap: Marxan Probability
 1D stage, PROBMODE backlog line removed, new backlog lines for the §7 raw-amount paths.
 
+## 4a. Implementation details (final review)
+
+- **Flags:** `prob_cost: np.ndarray = field(default_factory=lambda: np.zeros(0))` and
+  `prob_active: bool = False`; `prob_active` is True iff mode 1, a table and γ > 0. Both
+  `compute_full_objective` and `compute_delta_objective` read `prob_cost` only when
+  `prob_active`.
+- **Typing:** `held_csr: csr_matrix = field(default=None, compare=False, repr=False)  # type:
+  ignore[assignment]`; `__post_init__` guarantees it is never `None` after construction, so
+  readers need no narrowing.
+- **p vector:** `np.zeros(n_pu)` filled by a Python loop over the table rows in order; PU ids not
+  in `pu_id_to_idx` are skipped; later rows overwrite earlier ones (last wins).
+- **Expected-total helper:** `pymarxan.analysis._totals.expected_feature_totals(problem) ->
+  dict[int, float]`. Under PROBMODE 2 with a table it returns `compute_held(problem,
+  np.ones(n_pu, dtype=bool))` (rows whose PU is not in `planning_units` excluded; every feature
+  id a key, 0.0 when absent); otherwise `{int(f): float(a) for f, a in
+  problem.feature_amounts().items()}`. Representation and `gap_analysis` use it for their
+  denominators (under mode 2, features with no rows get 0.0 instead of a `KeyError` in
+  `to_dataframe`).
+- **`validate()` message:** `f"probability lists planning unit IDs more than once:
+  {sorted(dups)}"`. MIP presolve runs `validate()` (P0), so the "PU listed twice" fixture is used
+  only in the delta / full tests, not MIP tests.
+- **Golden fix shape:** `STAGE3_PROBMODE2_FIXED: dict[str, tuple[float, dict[str, bool]]]` maps
+  case → (new objective, new targets_met). The test asserts `golden[case]["objective"]` and
+  `["targets_met"]` still equal the v0.44 values (54.0 or 41.0 and the stored dict), asserts
+  `got` has the new values, and runs `_assert_same` on `selected`, `cost` and
+  `mip_objective_value` only.
+
 ## 5. Effects
 
 - SA and iterative-improvement plans change on problems with a probability table in mode 1 or
@@ -132,6 +159,14 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
 
 ## 6. Testing
 
+All SA tests in this section set `NUMITNS = 10_000` and `NUMTEMP = 100` in `parameters` and run
+`SimulatedAnnealingSolver().solve(p, SolverConfig(num_solutions=10, seed=42))`; consistency
+tests use `num_solutions=1, seed=42`. "Best of 10 reaches X" means
+`min(s.objective for s in sols) == pytest.approx(X, abs=1e-9)`. Probed hit rates are 1–3 of 10,
+deterministic for these seeds; do not change `NUMITNS` or the seeds without re-probing. "Equals"
+between reported and tracked objectives means `pytest.approx(rel=1e-9, abs=1e-9)` (float drift
+≈ 3e-12). Mark the best-of-10 tests `slow`.
+
 - **SA consistency:** seeded SA's reported `Solution.objective` equals
   `metadata["history"]["best_objective"][-1]` for mode 0, 1, 2 and a table with no `PROBMODE`
   (fails today for mode 1 and the default case; mode 2 agrees today because both sides are raw).
@@ -146,10 +181,15 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
   selections (modes 1, 2, default; γ = −1).
 - **Fixtures** for the last two include: a PU missing from the table, a PU listed twice, a PU
   with p = 1, a negative-cost PU, MISSLEVEL < 1 and a locked-in PU.
-- **Evaluator PROBMODE 2:** the MIP's PROBMODE 2 plan is reported as meeting exactly the targets
-  the MIP enforced (today it is judged on raw amounts); also with `decisions="proportion"`
-  (reported `targets_met` matches the enforced rows within `target_tol`), and
-  `binarize_solution` re-reports with expected amounts.
+- **Evaluator PROBMODE 2** (`simple`, p = 0.5 on PUs 4–6, PROBMODE 2):
+  - (i) `MIPSolver(mip_backend="cbc", objective="max_features")` with `COSTBUDGET` 33:
+    `sum(targets_met.values()) == mip_objective_value` (1). Today this reports 2, judged on raw
+    amounts: **red first**.
+  - (ii) `binarize_solution(p, build_solution(p, np.array([0.75, 1, 0.5, 0, 0, 1.0]), 1.0), 0.75)`
+    has `targets_met == {1: True, 2: False, 3: False}` (feature 2 holds 22 raw and 18.5 expected
+    against a target of 20; today it reports True): **red first**.
+  - (iii) Regression pins, green today and after: the `min_set` plan and the
+    `decisions="proportion"` plan report every target met.
 - **Cross-solver:** on a ≤ 8-PU fixture with every `spf ≥ 10 × Σ cost` (so the soft optimum meets
   every target — asserted), brute-force optimum of the cache objective == brute-force minimum of
   `build_solution(...).objective` over target-feasible plans == `MIPSolver(mip_backend="cbc")`
