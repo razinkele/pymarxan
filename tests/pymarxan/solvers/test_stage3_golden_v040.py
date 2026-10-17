@@ -186,13 +186,17 @@ def golden() -> dict[str, Any]:
     return data
 
 
-def _assert_same(got: dict[str, Any], want: dict[str, Any]) -> None:
+def _assert_same(
+    got: dict[str, Any], want: dict[str, Any], keys: list[str] | None = None,
+) -> None:
+    """Compare ``got`` with a golden record; ``keys`` overrides the uniqueness rule."""
     assert got["solutions"] == want["solutions"]
     if not want["solutions"]:
         return
-    keys = ["mip_objective_value"]
-    if want["unique_optimum"]:
-        keys += ["selected", "cost", "objective", "targets_met"]
+    if keys is None:
+        keys = ["mip_objective_value"]
+        if want["unique_optimum"]:
+            keys += ["selected", "cost", "objective", "targets_met"]
     for key in keys:
         if isinstance(want[key], float):
             assert got[key] == pytest.approx(want[key], rel=1e-9, abs=1e-9), key
@@ -206,6 +210,31 @@ def _assert_same(got: dict[str, Any], want: dict[str, Any]) -> None:
 # Every plan ties at m = R, so only the value is pinned.
 STAGE3_FIXED = {"ghost_misslevel09|min_largest_shortfall|absolute": 9.0}
 
+# v0.45 PROBMODE consistency (spec §5): ``build_solution`` judges PROBMODE 2 plans on expected
+# amounts Σ amount·(1 − p), as the MIP's target rows do. The MIP's plans are unchanged, but
+# the reported ``objective`` and ``targets_met`` of these unique-optimum records move.
+# case -> (new objective, new targets_met); the JSON keeps the v0.44 values (not regenerated).
+_ALL_MISSED = {"1": False, "2": False, "3": False}
+_F3_MET = {"1": False, "2": False, "3": True}
+STAGE3_PROBMODE2_FIXED: dict[str, tuple[float, dict[str, bool]]] = {
+    **{
+        f"probmode2|{objective}|{shortfall}": (59.1, _F3_MET)
+        for objective in ("max_features", "max_weighted_features")
+        for shortfall in SHORTFALLS
+    },
+    **{
+        f"probmode2|{objective}|{shortfall}": (55.4, _ALL_MISSED)
+        for objective in ("min_shortfall", "min_largest_shortfall")
+        for shortfall in SHORTFALLS
+    },
+}
+_V044_PROBMODE2 = {
+    "max_features": (54.0, _F3_MET),
+    "max_weighted_features": (54.0, _F3_MET),
+    "min_shortfall": (41.0, {"1": True, "2": True, "3": False}),
+    "min_largest_shortfall": (41.0, {"1": True, "2": True, "3": False}),
+}
+
 
 @pytest.mark.parametrize("case", CASES)
 def test_mip_solver_result_unchanged(golden: dict[str, Any], case: str) -> None:
@@ -213,6 +242,16 @@ def test_mip_solver_result_unchanged(golden: dict[str, Any], case: str) -> None:
     if case in STAGE3_FIXED:
         assert golden[case]["mip_objective_value"] == 0.0  # the v0.40 value
         assert got["mip_objective_value"] == pytest.approx(STAGE3_FIXED[case], abs=1e-9)
+        return
+    if case in STAGE3_PROBMODE2_FIXED:
+        assert golden[case]["unique_optimum"]  # justifies pinning the selection below
+        old_objective, old_met = _V044_PROBMODE2[case.split("|")[1]]
+        assert golden[case]["objective"] == old_objective  # the v0.44 values
+        assert golden[case]["targets_met"] == old_met
+        new_objective, new_met = STAGE3_PROBMODE2_FIXED[case]
+        assert got["objective"] == pytest.approx(new_objective, rel=1e-9, abs=1e-9)
+        assert got["targets_met"] == new_met
+        _assert_same(got, golden[case], keys=["selected", "cost", "mip_objective_value"])
         return
     _assert_same(got, golden[case])
 

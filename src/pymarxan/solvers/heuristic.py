@@ -11,7 +11,7 @@ import numpy as np
 from pymarxan.adequacy.model import SpaceSpec
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _probability_map, _probmode, build_solution
 
 _VALID_HEURTYPES = range(8)
 
@@ -193,16 +193,19 @@ class HeuristicSolver(Solver):
         pv_am = problem.pu_vs_features["amount"].values
 
         # Probability support
-        prob_mode = int(problem.parameters.get("PROBMODE", 1))
+        # Shared helpers (solvers/utils.py): PROBMODE default 1 with a table, last row
+        # wins, non-finite values raise. The table is read only where it is used (mode 2,
+        # or mode 1 with weighting > 0), as in every other path.
+        prob_mode = _probmode(problem)
         prob_weight = float(
             problem.parameters.get("PROBABILITYWEIGHTING", 1.0)
         )
-        prob_map: dict[int, float] = {}
-        if problem.probability is not None:
-            p_pu = problem.probability["pu"].values
-            p_val = problem.probability["probability"].values
-            for pk in range(len(p_pu)):
-                prob_map[int(p_pu[pk])] = float(p_val[pk])
+        reads_table = prob_mode == 2 or (prob_mode == 1 and prob_weight > 0)
+        prob_map: dict[int, float] = (
+            _probability_map(problem)
+            if problem.probability is not None and reads_table
+            else {}
+        )
 
         for k in range(len(pv_pu)):
             idx = pu_id_to_idx.get(int(pv_pu[k]))

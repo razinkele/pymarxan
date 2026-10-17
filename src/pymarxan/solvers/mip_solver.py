@@ -57,7 +57,13 @@ from pymarxan.solvers.presolve import (
     _presolve_data,
     _validate_presolve_flag,
 )
-from pymarxan.solvers.utils import _nonbinary_conflicts, build_solution
+from pymarxan.solvers.utils import (
+    _nonbinary_conflicts,
+    _probability_map,
+    _probmode,
+    _probmode2_active,
+    build_solution,
+)
 
 
 def _reject_nonbinary(
@@ -469,7 +475,7 @@ class MIPSolver(Solver):
         binary = self.decisions == "binary"
 
         # PROBMODE 3 gating — see class docstring for rationale.
-        probmode = int(problem.parameters.get("PROBMODE", 0))
+        probmode = _probmode(problem)
         if probmode == 3:
             if self.mip_chance_strategy == "piecewise":
                 raise NotImplementedError(
@@ -663,20 +669,15 @@ class MIPSolver(Solver):
                     implied.append((z, _and_rule(x[key[0]], x[key[1]])))
                     conn_expr += -conn_weight * cval * z
 
-        # Probability risk premium (Mode 1). PROBMODE defaults to 1 here (0 for the
-        # PROBMODE 3 gate above): a probability table without PROBMODE is Mode 1.
+        # Probability risk premium (Mode 1; the default with a probability table). The
+        # table is read by the shared helpers in solvers/utils.py (v0.45 §3).
         prob_expr = pulp.LpAffineExpression()
-        prob_mode = int(problem.parameters.get("PROBMODE", 1))
-        if problem.probability is not None and prob_mode == 1:
+        if problem.probability is not None and probmode == 1:
             prob_weight = float(
                 problem.parameters.get("PROBABILITYWEIGHTING", 1.0)
             )
             if prob_weight > 0:
-                prob_pu = problem.probability["pu"].values
-                prob_val = problem.probability["probability"].values
-                prob_map: dict[int, float] = {}
-                for pk in range(len(prob_pu)):
-                    prob_map[int(prob_pu[pk])] = float(prob_val[pk])
+                prob_map = _probability_map(problem)
                 prob_expr = pulp.lpSum(
                     prob_weight
                     * prob_map.get(int(pu_id_arr[k]), 0.0)
@@ -685,16 +686,10 @@ class MIPSolver(Solver):
                     for k in range(len(pu_id_arr))
                 )
 
-        # Build probability map for Mode 2 (persistence-adjusted amounts)
-        prob_map_m2: dict[int, float] = {}
-        if (
-            problem.probability is not None
-            and prob_mode == 2
-        ):
-            p_pu = problem.probability["pu"].values
-            p_val = problem.probability["probability"].values
-            for pk in range(len(p_pu)):
-                prob_map_m2[int(p_pu[pk])] = float(p_val[pk])
+        # Probability map for Mode 2 (expected amounts a·(1 − p) in the target rows)
+        prob_map_m2: dict[int, float] = (
+            _probability_map(problem) if _probmode2_active(problem) else {}
+        )
 
         amount_exprs = _core_amount_exprs(problem, x, prob_map_m2)
         terms = _core_target_terms(problem, x, prob_map_m2, amount_exprs)

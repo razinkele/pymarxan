@@ -277,9 +277,27 @@ class ConservationProblem:
                         f"probability references planning unit IDs not in "
                         f"planning_units: {sorted(unknown_prob_pus)}"
                     )
-                # Check probability range [0, 1]
-                prob_vals = self.probability["probability"]
-                if (prob_vals < 0.0).any() or (prob_vals > 1.0).any():
+                # A PU listed twice: every path uses the last row, silently.
+                prob_pu_col = self.probability["pu"]
+                dups = {int(u) for u in prob_pu_col[prob_pu_col.duplicated()]}
+                if dups:
+                    errors.append(
+                        "probability lists planning unit IDs more than once: "
+                        f"{sorted(dups)}"
+                    )
+                # Non-finite values (a blank prob.dat cell reads as NaN): every solver
+                # raises on them, so report the PU ids here.
+                prob_vals = pd.to_numeric(self.probability["probability"], errors="coerce")
+                finite = np.isfinite(prob_vals.to_numpy(dtype=np.float64))
+                if not finite.all():
+                    bad_ids = sorted({int(u) for u in self.probability["pu"][~finite]})
+                    errors.append(
+                        "probability has non-finite values (NaN or infinite) for planning "
+                        f"unit IDs: {bad_ids}"
+                    )
+                # Check probability range [0, 1] (finite values)
+                fin_vals = prob_vals[finite]
+                if (fin_vals < 0.0).any() or (fin_vals > 1.0).any():
                     errors.append(
                         "probability values must be in range [0, 1]"
                     )

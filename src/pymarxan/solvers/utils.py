@@ -87,6 +87,59 @@ def _total_cost(costs: np.ndarray, selected: np.ndarray) -> float:
     return float(np.sum(costs[selected]))
 
 
+# --- Per-PU probability semantics (PROBMODE 1 / 2): the one copy every path uses -------
+# The evaluator, ProblemCache, the MIP and the greedy heuristic all read the probability
+# table through these helpers (v0.45 §3), so the rules cannot drift apart again.
+
+
+def _probmode(problem: ConservationProblem) -> int:
+    """``PROBMODE``; default 1 with a probability table, 0 without (v0.45 §3)."""
+    default = 1 if problem.probability is not None else 0
+    return int(problem.parameters.get("PROBMODE", default))
+
+
+def _probmode2_active(problem: ConservationProblem) -> bool:
+    """True iff PROBMODE 2 applies: a probability table and ``PROBMODE == 2``."""
+    return problem.probability is not None and _probmode(problem) == 2
+
+
+def _probability_map(problem: ConservationProblem) -> dict[int, float]:
+    """PU id -> probability from ``problem.probability`` (which must be set).
+
+    A PU listed twice: the last row wins. Values are used as given (``validate()`` reports
+    ones outside [0, 1]); a non-finite value (a blank ``prob.dat`` cell reads as NaN) raises
+    ``ValueError`` naming the PU ids, so every solver and the evaluator fail identically.
+    """
+    table = problem.probability
+    if table is None:
+        raise ValueError("problem has no probability table")
+    pids = table["pu"].to_numpy()
+    vals = np.asarray(table["probability"].to_numpy(), dtype=np.float64)
+    bad = ~np.isfinite(vals)
+    if bad.any():
+        raise ValueError(
+            "probability has non-finite values (NaN or infinite) for planning unit IDs "
+            f"{sorted({int(u) for u in pids[bad]})}"
+        )
+    p_of: dict[int, float] = {}
+    for pid, val in zip(pids, vals):
+        p_of[int(pid)] = float(val)
+    return p_of
+
+
+def _probability_vector(
+    problem: ConservationProblem, pu_id_to_idx: dict[int, int], n_pu: int,
+) -> np.ndarray:
+    """(n_pu,) probabilities by position: a PU missing from the table is 0, table rows for
+    ids that are not planning units are skipped, the last row of a duplicated PU wins."""
+    p = np.zeros(n_pu, dtype=np.float64)
+    for pid, val in _probability_map(problem).items():
+        k = pu_id_to_idx.get(pid)
+        if k is not None:
+            p[k] = val
+    return p
+
+
 def _compute_achieved(
     problem: ConservationProblem,
     selected: np.ndarray,
@@ -94,12 +147,21 @@ def _compute_achieved(
 ) -> dict[int, float]:
     """Vectorized computation of achieved amount per feature for selected PUs.
 
-    Returns a dict mapping feature id -> total achieved amount.
+    Returns a dict mapping feature id -> total achieved amount. Under PROBMODE 2 with a
+    probability table each amount is the expected amount ``amount·(1 − p)`` of its PU (the
+    MIP's target rows); ``p`` is 0 for a PU missing from the table and the last row wins
+    for a PU listed twice.
     """
     puvspr = problem.pu_vs_features
     pu_col = puvspr["pu"].values
     species_col = puvspr["species"].values
     amount_col = puvspr["amount"].values
+    if _probmode2_active(problem):
+        # p_of holds only finite values (_probability_map raises otherwise), so fillna
+        # touches exactly the PUs missing from the table (p = 0).
+        p_of = _probability_map(problem)
+        keep = 1.0 - pd.Series(pu_col).map(p_of).fillna(0.0).to_numpy(dtype=np.float64)
+        amount_col = np.asarray(amount_col, dtype=np.float64) * keep
 
     # Build boolean mask: True for rows whose PU is selected
     pu_indices = np.array(
@@ -109,7 +171,7 @@ def _compute_achieved(
     # Safe indexing: use 0 for invalid indices, then mask out
     safe_indices = np.where(valid, pu_indices, 0)
     if _is_fractional(selected):
-        # held_f = Σ_i r_if·x_i (raw amounts, as the binary path)
+        # held_f = Σ_i r_if·x_i (expected amounts under PROBMODE 2, as the binary path)
         weighted = pd.DataFrame({
             "species": species_col,
             "amount": amount_col.astype(np.float64) * np.where(valid, selected[safe_indices], 0.0),
@@ -143,9 +205,16 @@ def compute_held(
 ) -> dict[int, float]:
     """Feature id -> amount held: Σ amount over selected PUs, or Σ amount·x for proportions.
 
+    Under PROBMODE 2 with a probability table the amounts are expected amounts
+    ``amount·(1 − p)`` (as the MIP's target rows), so targets met, shortfall, penalty and
+    every report built on this agree with the MIP.
+
     Public wrapper over ``_compute_achieved`` (review R7). ``pu_index`` maps PU id to its
-    position in ``selected`` and defaults to ``planning_units`` order.
+    position in ``selected`` and defaults to ``planning_units`` order. ``selected`` must
+    follow the ``_coerce_selected`` contract: int 0/1 arrays are read as bool; other ints
+    and out-of-range proportions raise ``ValueError``.
     """
+    selected = _coerce_selected(selected, len(problem.planning_units))
     if pu_index is None:
         pu_index = {int(p): i for i, p in enumerate(problem.planning_units["id"])}
     return _compute_achieved(problem, selected, pu_index)
@@ -377,14 +446,15 @@ def compute_probability_penalty(
     """Dispatch on ``PROBMODE`` to the appropriate probability penalty.
 
     - ``PROBMODE == 0``: no probability term, returns 0.
-    - ``PROBMODE == 1``: Marxan risk premium
-      ``γ · Σ prob_i · cost_i · x_i`` (per-PU PROB1D).
-    - ``PROBMODE == 2``: persistence-adjusted amounts (handled upstream
-      via amount substitution); returns 0 here.
+    - ``PROBMODE == 1`` (the default): risk premium ``γ · Σ prob_i · cost_i · x_i``
+      (a pymarxan extension; per-PU probabilities). Off when ``γ <= 0`` or there is no
+      probability table, as in the MIP.
+    - ``PROBMODE == 2``: no objective term; held amounts are expected amounts
+      ``amount·(1 − prob)`` (see ``compute_held``). Returns 0 here.
     - ``PROBMODE == 3``: Marxan-faithful Z-score chance-constraint
       penalty using per-cell ``prob`` and per-feature ``ptarget``.
     """
-    prob_mode = int(problem.parameters.get("PROBMODE", 1))
+    prob_mode = _probmode(problem)
     if prob_mode == 1:
         return _compute_probmode1_risk_premium(problem, selected)
     if prob_mode == 3:
@@ -402,19 +472,15 @@ def _compute_probmode1_risk_premium(
     problem: ConservationProblem,
     selected: np.ndarray,
 ) -> float:
-    """PROBMODE 1: γ · Σ_i x_i · prob_i · cost_i (per-PU risk premium)."""
+    """PROBMODE 1: γ · Σ_i x_i · prob_i · cost_i (per-PU risk premium); off for γ <= 0."""
     if problem.probability is None:
         return 0.0
 
     prob_weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
-    if prob_weight == 0.0:
+    if prob_weight <= 0.0:
         return 0.0
 
-    prob_pu = problem.probability["pu"].values
-    prob_val = problem.probability["probability"].values
-    prob_map: dict[int, float] = {}
-    for k in range(len(prob_pu)):
-        prob_map[int(prob_pu[k])] = float(prob_val[k])
+    prob_map = _probability_map(problem)
 
     costs = problem.planning_units["cost"].values
     pu_ids = problem.planning_units["id"].values
