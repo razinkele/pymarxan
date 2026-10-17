@@ -35,7 +35,7 @@ pymarxan is a three-layer monorepo:
 | Package | Purpose |
 |---------|---------|
 | `models/` | `ConservationProblem`, `Solution`, `SolverConfig` dataclasses |
-| `solvers/` | SA, MIP, heuristic, iterative improvement, run-mode pipeline, cooling schedules |
+| `solvers/` | SA, MIP, heuristic, iterative improvement, run-mode pipeline, cooling schedules. `MIPSolver(decisions="binary" \| "proportion" \| "semicontinuous", upper=, lower=)` (also on `MultiObjectiveMIP`) is the only solver producing fractional solutions; SA / heuristic / II / zone solvers are binary-only and II refuses a fractional start (`FractionalSolutionError`) |
 | `zones/` | `ZonalProblem`, zone SA/heuristic/II/MIP solvers, zone I/O |
 | `connectivity/` | Distance decay functions, connectivity penalties |
 | `constraints/` | ABCs + contiguity, feature contiguity, neighbor, linear, budget constraints |
@@ -87,7 +87,7 @@ class Solver(ABC):
     def available(self) -> bool: return True
 ```
 
-`SolverConfig` is a dataclass (`num_solutions`, `seed`, `verbose`, `metadata`). `Solution` is a dataclass with `selected: np.ndarray`, `cost`, `boundary`, `objective`, `targets_met`, and optional `zone_assignment`.
+`SolverConfig` is a dataclass (`num_solutions`, `seed`, `verbose`, `metadata`). `Solution` is a dataclass with `selected: np.ndarray`, `cost`, `boundary`, `objective`, `targets_met`, and optional `zone_assignment`. `selected` is `bool`, or `float64` shares in [0, 1] for non-binary MIP decisions (`Solution.is_fractional` — the dtype decides). Any new reader of `selected` must be fraction-aware or call `require_binary(solution, context)`, and must be classified in `tests/pymarxan/test_fractional_readers.py`.
 
 To add a new solver: inherit `Solver`, implement `solve()`, `name()`, `supports_zones()`.
 

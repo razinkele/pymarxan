@@ -161,6 +161,21 @@ MIP only; CBC/HiGHS. Zones in a follow-up unless Stage 1's builders make it free
 
 ## Stage 4 — v0.42.0: Proportion and semi-continuous decisions
 
+**As built (v0.42.0):** see docs/plans/2026-10-17-stage4-proportion-decisions-design.md.
+`MIPSolver` / `MultiObjectiveMIP` take `decisions="binary" | "proportion" | "semicontinuous"`
+with scalar `upper` / `lower`; `"proportion", upper=u` is prioritizr's
+`add_semicontinuous_decisions(u)`, `"semicontinuous"` a true floor. Fractional `Solution`s carry
+float64 shares; evaluators are fraction-linear (boundary `|x_i − x_j|`, the optimiser's form) with
+a target tolerance; every other `Solution.selected` reader is either fraction-aware or raises
+`FractionalSolutionError` (pinned by a completeness test). `binarize_solution` is the only
+rounding path. `ZoneMIPSolver` and per-PU bounds are out of scope.
+Spec amendments from the 4-lens review (as built): **R1** the target tolerance is purely
+relative, `tol(R) = 1e-7·|R|` (no absolute floor: a 1e-6 floor let an empty plan "meet" tiny
+targets); **R3** locked-in units are fixed at `x = 1.0` in every mode, `upper` / `lower` bound
+free units only (prioritizr: infeasible when `upper < 1`), and presolve P6/P9a/P11 follow;
+**R5** extraction no longer snaps up to `upper` (clip to each unit's bound, dust ≤ 1e-9 → 0,
+semicontinuous `lower` snap and `s = 0` → 0 only).
+
 **Goal:** a PU can be partly selected (0–1), or selected above a floor if selected at all. This
 covers partial protection, restoration areas and land-use shares, and pairs with
 `pymarxan.restoration`.
@@ -200,3 +215,8 @@ Fold these into a stage when one touches the same code:
   lack.
 - `simulate_data` / `simulate_species` / `simulate_cost` synthetic project generator, useful for
   tutorials and the JOSS paper.
+- Align `compute_connectivity_penalty` with the MIP connectivity term (symmetric: reward-only,
+  pairs de-duplicated; asymmetric: `x_i ∧ ¬x_j`, reading `ASYMMETRIC_CONNECTIVITY`). Changes
+  binary numbers, so it needs its own golden-tested release (Stage 4 §5.3).
+- Per-PU decision bounds (prioritizr `add_manual_bounded_constraints`) and fractional zone
+  shares for `ZoneMIPSolver`.

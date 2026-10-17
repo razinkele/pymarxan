@@ -26,6 +26,7 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
 8. [Configure](#configure)
    - [Solver Selection](#solver-selection)
    - [Solver Parameters](#solver-parameters)
+   - [Partial Selection](#partial-selection)
    - [Zone Configuration](#zone-configuration)
 9. [Calibrate](#calibrate)
    - [BLM Calibration](#blm-calibration)
@@ -310,6 +311,9 @@ pyMarxan supports ten solver algorithms:
 | **Time Limit** | Maximum seconds before returning best-so-far solution |
 | **Optimality Gap** | Acceptable gap from proven optimum (0.0 = exact; 0.01 = within 1%) |
 | **Verbose** | Print solver progress to console |
+| **Decisions** | `binary` (default), `proportion` or `semicontinuous` — see [Partial Selection](#partial-selection) |
+| **Upper bound** | Largest share of a unit that can be selected (non-binary decisions) |
+| **Lower bound** | Smallest share of a unit that is selected at all (semicontinuous) |
 
 **Greedy parameters:**
 
@@ -344,6 +348,86 @@ pyMarxan supports ten solver algorithms:
 | 4 | Heuristic + SA (pick best) |
 | 5 | Heuristic + SA + improvement (highest quality) |
 | 6 | Iterative improvement only |
+
+### Partial Selection
+
+By default the MIP selects whole planning units (`decisions="binary"`). Two other decision
+types let the plan take **part of a unit** — protecting or restoring a share of its area,
+or committing a share of management effort, e.g. restoration shares or land-use fractions.
+`x` is that share of the unit's area (or effort), between 0 and 1. If you mean protection
+that is only partly *effective* across a whole unit, use zones with a zone contribution
+instead (`ZoneMIPSolver`).
+
+| Decisions | Each unit | Model |
+|-----------|-----------|-------|
+| `binary` | selected or not | integer program |
+| `proportion` | any share `0 ≤ x ≤ upper` | linear program (fast) unless the objective counts targets met |
+| `semicontinuous` | `x = 0` or `lower ≤ x ≤ upper` | integer program (one on/off variable per unit) |
+
+```python
+from pymarxan.io.readers import load_project
+from pymarxan.solvers import MIPSolver, binarize_solution
+
+problem = load_project("tests/data/simple")
+
+sol = MIPSolver(decisions="proportion", upper=0.8).solve(problem)[0]
+print(sol.selected)         # float64 shares in [0, 0.8]
+print(sol.all_targets_met)  # True: the shares meet every target
+print(sol.selected_sum)     # Σ x; sol.n_selected counts units with x > 0
+
+plan = binarize_solution(problem, sol, threshold=0.5)
+print(plan.all_targets_met)  # False: rounding the shares is not a plan
+```
+
+`binarize_solution` converts shares to a 0/1 plan by threshold; it does not optimise. The
+result can miss targets the shares met (here it misses all three), the exact binary target
+rule is re-applied (so a target met within the fractional tolerance can flip to unmet), and a
+threshold above `upper` selects nothing. For a feasible whole-unit plan, solve with
+`decisions="binary"`, or with `decisions="semicontinuous"` for "nothing, or at least `lower`
+of a unit".
+
+**prioritizr mapping.** `add_proportion_decisions()` is `decisions="proportion"`.
+prioritizr's `add_semicontinuous_decisions(u)` has no lower bound — it is
+`decisions="proportion", upper=u`. `decisions="semicontinuous"` is a true floor.
+
+**How results are computed.** Every number is linear in the shares: cost `Σ c·x` and held
+amount `Σ r·x`. Held amounts assume each feature is spread evenly within a unit, the same
+assumption prioritizr makes. Boundary is `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|`, the optimiser's own
+term; with Marxan's boundary convention it equals prioritizr's default (non-knapsack) boundary
+formulation, whose evaluators instead report `x_i·x_j`. For fractional plans the boundary is a
+linear compactness penalty, not a measured perimeter. Connectivity is
+`−v·min(x_i, x_j) + v·|x_i − x_j|` per row. The connectivity evaluator differs from the MIP's
+connectivity term (also for binary plans, a pre-existing difference), so with connectivity the
+reported objective is not the MIP objective.
+
+A target counts as met when the held amount is within `1e-7·|target|` of it (relative only;
+a target of 0 is always met), because a linear-program optimum leaves active targets a solver
+tolerance short; binary plans are judged exactly. This is looser than prioritizr's
+`eval_target_coverage_summary` (shortfall below `1e-10`, absolute), which can report LP-optimal
+targets as unmet where pymarxan reports them met.
+
+For a set of fractional solutions, "selection frequency" (`compute_selection_frequency`,
+`export_frequency_spatial`) is the mean share and the summed-solution `Number`
+(`write_ssoln`) the sum of shares; a set mixing binary and fractional solutions aggregates
+shares (a binary selection counts as 1).
+
+**Differences and limits.**
+- Locked-in units (status 2) are fixed whole (`x = 1.0`) in every mode; `upper` and `lower`
+  bound only the free units. prioritizr makes the model infeasible when `upper < 1`.
+- Non-binary decisions cannot be combined with PROBMODE 3, clumping (`target2`), separation,
+  space targets, no-good cuts or negative connectivity values; the solver raises `ValueError`.
+- Solver values are clipped to each unit's bounds and values at or below `1e-9` set to 0;
+  semicontinuous values within `1e-6` below `lower` are raised to `lower`. Nothing else is
+  rounded. A genuine optimum below `1e-9` (one unit holding a billion times a target) would be
+  lost.
+- Tools that only make sense for whole units raise `FractionalSolutionError`: iterative
+  improvement and RUNMODE chains through it, portfolio cuts, replacement cost, solution
+  diversity, scenario overlap, post-hoc clusters, rank importance, phylogenetic diversity and
+  zone writers; the solution comparison map shows an explanation instead. Convert first
+  with `binarize_solution`.
+- The raw-array APIs of `pymarxan.constraints` and `pymarxan.objectives` (`evaluate`,
+  `penalty`) are binary-only: they treat any non-zero share as selected.
+- Zone solvers stay binary.
 
 ### Zone Configuration
 
