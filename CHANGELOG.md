@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] — 2026-10-17
+
 ### Changed
 - **Simulated annealing and iterative improvement now optimise connectivity (the
   `CONNECTIVITY_WEIGHT` term; connectivity encoded in the boundary file under `BLM` was already
@@ -1524,7 +1526,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.44.0
 [0.43.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.43.0
 [0.42.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.1
 [0.42.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.0
