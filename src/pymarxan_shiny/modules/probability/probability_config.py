@@ -30,8 +30,8 @@ def probability_config_ui():
                         "Upload prob.dat",
                         accept=[".dat", ".csv", ".tsv", ".txt"],
                     ),
-                    "Upload a file with columns 'pu' (planning unit ID) and "
-                    "'probability' (value between 0 and 1). CSV, TSV, or "
+                    "Columns 'pu' and 'probability': the chance (0–1) that the "
+                    "planning unit is lost (not that it persists). CSV, TSV, or "
                     "Marxan .dat format.",
                 ),
                 ui.hr(),
@@ -45,28 +45,37 @@ def probability_config_ui():
                         value=1.0,
                         step=0.1,
                     ),
-                    "Weight applied to the probability risk premium in the "
-                    "objective function. Higher values penalise selection of "
-                    "planning units with low persistence probability.",
+                    "Weight on the PROBMODE 1 risk premium (probability of loss × "
+                    "cost) and on the PROBMODE 3 probability shortfall. Not used by "
+                    "PROBMODE 2.",
                 ),
                 ui.tooltip(
                     ui.input_radio_buttons(
                         "prob_mode",
                         "PROBMODE",
                         choices={
-                            "1": "Mode 1 — Expected value (risk premium)",
-                            "2": "Mode 2 — Probability threshold",
-                            "3": "Mode 3 — Z-score chance constraints (PROB2D)",
+                            "1": "Mode 1 — Risk premium on cost (expected cost lost)",
+                            "2": "Mode 2 — Expected (persistence-adjusted) amounts",
+                            "3": "Mode 3 — Z-score probability penalty (soft chance "
+                            "target, based on Marxan's Probability 2D)",
                         },
                         selected="1",
                     ),
-                    "Mode 1: adds a risk premium to cost based on probability × "
-                    "cost × weight. Mode 2: persistence-adjusted amounts. "
-                    "Mode 3: per-(PU, feature) Bernoulli probability via the "
+                    "Modes 1 and 2 are pymarxan extensions over per-PU "
+                    "probabilities (prob.dat); Marxan's Probability 1D is not yet "
+                    "implemented. Mode 1 (the default with a probability table): "
+                    "adds a risk premium probability × cost × weight to the "
+                    "objective. Mode 2: each amount counts as amount × (1 − "
+                    "probability), and targets are judged on these expected "
+                    "amounts by every solver and report. This is an average, not a "
+                    "guarantee: a target met on expected amounts has roughly even "
+                    "odds of being met. "
+                    "Mode 3: per-(PU, feature) probability of presence via the "
                     "optional `prob` column on puvspr.dat and a per-feature "
-                    "`ptarget` on spec.dat; SA / heuristic / iterative-improvement "
-                    "solve the chance constraint natively, MIP drops the term "
-                    "and reports the gap post-hoc.",
+                    "`ptarget` on spec.dat (Marxan's column is `ptarget2d`); a soft "
+                    "penalty on the probability shortfall, not a hard constraint. "
+                    "SA / heuristic / iterative-improvement optimise it, MIP drops "
+                    "the term and reports the gap post-hoc.",
                 ),
                 width=350,
             ),

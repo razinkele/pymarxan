@@ -39,8 +39,11 @@ class Objective(ABC):
         Args:
             problem: The conservation problem instance.
             selected: Boolean array of selected planning units.
-            effective_amounts: PU-feature amount matrix (may be adjusted
-                for PROBMODE=2).
+            effective_amounts: Dense (n_pu, n_feat) PU-feature amount
+                matrix. Under PROBMODE 2 with a probability table pass the
+                expected amounts ``amount·(1 − p)``, e.g.
+                ``cache.held_csr.toarray()`` — the amounts ``build_solution``
+                judges targets on.
             pu_index: Mapping from PU ID to array index.
 
         Returns:

@@ -222,10 +222,34 @@ Fold these into a stage when one touches the same code:
   improvement (`ProblemCache` connectivity arrays in the full objective and the per-flip
   delta; `docs/plans/2026-10-17-sa-connectivity-design.md`). Greedy heuristics still only
   report it.
-- SA / iterative improvement ignore the PROBMODE 1 risk premium: the `ProblemCache` objective
-  has no PROBMODE 1 term, so SA's tracked objective disagrees with the reported one (cache 44.0
-  vs reported 69.2 on `simple` with PROBMODE 1, PROBABILITYWEIGHTING 2, probabilities
-  `linspace(0.1, 0.6)`, selection {2, 4, 6}).
+- ~~SA / iterative improvement ignore the PROBMODE 1 risk premium~~ — done in v0.45 with
+  PROBMODE 1/2 consistency across solvers (`docs/plans/2026-10-17-probmode-consistency-design.md`):
+  the cache defaults to mode 1 with a table, adds the premium, and holds expected amounts under
+  mode 2; the evaluator, representation and gap analysis report expected amounts.
+- **Next stage: Marxan Probability 1D** (a `prob` column in `pu.dat` = probability of loss).
+  Per feature j: `E_j = Σ_i a_ij(1 − p_i)x_i`, `V_j = Σ_i a_ij² p_i(1 − p_i)x_i`,
+  `Z_j = (T_j − E_j)/√V_j` (Z = 4 when V_j = 0), `P_j = 1 − Φ(Z_j)`; penalty
+  `PROBABILITYWEIGHTING · Σ_j [P_j < ptarget1d_j]·(ptarget1d_j − P_j)/ptarget1d_j`, features
+  with `ptarget1d ≤ 0` (default −1) excluded; added to, not replacing, the raw-amount target
+  penalty. Reference: Marxan 3 `probability.c` (`marxan3` branch). Marxan 4.0.x's
+  `utils::probZUT` computes `1 − (1/2)·(…)` with integer `1/2 = 0`, so it always returns 1 and
+  the 1D/2D probability penalty is inverted (full penalty when the expected amount exceeds the
+  target, none when it falls short): do not use a Marxan 4 binary as the parity oracle for
+  probability. Probability 1D is algebraically PROBMODE 3 with per-cell presence
+  `q_ij = 1 − p_i` (same mean and variance), so the stage may be a loader mapping onto the
+  existing PROBMODE 3 machinery. PROBMODE 1/2 stay pymarxan extensions.
+- PROBMODE 2 raw-amount paths (documented limitations, v0.45 §7): presolve P6 reachability;
+  `analysis/irreplaceability.py` and `analysis/ferrier_importance.py`; relative / `prop` target
+  resolution against raw totals; clumping occupancy, separation occurrence and space weights
+  (`ClumpState` / `SepState` / `SpaceState` read raw `pu_feat_csr`).
+- PROBMODE 2 + clumping / separation in SA / II (v0.45 warns): derive the clump and separation
+  amounts from `held_csr` (`pu_feat_matrix`, `feat_uses_pu`, `compute_baseline_penalty` and the
+  from-scratch evaluators on expected amounts) so SA optimises what it reports.
+- PROBMODE 3 vs Marxan's Probability 2D: (a) a feature with zero variance is treated as met
+  (`solvers/probability.py`), where Marxan 3 sets Z = 4 and counts it as failing — decide and
+  fix the module docstring, which contradicts itself; (b) read Marxan's `ptarget2d` (and
+  `ptarget1d`) spec.dat columns as aliases of `ptarget` (today they are warned about and
+  ignored, so a real Marxan 2D project's PROBMODE 3 is inert).
 - One shared connectivity normaliser for the evaluator, the MIP and `ProblemCache` (today each
   re-implements the rules). Fold in two MIP gaps: a connectivity row naming an unknown planning
   unit raises `KeyError` (the evaluator and SA skip it), and negative asymmetric values leave

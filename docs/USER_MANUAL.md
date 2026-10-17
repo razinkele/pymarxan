@@ -26,6 +26,7 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
 8. [Configure](#configure)
    - [Solver Selection](#solver-selection)
    - [Solver Parameters](#solver-parameters)
+   - [Probability (PROBMODE)](#probability-probmode)
    - [Partial Selection](#partial-selection)
    - [Zone Configuration](#zone-configuration)
 9. [Calibrate](#calibrate)
@@ -380,6 +381,56 @@ pyMarxan supports ten solver algorithms:
 | 5 | Heuristic + SA + improvement (highest quality) |
 | 6 | Iterative improvement only |
 
+### Probability (PROBMODE)
+
+A probability table (`prob.dat`: columns `pu`, `probability`) gives, for each planning unit,
+the probability that the unit (and the features in it) is **lost** over the planning horizon;
+persistence is 1 − probability. It is attached automatically when the project folder has one.
+`PROBMODE` chooses how it is used; with a table and no `PROBMODE`, mode 1 applies.
+
+| PROBMODE | Meaning | Origin |
+|----------|---------|--------|
+| 0 | Probabilities ignored | — |
+| 1 (default with a table) | Risk premium `PROBABILITYWEIGHTING × Σ probability × cost` over selected units, added to the objective (not to the reported cost; off when the weighting is 0 or below) — the expected cost of protecting units that are then lost; it does not depend on the features a unit holds, and a zero-cost unit carries no premium | pymarxan extension |
+| 2 | Expected amounts: every feature amount counts as `amount × (1 − probability)`, and targets, shortfalls, penalties, representation and gap analysis are judged on them | pymarxan extension |
+| 3 | Z-score probability penalty (a soft chance target, not a hard constraint) from a per-cell probability of **presence** (a `prob` column in `puvspr.dat`) and a per-feature `ptarget` in spec.dat (Marxan's column is `ptarget2d`) | Based on Marxan's Probability 2D, except that a feature with zero variance is treated as met (Marxan 3 treats it as failing: Z = 4) |
+
+Modes 1 and 2 have the same meaning in every solver: the MIP, simulated annealing and
+iterative improvement optimise them, the greedy heuristics use them in their scores (mode 1 as
+an effective cost, mode 2 as scaled amounts), and every reported value
+(`Solution.objective`, targets met, the summary and target-met tables) uses them. A unit
+missing from the table has probability 0; a unit listed twice uses its last row. `validate()`
+reports duplicates, values outside [0, 1] and non-finite values (a blank cell reads as NaN)
+in every mode. Wherever the table is read — mode 1 with `PROBABILITYWEIGHTING` above 0, and
+mode 2 — every solver and the evaluator raise `ValueError` on a non-finite probability; modes
+0 and 3, and mode 1 with a weighting of 0 or below, ignore the table.
+
+Marxan's own **Probability 1D** (a `prob` column in `pu.dat`, a Z-score on the expected
+amount `Σ amount × (1 − p)` with variance `Σ amount² × p × (1 − p)` against `ptarget1d`) is
+**not yet implemented**; mode 2 uses the same expected amount but as a deterministic target,
+without the variance or the chance constraint. Meeting a target in expectation is not the same
+as meeting it reliably: when the expected amount just equals the target, the chance of actually
+retaining the target amount is only about 50% (higher if the reserve holds more, lower with few
+high-risk units). Mode 2 also ignores how the risk is spread — one unit at p = 0.5 and ten units
+at p = 0.05 with the same expected amount count the same. Use it as a risk-discounted
+representation target; for a stated confidence level use a chance formulation (Watts et al.
+2021). Until Probability 1D is implemented, it can be reproduced with PROBMODE 3 by writing
+`prob = 1 − p` (the unit's persistence) on every puvspr.dat row of that unit and setting
+`ptarget` (same mean and variance; zero-variance features differ as noted above).
+
+Under PROBMODE 2 some paths still use raw amounts: clumping occupancy (`target2`), separation
+occurrence and space-target weights (simulated annealing and iterative improvement warn when
+PROBMODE 2 meets active clumping or separation — once per SA solve, once per solution
+iterative improvement improves: they optimise those features on raw amounts while reports use
+expected amounts); the MIP presolve reachability check; irreplaceability and Ferrier importance; and
+relative (`prop`) target resolution, which is measured against raw feature totals — so a
+relative target under mode 2 asks for a share of the raw total out of expected amounts, and is
+infeasible when `prop` exceeds `Σ_i a_ij(1 − p_i) / Σ_i a_ij` (one minus the amount-weighted
+mean loss probability).
+
+Reference: Watts, M., Klein, C. J., Tulloch, V., et al. (2021). Software for prioritizing conservation actions based on probabilistic information.
+*Conservation Biology*, 35(4), 1299–1308. https://doi.org/10.1111/cobi.13681
+
 ### Partial Selection
 
 By default the MIP selects whole planning units (`decisions="binary"`). Two other decision
@@ -654,8 +705,8 @@ Download results as CSV files:
 | **Selection Frequency** | How often a PU appears in the solution across multiple runs (0–100%) |
 | **Irreplaceability** | How critical a PU is for meeting targets — PUs selected in nearly all solutions are highly irreplaceable |
 | **Connectivity** | Spatial connections between PUs — encourages selecting linked PUs to maintain ecological corridors |
-| **Probability** | Per-PU persistence probability — accounts for habitat loss risk in reserve design |
-| **PROBMODE** | Probability mode: 1 = risk premium on cost, 2 = persistence-adjusted feature amounts |
+| **Probability** | Per-PU probability that the unit (and the features in it) is **lost** over the planning horizon (prob.dat). Persistence is 1 − probability. PROBMODE 3 instead reads a per-(PU, feature) probability of **presence** from puvspr.dat |
+| **PROBMODE** | Probability mode (pymarxan extensions over `prob.dat`): 1 = risk premium in the objective (default with a probability table), 2 = expected (persistence-adjusted) amounts; 3 = Z-score probability penalty based on Marxan's Probability 2D. Marxan's Probability 1D is not yet implemented — see [Probability (PROBMODE)](#probability-probmode) |
 | **Zone** | A management category (e.g. no-take, buffer, sustainable use) in multi-zone planning |
 | **Zone Contribution** | How much a PU in a given zone contributes to a feature's target (0–1 multiplier) |
 | **Zone Boundary Cost** | Penalty for adjacent PUs being in different zone types |
@@ -663,7 +714,7 @@ Download results as CSV files:
 | **Objective** | The MIP objective: `min_set` (default), `max_features`, `max_weighted_features`, `min_shortfall`, `min_largest_shortfall`, `min_penalties` (core only); the Shiny selector does not yet drive it |
 | **puvspr.dat** | Planning Unit vs. Species file — maps features to PUs with amounts |
 | **bound.dat** | Boundary definition file — pairwise boundary lengths between adjacent PUs |
-| **prob.dat** | Probability file — per-PU habitat persistence probabilities |
+| **prob.dat** | Probability file — per-PU probability of loss (pymarxan's `PROBNAME`; not a Marxan file) |
 
 ---
 

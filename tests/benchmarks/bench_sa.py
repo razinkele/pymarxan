@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from pymarxan.models.problem import ConservationProblem
@@ -136,3 +137,53 @@ class TestSAConnectivityDeltaCost:
         # Off must be free: <= 5% over the no-table baseline, with a 2 us/call floor
         # absorbing timer noise on fast machines.
         assert t_off <= max(1.05 * t_base, t_base + 2e-6 * self.N_CALLS)
+
+
+class TestSAProbmodeDeltaCost:
+    """v0.45.0: PROBMODE 1 / 2 in the SA delta. Comparative only (machine-relative)."""
+
+    N_CALLS = 20_000
+
+    def _problems(self) -> dict[str, ConservationProblem]:
+        """No table; table + PROBMODE 0; mode 1 γ = 0; mode 2; mode 1 γ = 1."""
+        base = make_problem(n_pu=1000, n_feat=50, density=0.3, seed=42)
+        rng = np.random.default_rng(7)
+        prob = pd.DataFrame({
+            "pu": base.planning_units["id"].to_numpy(),
+            "probability": rng.uniform(0.0, 0.6, len(base.planning_units)),
+        })
+
+        def variant(**params: float) -> ConservationProblem:
+            # copy_with is shallow: give each variant its own parameters dict.
+            return base.copy_with(probability=prob, parameters={**base.parameters, **params})
+
+        return {
+            "base": base,
+            "mode0": variant(PROBMODE=0),
+            "mode1_off": variant(PROBMODE=1, PROBABILITYWEIGHTING=0.0),
+            "mode2": variant(PROBMODE=2),
+            "mode1_on": variant(PROBMODE=1, PROBABILITYWEIGHTING=1.0),
+        }
+
+    def test_probmode_costs_nothing_when_off_or_prescaled(self) -> None:
+        problems = self._problems()
+        assert not ProblemCache.from_problem(problems["mode1_off"]).prob_active
+        assert ProblemCache.from_problem(problems["mode1_on"]).prob_active
+        c2 = ProblemCache.from_problem(problems["mode2"])
+        assert c2.held_csr is not c2.pu_feat_csr
+        t = {name: _delta_loop_time(p, self.N_CALLS) for name, p in problems.items()}
+        per_call = 1e6 / self.N_CALLS
+        t_base = t["base"]
+        print(
+            "\ndelta per call: "
+            + ", ".join(
+                f"{name} {v * per_call:.2f} us (x{v / t_base:.3f})" for name, v in t.items()
+            )
+        )
+        # Off / pre-scaled must be free. Effective bound: max(1.05x, +2 us/call) over the
+        # no-table baseline — the 2 us/call timer-noise floor dominates at ~17 us/call
+        # (about +12%), as in the v0.44.0 connectivity bench. mode1_on is print-only.
+        budget = max(1.05 * t_base, t_base + 2e-6 * self.N_CALLS)
+        assert t["mode0"] <= budget
+        assert t["mode1_off"] <= budget
+        assert t["mode2"] <= budget

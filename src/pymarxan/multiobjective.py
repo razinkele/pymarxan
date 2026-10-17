@@ -450,8 +450,9 @@ class MultiObjectiveMIP:
     Gurobi backend PuLP's ``GUROBI_CMD`` reports no solution status, so a time-limited
     incumbent may show 1 rather than 2.
     ``metadata["objective_values"]`` holds each objective's value at the plan, from the
-    model's own expressions (so ``"min_cost"`` can differ from ``Solution.objective``, and
-    under PROBMODE 2 met counts use the scaled amounts). ``config.num_solutions`` is
+    model's own expressions (so ``"min_cost"`` can differ from ``Solution.objective``);
+    under PROBMODE 2 met counts use expected amounts ``amount·(1 − p)``, as
+    ``Solution.targets_met`` does since v0.45. ``config.num_solutions`` is
     ignored. ``MIP_TIME_LIMIT`` applies per stage and row, so a hierarchical sweep takes up
     to rows × n × T; with ``MIP_GAP`` > 0 or a time limit a stage's v is an incumbent's
     value. Stage 1 (or a weighted-sum row) with no solution raises ``RuntimeError``; a later

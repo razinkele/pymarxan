@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Simulated annealing and iterative improvement now optimise PROBMODE 1 and 2, so their
+  plans change on every problem with a probability table in mode 1 or 2 — including projects
+  whose `prob.dat` is picked up automatically with no `PROBMODE`, which are now mode 1.** The
+  `ProblemCache` behind SA and iterative improvement read `PROBMODE` with a default of 0 and
+  had neither the mode 1 risk premium nor the mode 2 expected amounts, so it searched a
+  different objective from the one the MIP optimised and `build_solution` reported. It now
+  uses the MIP's semantics: a table with no `PROBMODE` is mode 1; mode 1 adds
+  `PROBABILITYWEIGHTING · p · cost` per selected unit to its full objective and its per-flip
+  delta (cost and COSTTHRESH stay on base cost; off when the weighting is 0 or below); mode 2
+  holds expected amounts `amount · (1 − p)`, pre-scaled once at build so a flip costs the same.
+  SA's tracked best objective and history now equal the reported `Solution.objective`. The MIP
+  and the greedy heuristics are unchanged (they now read the table through the same shared
+  helpers; their models and plans do not move). Under PROBMODE 2 with active clumping or
+  separation, SA/II still optimise those features on raw amounts and now warn
+  (`UserWarning`) once per cache build: once per SA solve, and once per solution iterative
+  improvement improves.
+- **PROBMODE 2 reports use expected amounts.** Targets met, shortfall, penalty and held amounts
+  (`build_solution`, `compute_held`, `write_mvbest`, the summary CSV and the Shiny summary and
+  target-met views), representation and gap analysis now count `Σ amount · (1 − p)`, the
+  amounts the MIP's target rows use; representation and gap percentages use the expected total
+  over all units as their denominator. Every solver that reports through `build_solution` —
+  including the external Marxan binary and the Zonation solver — now has its PROBMODE 2
+  targets judged on expected amounts. Other modes, and mode 2 without a table, are unchanged.
+- `validate()` reports a probability table that lists a planning unit more than once, and
+  non-finite (NaN or infinite) probabilities — a blank `prob.dat` cell reads as NaN — with
+  their planning unit ids. Callers asserting `validate() == []` will see the new messages.
+- A non-finite probability now raises `ValueError` (naming the planning unit ids) wherever the
+  table is read — PROBMODE 1 with `PROBABILITYWEIGHTING` > 0 (including a table with no
+  `PROBMODE`) and PROBMODE 2 — in the evaluator, `ProblemCache` (SA / II), the MIP and the
+  greedy heuristics alike, instead of NaN objectives, a PuLP error, or a silent substitution of
+  0. Configurations that do not read the table (PROBMODE 0 or 3, PROBMODE 1 with weighting
+  0 or below) ignore it in every path; `validate()` reports non-finite values in every mode.
+- `compute_held` applies the selection contract of `build_solution`: an int 0/1 array is read
+  as bool, other ints raise `ValueError`.
+- Docs and UI: PROBMODE 1 and 2 are documented as pymarxan extensions; Marxan's Probability 1D
+  is not yet implemented, and PROBMODE 3 is described as based on Marxan's Probability 2D with
+  its two known differences (zero variance treated as met; `ptarget` rather than `ptarget2d`).
+  The probability is documented as a probability of loss throughout (the glossary and two Shiny
+  tooltips said persistence). The Shiny labels read "Risk premium on cost (expected cost lost)",
+  "Expected (persistence-adjusted) amounts" and "Z-score probability penalty", and the manual
+  explains that a target met on expected amounts has only about even odds of being met.
+
+### Fixed
+- SA and iterative improvement ignored the PROBMODE 1 risk premium (their tracked objective
+  was 44.0 where 69.2 was reported on `simple` with probabilities `linspace(0.1, 0.6)`,
+  weighting 2, selection {2, 4, 6}), defaulted to mode 0 with a probability table where the
+  MIP, the greedy heuristics and the evaluator use mode 1, and optimised raw amounts under
+  PROBMODE 2.
+- PROBMODE 2 plans were judged on raw amounts: a MIP `max_features` plan meeting one target
+  under the expected amounts it optimised reported two.
+- A negative `PROBABILITYWEIGHTING` gave a negative risk premium in the reported objective;
+  the premium is now off for any weighting of 0 or below, as in the MIP and the greedy
+  heuristics.
+
 ## [0.44.0] — 2026-10-17
 
 ### Changed
