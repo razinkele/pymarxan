@@ -457,6 +457,12 @@ class MultiObjectiveMIP:
     value. Stage 1 (or a weighted-sum row) with no solution raises ``RuntimeError``; a later
     stage with no solution returns the previous stage's plan with a ``UserWarning``.
 
+    ``decisions`` / ``upper`` / ``lower`` are ``MIPSolver``'s (Stage 4): with non-binary
+    decisions selections are float64 proportions and the implied values use the snapped
+    proportions; met counts and slacks then use the tolerant ``check_targets`` rule
+    (A >= R − tol(R)), and the implied point is often infeasible at the ``1e-6`` row check,
+    so caps fall back to the solver's value (by design).
+
     Met counts in ``objective_values`` follow the exact ``check_targets`` rule (A >= R), so
     on data at a target's tolerance boundary (e.g. amounts 0.7 + 0.1 against 0.8) the
     reported count can be below the value a hierarchical cap kept, which the solver reached
@@ -476,6 +482,9 @@ class MultiObjectiveMIP:
         mip_sep_strategy: str = "drop",
         warn_above_pu: int | None = 200_000,
         presolve_check: bool | str = False,
+        decisions: str = "binary",
+        upper: float = 1.0,
+        lower: float = 0.0,
     ) -> None:
         specs = list(objectives)
         if not specs:
@@ -497,11 +506,15 @@ class MultiObjectiveMIP:
         self.objectives = specs
         self.approach = approach
         self.rows = approach.rows(len(specs))
-        # Reuses MIPSolver's strategy, backend and presolve-flag validation.
+        # Reuses MIPSolver's strategy, backend, presolve-flag and decisions validation.
         self._mip = MIPSolver(
             mip_backend=mip_backend, mip_chance_strategy=mip_chance_strategy,
             mip_clump_strategy=mip_clump_strategy, mip_sep_strategy=mip_sep_strategy,
             warn_above_pu=warn_above_pu, presolve_check=presolve_check,
+            decisions=decisions, upper=upper, lower=lower,
+        )
+        self.decisions, self.upper, self.lower = (
+            self._mip.decisions, self._mip.upper, self._mip.lower,
         )
 
     def name(self) -> str:
@@ -547,7 +560,10 @@ class MultiObjectiveMIP:
         self._check(problem)
         mip = self._mip
         _warn_if_large_mip(problem.n_planning_units, mip.warn_above_pu)
-        data = _presolve_data(mip.presolve_check, problem, self.name())
+        data = _presolve_data(
+            mip.presolve_check, problem, self.name(),
+            decisions=mip.decisions, upper=mip.upper, lower=mip.lower,
+        )
         need_boundary = any(isinstance(s, MinBoundary) for s in self.objectives)
         base = mip._build_base(problem, config, need_boundary=need_boundary)
         model, x = base.model, base.x
@@ -564,7 +580,12 @@ class MultiObjectiveMIP:
         solver, backend = _mip_solver_for(problem, mip.mip_backend, config.verbose)
         tracked = [*x.values(), *(v for v, _ in base.implied)]
 
+        binary = mip.decisions == "binary"
+
         def rounded() -> dict[int, float]:
+            """The plan's x: rounded (binary) or the extracted, snapped proportions."""
+            if not binary:
+                return dict(zip(base.pu_ids, (float(v) for v in base.extract()), strict=True))
             return {pid: float(round(v.varValue or 0.0)) for pid, v in x.items()}
 
         def evaluate(i: int) -> float | None:
@@ -613,7 +634,10 @@ class MultiObjectiveMIP:
                 meta.update(approach="weighted_sum", row=r, weights=list(row))
             x_rounded = rounded()
             values, _ = evaluate_implied(model, x, x_rounded, base.implied, terms)
-            selected = np.array([bool(x_rounded[pid]) for pid in base.pu_ids], dtype=bool)
+            if binary:
+                selected = np.array([bool(x_rounded[pid]) for pid in base.pu_ids], dtype=bool)
+            else:
+                selected = np.array([x_rounded[pid] for pid in base.pu_ids], dtype=np.float64)
             meta.update(
                 status=pulp.LpStatus[status], sol_status=int(sol_status),
                 objective_values=dict(zip(keys, values, strict=True)),
