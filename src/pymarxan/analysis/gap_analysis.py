@@ -9,7 +9,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from pymarxan.analysis._totals import expected_feature_totals
 from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.utils import compute_held
 
 
 @dataclass
@@ -47,12 +49,6 @@ class GapResult:
 
 def compute_gap_analysis(problem: ConservationProblem) -> GapResult:
     """Compute protection gap for each feature."""
-    protected_pu_ids = set(
-        problem.planning_units.loc[
-            problem.planning_units["status"] == 2, "id"
-        ]
-    )
-
     feature_ids = problem.features["id"].tolist()
     feature_names = problem.features["name"].tolist()
 
@@ -60,19 +56,17 @@ def compute_gap_analysis(problem: ConservationProblem) -> GapResult:
         zip(problem.features["id"].astype(int), problem.features["target"].astype(float))
     )
 
-    total_amount = problem.feature_amounts()
+    # percent_protected denominator: feature_amounts(), or the expected total under
+    # PROBMODE 2 — the same helper as representation (v0.45).
+    total_amount = expected_feature_totals(problem)
 
-    # Vectorized: filter pu_vs_features to protected PUs and groupby species
-    puvspr = problem.pu_vs_features
-    mask = puvspr["pu"].isin(protected_pu_ids)
-    protected_amount: dict[int, float]
-    if mask.any():
-        prot_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
-        protected_amount = {
-            fid: float(prot_totals.get(fid, 0.0)) for fid in feature_ids
-        }
-    else:
-        protected_amount = {fid: 0.0 for fid in feature_ids}
+    # Protected amount: compute_held of the locked-in mask (expected amounts under
+    # PROBMODE 2), so it agrees with build_solution.
+    locked_in = problem.planning_units["status"].to_numpy() == 2
+    held = compute_held(problem, locked_in)
+    protected_amount: dict[int, float] = {
+        fid: float(held.get(int(fid), 0.0)) for fid in feature_ids
+    }
 
     # Apply MISSLEVEL so gap analysis agrees with solver / build_solution /
     # export_summary — previously gap was measured against the raw target.

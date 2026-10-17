@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from pymarxan.analysis._totals import expected_feature_totals
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution
+from pymarxan.solvers.utils import compute_held
 
 
 @dataclass
@@ -68,6 +70,10 @@ def compute_representation(
         threshold: Fraction of each feature's total amount that must be
             represented to "meet" it (default 0.30 for the 30x30 goal).
 
+    Under PROBMODE 2 (with a probability table) amounts are expected amounts
+    ``amount·(1 − p)``, so ``pct_represented`` is the share of the feature's expected
+    (persistence-adjusted) total, not of its raw area or amount.
+
     Returns:
         A :class:`RepresentationResult` with per-feature totals,
         represented amounts, percentages, threshold pass/fail, and a
@@ -78,28 +84,13 @@ def compute_representation(
 
     feature_ids = [int(f) for f in problem.features["id"]]
     feature_names = [str(n) for n in problem.features["name"]]
-    total_amount = {int(f): float(a) for f, a in problem.feature_amounts().items()}
+    # Denominator: feature_amounts(), or the expected total under PROBMODE 2 (v0.45).
+    total_amount = expected_feature_totals(problem)
 
-    selected_ids = {
-        int(pid)
-        for pid, sel in zip(problem.planning_units["id"], solution.selected)
-        if sel
-    }
-    puvspr = problem.pu_vs_features
-    mask = puvspr["pu"].isin(selected_ids)
-    if solution.is_fractional:
-        # Proportion decisions: represented amount Σ r·x (Stage 4 §6.1).
-        from pymarxan.solvers.utils import compute_held
-
-        held = compute_held(problem, solution.selected)
-        represented_amount = {fid: float(held.get(fid, 0.0)) for fid in feature_ids}
-    elif mask.any():
-        rep_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
-        represented_amount = {
-            fid: float(rep_totals.get(fid, 0.0)) for fid in feature_ids
-        }
-    else:
-        represented_amount = {fid: 0.0 for fid in feature_ids}
+    # Represented amount Σ r·x (proportions, Stage 4 §6.1) or Σ r over selected units;
+    # expected amounts Σ r·(1 − p) under PROBMODE 2 — the amounts build_solution judges.
+    held = compute_held(problem, solution.selected)
+    represented_amount = {fid: float(held.get(fid, 0.0)) for fid in feature_ids}
 
     pct_represented: dict[int, float] = {}
     meets_threshold: dict[int, bool] = {}

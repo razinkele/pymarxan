@@ -19,7 +19,8 @@ def representation_ui():
             "Per-feature share of each feature's total amount captured by "
             "the current solution, and whether it clears the policy "
             "threshold (default 30% for the Global Biodiversity Framework "
-            "Target 3).",
+            "Target 3). Under PROBMODE 2 the percentages are of expected "
+            "(persistence-adjusted) amounts, not of area.",
             class_="text-muted small mb-3",
         ),
         ui.input_slider(
