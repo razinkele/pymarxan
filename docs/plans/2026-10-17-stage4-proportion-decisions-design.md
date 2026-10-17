@@ -66,7 +66,9 @@ MultiObjectiveMIP(objectives, approach, ..., decisions="binary", upper=1.0, lowe
 | `"proportion"` | Continuous `[0, upper]` | — | `0 < upper ≤ 1`, `lower == 0.0` |
 | `"semicontinuous"` | Continuous `[0, upper]` | Binary `s_i`; rows `x_i − upper·s_i ≤ 0`, `x_i − lower·s_i ≥ 0` | `0 < lower ≤ upper ≤ 1` |
 
-- `upper` and `lower` are finite scalar floats (bools rejected). Per-PU bounds
+- `upper` and `lower` are finite scalar floats (bools rejected). Both solvers store them as
+  public attributes `decisions`, `upper`, `lower` (the §6.2 solver guards read
+  `solver.decisions`). Per-PU bounds
   (prioritizr's `add_manual_bounded_constraints`) are backlog.
 - Validation happens in `__init__` (both `MIPSolver` and `MultiObjectiveMIP`, the latter by
   passing the arguments to its inner `MIPSolver`) with `ValueError`s naming the offending argument
@@ -216,7 +218,11 @@ HiGHS is not installed locally; its check runs in CI (§8).
 
 `build_solution` with fractional input raises `ValueError` for the same combinations as §3.5
 (PROBMODE 3, clumping, separation, space), so a hand-built fractional array cannot reach the
-binary-only post-hoc evaluators.
+binary-only post-hoc evaluators. The PROBMODE 3 check sits in `compute_probability_penalty`
+(reached by both `compute_objective_terms` and `build_solution`), because
+`_compute_probmode3_zscore_penalty` selects PUs by truthiness and `compute_objective` callers
+such as `evaluate_plans_across_scenarios` judge plans under arbitrary scenario problems (review
+R3); clumping, separation and space are only evaluated inside `build_solution`.
 
 ## 6. Readers of `Solution.selected`
 
@@ -254,8 +260,7 @@ categorical); `zones/writers.py` fallbacks.
 Guard placement for the two that take a **solver**, not a `Solution`:
 `compute_replacement_cost` and `generate_portfolio_cuts` raise `FractionalSolutionError` up front
 when `getattr(solver, "decisions", "binary") != "binary"` (otherwise `portfolio_cuts` would die on
-iteration 2 with the §3.5 `forbidden_selections` `ValueError`), and call `require_binary` on any
-baseline `Solution` they are given.
+iteration 2 with the §3.5 `forbidden_selections` `ValueError`).
 
 ### 6.3 Internal state and count-only readers (no change)
 
@@ -270,9 +275,9 @@ baseline `Solution` they are given.
 ### 6.4 Completeness test
 
 `tests/pymarxan/test_fractional_readers.py` greps `src/` for `\.selected\b` and `n_selected`
-and asserts every containing module appears in exactly one of three module-level tables in the
-test — `FRACTION_AWARE`, `GUARDED`, `INTERNAL_OR_COUNT` — so a new reader cannot slip in
-unclassified. Classification is **per module**; modules that mix categories
+and asserts every containing module appears in exactly one of four module-level tables in the
+test — `FRACTION_AWARE`, `GUARDED` (including `solvers/iterative_improvement.py`),
+`INTERNAL_OR_COUNT`, `MIXED` — so a new reader cannot slip in unclassified. Classification is **per module**; modules that mix categories
 (`analysis/portfolio.py`, `analysis/scenarios.py`, `io/writers.py`) are listed as `MIXED` with
 the guarded function names, and the per-function guard tests (§8) pin the split.
 
@@ -289,7 +294,8 @@ apply MISSLEVEL exactly, so their binary output is unchanged.
 |---|---|
 | bad `decisions` / `upper` / `lower` | `ValueError` in `__init__` (both solvers) |
 | non-binary + PROBMODE 3 / target2 / separation / space / forbidden_selections / negative connectivity | `ValueError` at the top of `_build_base` (all entry points) |
-| fractional array into `build_solution` with PROBMODE 3 / target2 / separation / space | `ValueError` |
+| fractional array into `build_solution` with PROBMODE 3 / target2 / separation / space, or into `compute_objective_terms` with PROBMODE 3 | `ValueError` |
+| non-binary `MIPSolver` passed to `compute_replacement_cost` / `generate_portfolio_cuts` | `FractionalSolutionError` up front |
 | binary-only reader given a fractional solution | `FractionalSolutionError` |
 | `binarize_solution` threshold outside `(0, 1]` | `ValueError` |
 | infeasible model (e.g. semicontinuous floor vs budget) | `[]` from `MIPSolver.solve`, as today |
@@ -324,7 +330,9 @@ apply MISSLEVEL exactly, so their binary output is unchanged.
   the objective is below the same model with `z` forced binary.
 - **Presolve:** `strict` with `upper=0.5` and `0.5·Σc_locked ≤ COSTBUDGET < Σc_locked` does
   not raise P9a; P6 fires when `T > upper·avail`.
-- **Guards:** every §6.2 function raises `FractionalSolutionError`; every §3.5 combination
+- **Guards:** every §6.2 function raises `FractionalSolutionError` (including a proportion
+  `MIPSolver` passed to `generate_portfolio_cuts` / `compute_replacement_cost`); a fractional
+  plan under a PROBMODE 3 scenario in `evaluate_plans_across_scenarios` raises `ValueError`; every §3.5 combination
   raises from `MIPSolver.solve`, `MIPSolver.build_model` and `MultiObjectiveMIP.solve`.
 - **Multi-objective:** a hierarchical `[MaxFeatures, MinCost]` run with
   `decisions="proportion"` and a COSTBUDGET at which the LP optimum has active target rows (the
