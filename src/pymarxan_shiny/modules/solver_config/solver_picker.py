@@ -7,6 +7,18 @@ from pymarxan.solvers.marxan_binary import MarxanBinarySolver
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
+def mip_decision_kwargs(config: dict) -> dict:
+    """``MIPSolver`` decision kwargs from the picker config (Stage 4): ``upper`` only for
+    non-binary decisions, ``lower`` only for semicontinuous."""
+    decisions = str(config.get("mip_decisions", "binary"))
+    kwargs: dict = {"decisions": decisions}
+    if decisions != "binary":
+        kwargs["upper"] = float(config.get("mip_upper", 1.0))
+    if decisions == "semicontinuous":
+        kwargs["lower"] = float(config.get("mip_lower", 0.0))
+    return kwargs
+
+
 @module.ui
 def solver_picker_ui():
     binary_available = MarxanBinarySolver().available()
@@ -154,6 +166,35 @@ def solver_picker_ui():
                         ),
                         "Print detailed solver progress to the console log.",
                     ),
+                    ui.tooltip(
+                        ui.input_select(
+                            "mip_decisions", "Decisions",
+                            choices={
+                                "binary": "Binary (select or not)",
+                                "proportion": "Proportion (0 to upper)",
+                                "semicontinuous": "Semicontinuous (0 or lower to upper)",
+                            },
+                            selected="binary",
+                        ),
+                        "Binary selects whole planning units. Proportion lets a unit be "
+                        "partly selected (prioritizr's add_proportion_decisions / "
+                        "add_semicontinuous_decisions(upper)). Semicontinuous requires "
+                        "at least 'lower' of any unit it selects.",
+                    ),
+                    ui.panel_conditional(
+                        "input.mip_decisions !== 'binary'",
+                        ui.input_numeric(
+                            "mip_upper", "Upper bound (max share)",
+                            value=1.0, min=0.0, max=1.0, step=0.05,
+                        ),
+                    ),
+                    ui.panel_conditional(
+                        "input.mip_decisions === 'semicontinuous'",
+                        ui.input_numeric(
+                            "mip_lower", "Lower bound (min share when selected)",
+                            value=0.25, min=0.0, max=1.0, step=0.05,
+                        ),
+                    ),
                 ),
                 ui.panel_conditional(
                     "input.solver_type === 'greedy'",
@@ -248,6 +289,7 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         input.seed, input.sa_iterations, input.sa_temp_steps,
         input.zone_sa_iterations, input.zone_sa_temp_steps,
         input.mip_time_limit, input.mip_gap, input.mip_verbose,
+        input.mip_decisions, input.mip_upper, input.mip_lower,
         input.heurtype, input.itimptype, input.runmode,
         input.zonation_rule, input.zonation_top_fraction,
         ignore_init=False,
@@ -274,6 +316,13 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
                 input.mip_gap() if input.mip_gap() is not None else 0.0
             )
             config["mip_verbose"] = bool(input.mip_verbose())
+            config["mip_decisions"] = input.mip_decisions() or "binary"
+            config["mip_upper"] = float(
+                input.mip_upper() if input.mip_upper() is not None else 1.0
+            )
+            config["mip_lower"] = float(
+                input.mip_lower() if input.mip_lower() is not None else 0.0
+            )
         if input.solver_type() == "greedy":
             config["heurtype"] = int(input.heurtype() or 2)
         if input.solver_type() == "iterative_improvement":

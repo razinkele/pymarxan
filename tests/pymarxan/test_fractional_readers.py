@@ -87,8 +87,6 @@ def _module(rel: str) -> object:
 
 def test_guarded_modules_guard() -> None:
     for rel in GUARDED:
-        if rel.startswith("pymarxan_shiny/"):
-            continue  # the Shiny guard lands with the Shiny task (T9)
         text = (SRC / rel).read_text(encoding="utf-8")
         assert "require_binary" in text, rel
 

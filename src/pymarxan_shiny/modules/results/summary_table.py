@@ -3,7 +3,34 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.base import Solution
+from pymarxan.solvers.utils import check_targets, compute_held
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
+
+def _target_rows(problem: ConservationProblem, solution: Solution) -> list[dict]:
+    """One row per feature: held (Σ r·x for proportions) and met per ``check_targets``
+    (MISSLEVEL applied; tolerant for fractional plans, Stage 4 §6.1 / §6.5)."""
+    pu_index = {int(pid): i for i, pid in enumerate(problem.planning_units["id"].values)}
+    held = compute_held(problem, solution.selected, pu_index)
+    met = (
+        check_targets(problem, solution.selected, pu_index, _achieved=held)
+        if "target" in problem.features.columns
+        else {}
+    )
+    rows = []
+    for _, frow in problem.features.iterrows():
+        fid = int(frow["id"])
+        fname = frow.get("name", f"Feature {fid}")
+        target = float(frow.get("target", 0.0))
+        achieved = float(held.get(fid, 0.0))
+        pct = (achieved / target * 100) if target > 0 else 100.0
+        rows.append({
+            "id": fid, "name": fname, "target": target,
+            "achieved": achieved, "pct": pct, "met": bool(met.get(fid, True)),
+        })
+    return rows
 
 
 @module.ui
@@ -32,31 +59,7 @@ def summary_table_server(
         s = solution()
         if p is None or s is None:
             return ui.p("No solution available. Run a solver first.")
-        pu_ids = p.planning_units["id"].values
-        id_to_idx = {int(pid): i for i, pid in enumerate(pu_ids)}
-
-        # Vectorized: map PU IDs to indices, filter selected, groupby feature
-        pvf = p.pu_vs_features.copy()
-        pvf["_idx"] = pvf["pu"].map(id_to_idx)
-        pvf = pvf.dropna(subset=["_idx"])
-        pvf["_idx"] = pvf["_idx"].astype(int)
-        pvf["_selected"] = pvf["_idx"].map(lambda i: bool(s.selected[i]))
-        achieved_by_feat = (
-            pvf[pvf["_selected"]].groupby("species")["amount"].sum()
-        )
-
-        rows = []
-        for _, frow in p.features.iterrows():
-            fid = int(frow["id"])
-            fname = frow.get("name", f"Feature {fid}")
-            target = float(frow.get("target", 0.0))
-            achieved = float(achieved_by_feat.get(fid, 0.0))
-            met = achieved >= target
-            pct = (achieved / target * 100) if target > 0 else 100.0
-            rows.append({
-                "id": fid, "name": fname, "target": target,
-                "achieved": achieved, "pct": pct, "met": met,
-            })
+        rows = _target_rows(p, s)
         met_count = sum(1 for r in rows if r["met"])
         total = len(rows)
         summary_line = ui.p(

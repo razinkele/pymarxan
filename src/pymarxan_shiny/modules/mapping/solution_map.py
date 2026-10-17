@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.base import Solution
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan_shiny.modules.mapping.map_utils import build_pu_map, too_large_for_map
 from pymarxan_shiny.modules.mapping.ocean_palette import MAP_NOT_SEL, MAP_SELECTED
@@ -13,6 +15,32 @@ try:
     _HAS_IPYLEAFLET = True
 except ImportError:
     _HAS_IPYLEAFLET = False
+
+
+def _blend(c0: str, c1: str, t: float) -> str:
+    """Hex colour ``t`` of the way from ``c0`` to ``c1`` (``t`` clipped to [0, 1])."""
+    t = min(1.0, max(0.0, float(t)))
+    a = [int(c0[k:k + 2], 16) for k in (1, 3, 5)]
+    b = [int(c1[k:k + 2], 16) for k in (1, 3, 5)]
+    return "#" + "".join(f"{round(u + (v - u) * t):02x}" for u, v in zip(a, b, strict=True))
+
+
+def solution_colors(solution: Solution) -> list[str]:
+    """Per-PU map colours: selected / not selected, or interpolated by x for proportions."""
+    if solution.is_fractional:
+        return [_blend(MAP_NOT_SEL, MAP_SELECTED, x) for x in solution.selected]
+    return [MAP_SELECTED if v else MAP_NOT_SEL for v in solution.selected]
+
+
+def solution_listing(problem: ConservationProblem, solution: Solution) -> list[str]:
+    """``"PU 7"`` per selected PU; with proportions ``"PU 7 (0.25)"``."""
+    pu_ids = problem.planning_units["id"].tolist()
+    if solution.is_fractional:
+        return [
+            f"PU {pid} ({float(solution.selected[i]):.4g})"
+            for i, pid in enumerate(pu_ids) if solution.selected[i]
+        ]
+    return [f"PU {pid}" for i, pid in enumerate(pu_ids) if solution.selected[i]]
 
 
 @module.ui
@@ -56,13 +84,7 @@ def solution_map_server(
             if p is None or s is None:
                 return None
 
-            n_pu = len(p.planning_units)
-            colors = [
-                MAP_SELECTED if s.selected[i] else MAP_NOT_SEL
-                for i in range(n_pu)
-            ]
-
-            return build_pu_map(p, colors)
+            return build_pu_map(p, solution_colors(s))
 
         @render.text
         def map_summary():
@@ -79,8 +101,9 @@ def solution_map_server(
             n_pu = len(p.planning_units)
             targets_met = sum(s.targets_met.values())
             total_targets = len(s.targets_met)
+            share = f" (Σx {s.selected_sum:.2f})" if s.is_fractional else ""
             return (
-                f"Selected: {s.n_selected} / {n_pu} planning units\n"
+                f"Selected: {s.n_selected} / {n_pu} planning units{share}\n"
                 f"Cost: {s.cost:.2f} | Boundary: {s.boundary:.2f}"
                 f" | Objective: {s.objective:.2f}\n"
                 f"Targets met: {targets_met} / {total_targets}"
@@ -96,10 +119,7 @@ def solution_map_server(
                 return ui.p("Run a solver to see results here.")
 
             n_pu = len(p.planning_units)
-            pu_ids = p.planning_units["id"].tolist()
-            rows = [
-                f"PU {pid}" for i, pid in enumerate(pu_ids) if s.selected[i]
-            ]
+            rows = solution_listing(p, s)
             return ui.div(
                 ui.p(f"Selected: {s.n_selected} / {n_pu}"),
                 ui.p(", ".join(rows) if rows else "No PUs selected."),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan.solvers.base import FractionalSolutionError, Solution, require_binary
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan_shiny.modules.mapping.map_utils import build_pu_map, too_large_for_map
 from pymarxan_shiny.modules.mapping.ocean_palette import (
@@ -33,6 +34,35 @@ def comparison_color(in_a: bool, in_b: bool) -> str:
     elif in_b:
         return CMP_B_ONLY    # coral — B only
     return CMP_NEITHER       # steel-gray — neither
+
+
+def _require_pair(sol_a: Solution, sol_b: Solution) -> None:
+    """The four-colour comparison is categorical: binary plans only (Stage 4 §6.2)."""
+    require_binary(sol_a, "comparison map")
+    require_binary(sol_b, "comparison map")
+
+
+def comparison_counts(sol_a: Solution, sol_b: Solution) -> tuple[int, int, int]:
+    """(both, A only, B only) planning-unit counts of two binary plans."""
+    _require_pair(sol_a, sol_b)
+    a, b = sol_a.selected, sol_b.selected
+    both = sum(1 for i in range(len(a)) if a[i] and b[i])
+    a_only = sum(1 for i in range(len(a)) if a[i] and not b[i])
+    b_only = sum(1 for i in range(len(a)) if not a[i] and b[i])
+    return both, a_only, b_only
+
+
+def comparison_summary(sol_a: Solution, sol_b: Solution) -> str:
+    """The user-facing summary line; a fractional plan gets an explanation, not a crash."""
+    try:
+        both, a_only, b_only = comparison_counts(sol_a, sol_b)
+    except FractionalSolutionError:
+        return (
+            "Comparison unavailable: this map compares whole-unit (binary) plans, but a "
+            "selected solution holds proportion decisions. Re-run with Decisions = Binary, "
+            "or convert with binarize_solution()."
+        )
+    return f"Both: {both} | A only: {a_only} | B only: {b_only}"
 
 
 @module.ui
@@ -132,6 +162,8 @@ def comparison_map_server(
 
             sol_a = sols[idx_a]
             sol_b = sols[idx_b]
+            if sol_a.is_fractional or sol_b.is_fractional:
+                return None  # map_summary explains why (comparison_summary)
             n_pu = len(p.planning_units)
 
             colors = [
@@ -158,22 +190,7 @@ def comparison_map_server(
             if idx_a >= len(sols) or idx_b >= len(sols):
                 return "Invalid solution index."
 
-            sol_a = sols[idx_a]
-            sol_b = sols[idx_b]
-            n_pu = len(p.planning_units)
-            both = sum(
-                1 for i in range(n_pu)
-                if sol_a.selected[i] and sol_b.selected[i]
-            )
-            a_only = sum(
-                1 for i in range(n_pu)
-                if sol_a.selected[i] and not sol_b.selected[i]
-            )
-            b_only = sum(
-                1 for i in range(n_pu)
-                if not sol_a.selected[i] and sol_b.selected[i]
-            )
-            return f"Both: {both} | A only: {a_only} | B only: {b_only}"
+            return comparison_summary(sols[idx_a], sols[idx_b])
 
     if not _HAS_IPYLEAFLET:
 
@@ -189,21 +206,4 @@ def comparison_map_server(
             if idx_a >= len(sols) or idx_b >= len(sols):
                 return ui.p("Invalid solution index.")
 
-            sol_a = sols[idx_a]
-            sol_b = sols[idx_b]
-            n_pu = len(p.planning_units)
-            both = sum(
-                1 for i in range(n_pu)
-                if sol_a.selected[i] and sol_b.selected[i]
-            )
-            a_only = sum(
-                1 for i in range(n_pu)
-                if sol_a.selected[i] and not sol_b.selected[i]
-            )
-            b_only = sum(
-                1 for i in range(n_pu)
-                if not sol_a.selected[i] and sol_b.selected[i]
-            )
-            return ui.div(
-                ui.p(f"Both: {both} | A only: {a_only} | B only: {b_only}"),
-            )
+            return ui.div(ui.p(comparison_summary(sols[idx_a], sols[idx_b])))

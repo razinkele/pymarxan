@@ -83,6 +83,7 @@ from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_ui,
 )
 from pymarxan_shiny.modules.solver_config.solver_picker import (
+    mip_decision_kwargs,
     solver_picker_server,
     solver_picker_ui,
 )
@@ -263,7 +264,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         config_dict = solver_config()
         st = config_dict.get("solver_type", "mip")
         if st == "mip":
-            return MIPSolver()
+            return MIPSolver(**mip_decision_kwargs(config_dict))
         elif st == "sa":
             return SimulatedAnnealingSolver()
         elif st == "binary":
