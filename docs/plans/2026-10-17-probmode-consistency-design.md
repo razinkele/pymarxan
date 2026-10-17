@@ -1,6 +1,6 @@
 # PROBMODE 1/2 consistency across solvers (v0.45.0) — design
 
-**Date:** 2026-10-17 · **Status:** approved in conversation; revised after spec-review rounds 1 (C1, I1–I7, M1–M13) 2 (N1–N8) and 3 (clean; R3-M1, R3-M2 applied) and a fresh-eyes final review (F1, F2, M1–M6 applied)
+**Date:** 2026-10-17 · **Status:** approved in conversation; revised after spec-review rounds 1 (C1, I1–I7, M1–M13) 2 (N1–N8) and 3 (clean; R3-M1, R3-M2 applied) a fresh-eyes final review (F1, F2, M1–M6 applied) and plan-review round 1 (§4b)
 **Follows:** v0.44.0 (SA optimises connectivity). **Precedes:** a separate stage implementing
 Marxan's Probability 1D (chance constraint) — out of scope here.
 
@@ -63,8 +63,9 @@ is present). Probability values are used as given, without clamping, identically
 - mode 2: new field `held_csr: csr_matrix | None = field(default=None, compare=False)`, built
   once as a **copy of `pu_feat_csr` with `.data` scaled by `np.repeat(1 − p, np.diff(indptr))`**
   — identical `indptr` / `indices` (a `p_i = 1` row keeps explicit zeros). Do not build it with
-  `sp.diags(1 − p) @ pu_feat_csr`: the product drops explicit zeros and silently misaligns the
-  indices. `compute_held`, `apply_flip_to_held` and the penalty delta read **both columns and
+  `sp.diags(1 − p) @ pu_feat_csr`: the product drops explicit zeros, so its structure differs
+  from `pu_feat_csr` (behaviour is unaffected when columns and amounts are both read from it, but
+  the structure test pins the copy). `compute_held`, `apply_flip_to_held` and the penalty delta read **both columns and
   amounts** from `self.held_csr` directly. `from_problem` always sets it — to the scaled copy
   when mode 2 is active with a probability table, otherwise to `pu_feat_csr` itself (no copy);
   a hand-built cache (default `None`) gets the same fallback once in `__post_init__` (via
@@ -135,6 +136,32 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
   `["targets_met"]` still equal the v0.44 values (54.0 or 41.0 and the stored dict), asserts
   `got` has the new values, and runs `_assert_same` on `selected`, `cost` and
   `mip_objective_value` only.
+
+## 4b. Plan-review amendments (round 1, 4-lens; synthesis `2026-10-17-probmode-consistency-review.md`)
+
+- **One copy of the probability semantics:** `solvers/utils.py` owns `_probmode(problem)`,
+  `_probability_map(problem)`, `_probmode2_active(problem)` and
+  `_probability_vector(problem, pu_id_to_idx, n_pu)`; the cache, `analysis/_totals.py`, the MIP
+  and greedy all use them (MIP / greedy migration is a pure refactor pinned by the goldens).
+- **Non-finite probabilities** (e.g. a blank `prob.dat` cell read as NaN): `validate()` reports
+  them, and `_probability_map` / `_probability_vector` raise `ValueError` naming the PU ids, so
+  every path fails loudly and identically. The missing-PU → 0 default applies only to PUs absent
+  from the table.
+- **`compute_held` input contract:** the public `compute_held` applies `_coerce_selected`
+  (int 0/1 → bool; other ints and bad floats raise), so representation and gap analysis no
+  longer misread an int 0/1 selection as row positions.
+- **PROBMODE 2 with active clumping or separation in SA / II:** the cache build emits one
+  `UserWarning` per solve (clump / separation features are optimised on raw amounts while
+  reports use expected amounts); the full fix is backlogged.
+- **Tests added:** COSTTHRESH / THRESHPEN1 / THRESHPEN2 in the delta and full fixtures (pins the
+  base-cost rule); one iterative-improvement test; the duplicate-PU fixture also in one MIP test
+  (presolve only reports); the clumping identity test marked `slow`.
+- **Docs:** probability means probability of *loss* everywhere (manual glossary, tooltips);
+  PROBMODE 2's consequence (expected = target ⇒ about a 50 % chance of holding it; spread of
+  risk ignored); PROBMODE 3 is *based on* Marxan's Probability 2D with two stated differences
+  (zero variance; `ptarget` vs `ptarget2d`); the Probability 1D stage takes **Marxan 3**
+  (`probability.c`) as its reference, because Marxan v4's `probZUT` has an integer-division bug
+  that inverts its probability penalty.
 
 ## 5. Effects
 
