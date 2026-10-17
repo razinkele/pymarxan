@@ -230,3 +230,63 @@ class TestFullObjectiveMatchesEvaluator:
             assert got == pytest.approx(want, abs=1e-9)
             nonzero += want != 0.0
         assert nonzero >= 20  # the fixture actually exercises the term
+
+
+class TestDeltaExactness:
+    @pytest.mark.parametrize(
+        ("conn", "asymmetric", "weight"),
+        [(SYM_CONN, False, 1.0), (SYM_CONN, False, 2.5),
+         (ASYM_CONN, True, 1.0), (ASYM_CONN, True, 0.75)],
+    )
+    def test_delta_equals_full_difference(
+        self, conn: pd.DataFrame, asymmetric: bool, weight: float,
+    ) -> None:
+        cache = ProblemCache.from_problem(_problem(conn, weight=weight, asymmetric=asymmetric))
+        blm = 1.0
+        rng = np.random.default_rng(42)
+        states = [np.zeros(N_PU, dtype=bool), np.ones(N_PU, dtype=bool)]
+        states += [rng.random(N_PU) < 0.5 for _ in range(8)]
+        for sel in states:
+            held = cache.compute_held(sel)
+            before = cache.compute_full_objective(sel, held, blm)
+            total_cost = float(np.sum(cache.costs[sel]))
+            for idx in range(N_PU):
+                delta = cache.compute_delta_objective(idx, sel, held, total_cost, blm)
+                flipped = sel.copy()
+                flipped[idx] = not flipped[idx]
+                after = cache.compute_full_objective(flipped, cache.compute_held(flipped), blm)
+                assert delta == pytest.approx(after - before, abs=1e-9), (sel, idx)
+
+    @pytest.mark.parametrize(("conn", "asymmetric"), [(SYM_CONN, False), (ASYM_CONN, True)])
+    @pytest.mark.parametrize("dtype", [np.int64, np.uint8])
+    def test_integer_selection_dtypes_match_bool(
+        self, conn: pd.DataFrame, asymmetric: bool, dtype: type,
+    ) -> None:
+        """A 0/1 integer selection gives the bool delta (no bitwise ``~`` on ints)."""
+        cache = ProblemCache.from_problem(_problem(conn, asymmetric=asymmetric))
+        rng = np.random.default_rng(3)
+        for sel in [np.zeros(N_PU, dtype=bool)] + [rng.random(N_PU) < 0.5 for _ in range(6)]:
+            held = cache.compute_held(sel)
+            before = cache.compute_full_objective(sel, held, 1.0)
+            cost = float(np.sum(cache.costs[sel]))
+            as_int = sel.astype(dtype)
+            for idx in range(N_PU):
+                want = cache.compute_delta_objective(idx, sel, held, cost, 1.0)
+                got = cache.compute_delta_objective(idx, as_int, held, cost, 1.0)
+                assert got == pytest.approx(want, abs=1e-9), (dtype, sel, idx)
+                flipped = sel.copy()
+                flipped[idx] = not flipped[idx]
+                after = cache.compute_full_objective(flipped, cache.compute_held(flipped), 1.0)
+                assert got == pytest.approx(after - before, abs=1e-9), (dtype, sel, idx)
+
+    def test_off_delta_unchanged(self) -> None:
+        """Weight 0 with a table: delta identical to the no-table cache."""
+        cache = ProblemCache.from_problem(_problem(SYM_CONN, weight=0.0))
+        base = ProblemCache.from_problem(_problem(None))
+        sel = np.array([True, False, True, True, False, True])
+        held = cache.compute_held(sel)
+        cost = float(np.sum(cache.costs[sel]))
+        for idx in range(N_PU):
+            assert cache.compute_delta_objective(idx, sel, held, cost, 1.0) == (
+                base.compute_delta_objective(idx, sel, held, cost, 1.0)
+            )

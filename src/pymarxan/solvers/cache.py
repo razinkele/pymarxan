@@ -782,6 +782,34 @@ class ProblemCache:
             )
             delta += prob_after - prob_before
 
+        # --- Connectivity delta (one integer comparison when off) ---
+        # O(degree), against the pre-flip selection; s = sign (+1 add, -1 remove).
+        #   symmetric:  -s·w·(conn_self[idx] + Σ_out v·sel[nbr])
+        #   asymmetric:  s·w·(rowsum[idx] − Σ_out v·sel[j]) − s·w·Σ_in v·sel[k]
+        # np.dot on the 0/1 selection (any dtype) — never ``~selected``, which is bitwise
+        # on integer arrays.
+        if self.conn_mode:
+            cs = self.conn_out_start[idx]
+            ce = self.conn_out_start[idx + 1]
+            out_sel = 0.0
+            if cs < ce:
+                out_sel = float(
+                    np.dot(self.conn_out_val[cs:ce], selected[self.conn_out_idx[cs:ce]])
+                )
+            if self.conn_mode == 1:
+                delta -= sign * self.conn_weight * (self.conn_self[idx] + out_sel)
+            else:
+                in_sel = 0.0
+                ks = self.conn_in_start[idx]
+                ke = self.conn_in_start[idx + 1]
+                if ks < ke:
+                    in_sel = float(
+                        np.dot(self.conn_in_val[ks:ke], selected[self.conn_in_idx[ks:ke]])
+                    )
+                delta += sign * self.conn_weight * (
+                    self.conn_out_rowsum[idx] - out_sel - in_sel
+                )
+
         return float(delta)
 
     # ------------------------------------------------------------------
