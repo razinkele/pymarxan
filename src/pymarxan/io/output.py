@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,13 @@ def _should_save(param_value: int, targets_met: bool) -> bool:
     if param_value == _SAVE_IF_UNMET:
         return not targets_met
     return True
+
+
+def _solution_column(solution: Solution) -> list[Any]:
+    """Per-PU solution values: ints (binary) or ``format(x, ".10g")`` proportions."""
+    if solution.is_fractional:
+        return [format(float(v), ".10g") for v in solution.selected]
+    return [int(v) for v in solution.selected]
 
 
 @dataclass
@@ -101,8 +108,9 @@ class OutputController:
     ) -> None:
         """Write a per-run solution file (output_r001.csv)."""
         pu_ids = problem.planning_units["id"].tolist()
+        values = _solution_column(solution)
         rows = [
-            {"Planning_Unit": pid, "Solution": int(solution.selected[i])}
+            {"Planning_Unit": pid, "Solution": values[i]}
             for i, pid in enumerate(pu_ids)
         ]
         fname = f"{self.scenname}_r{run_number:03d}.csv"
@@ -116,8 +124,9 @@ class OutputController:
     ) -> None:
         """Write the best solution file (output_best.csv)."""
         pu_ids = problem.planning_units["id"].tolist()
+        values = _solution_column(solution)
         rows = [
-            {"Planning_Unit": pid, "Solution": int(solution.selected[i])}
+            {"Planning_Unit": pid, "Solution": values[i]}
             for i, pid in enumerate(pu_ids)
         ]
         fname = f"{self.scenname}_best.csv"
@@ -131,10 +140,14 @@ class OutputController:
     ) -> None:
         """Write the solution matrix (n_pu × n_runs)."""
         pu_ids = problem.planning_units["id"].tolist()
-        matrix = np.column_stack(
-            [sol.selected.astype(int) for sol in solutions]
-        )
-        cols = {f"S{i + 1}": matrix[:, i] for i in range(len(solutions))}
+        cols: dict[str, Any]
+        if any(sol.is_fractional for sol in solutions):
+            cols = {f"S{i + 1}": _solution_column(sol) for i, sol in enumerate(solutions)}
+        else:
+            matrix = np.column_stack(
+                [sol.selected.astype(int) for sol in solutions]
+            )
+            cols = {f"S{i + 1}": matrix[:, i] for i in range(len(solutions))}
         df = pd.DataFrame({"Planning_Unit": pu_ids, **cols})
         fname = f"{self.scenname}_solutionsmatrix.csv"
         df.to_csv(output_dir / fname, index=False)

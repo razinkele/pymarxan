@@ -13,7 +13,7 @@ from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan.solvers.presolve import PresolveWarning, presolve_check
 from pymarxan.solvers.run_mode import RunModePipeline
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
-from pymarxan.solvers.utils import binarize_solution
+from pymarxan.solvers.utils import binarize_solution, compute_held
 
 __all__ = [
     "FractionalSolutionError",
@@ -28,6 +28,7 @@ __all__ = [
     "Solver",
     "SolverConfig",
     "binarize_solution",
+    "compute_held",
     "presolve_check",
     "require_binary",
     "write_problem",

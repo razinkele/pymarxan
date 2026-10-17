@@ -385,7 +385,9 @@ def read_mvbest(path: str | Path) -> pd.DataFrame:
 def read_ssoln(path: str | Path) -> pd.DataFrame:
     """Read a Marxan output summed solution (out_ssoln.csv) file.
 
-    Casts ``Planning_Unit`` and ``Number`` to int.
+    Casts ``Planning_Unit`` to int, and ``Number`` to int unless it holds well-formed
+    non-integral floats (sums of proportion decisions), which stay float. A missing or
+    non-numeric ``Number`` raises, as the int cast always did.
 
     Parameters
     ----------
@@ -399,7 +401,13 @@ def read_ssoln(path: str | Path) -> pd.DataFrame:
     """
     df = pd.read_csv(path)
     df["Planning_Unit"] = df["Planning_Unit"].astype(int)
-    df["Number"] = df["Number"].astype(int)
+    number = df["Number"]
+    fractional = (
+        number.dtype.kind == "f" and bool(number.notna().all())
+        and not bool((number % 1 == 0).all())
+    )
+    # Malformed data (NaN, text) still raises from astype(int), as before Stage 4.
+    df["Number"] = number if fractional else number.astype(int)
     return df
 
 

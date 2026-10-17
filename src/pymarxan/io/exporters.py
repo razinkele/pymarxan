@@ -19,12 +19,16 @@ def export_solution_csv(
     """Export a solution to CSV with planning unit details."""
     pu_ids = problem.planning_units["id"].tolist()
     costs = problem.planning_units["cost"].tolist()
+    fractional = solution.is_fractional
     rows = []
     for i, (pid, cost) in enumerate(zip(pu_ids, costs)):
         rows.append({
             "planning_unit": pid,
             "cost": cost,
-            "selected": int(solution.selected[i]),
+            "selected": (
+                format(float(solution.selected[i]), ".10g") if fractional
+                else int(solution.selected[i])
+            ),
         })
     pd.DataFrame(rows).to_csv(path, index=False)
 
@@ -35,19 +39,17 @@ def export_summary_csv(
     path: Path | str,
 ) -> None:
     """Export target achievement summary to CSV."""
+    from pymarxan.solvers.utils import check_targets, compute_held
+
     pu_ids = problem.planning_units["id"].tolist()
     id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
 
-    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-
-    # Precompute achieved per feature in one pass
-    sel_set = {pid for pid, i in id_to_idx.items() if solution.selected[i]}
-    sel_mask = problem.pu_vs_features["pu"].isin(sel_set)
-    achieved_map = (
-        problem.pu_vs_features.loc[sel_mask]
-        .groupby("species")["amount"]
-        .sum()
-        .to_dict()
+    # Held amounts (Σ r·x for proportions) and the shared met rule (Stage 4 §6.1).
+    achieved_map = compute_held(problem, solution.selected, id_to_idx)
+    met_map = (
+        check_targets(problem, solution.selected, id_to_idx, _achieved=achieved_map)
+        if "target" in problem.features.columns
+        else {}
     )
 
     feat_ids = problem.features["id"].values
@@ -72,7 +74,7 @@ def export_summary_csv(
             "feature_name": feat_names[k],
             "target": target,
             "achieved": achieved,
-            "met": achieved >= target * misslevel,
+            "met": met_map.get(fid, True),
         })
     pd.DataFrame(rows).to_csv(path, index=False)
 

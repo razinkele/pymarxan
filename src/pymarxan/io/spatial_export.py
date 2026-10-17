@@ -22,14 +22,18 @@ def export_solution_spatial(
     planning_units : gpd.GeoDataFrame
         Must have ``id`` and ``geometry`` columns.
     solution : Solution
-        Solver result with ``selected`` boolean array.
+        Solver result with ``selected`` boolean array (or float proportions, written as a
+        float column rounded to 10 significant digits).
     path : Path or str
         Output file path.
     driver : str
         OGR driver name: ``"GPKG"`` (default) or ``"ESRI Shapefile"``.
     """
     gdf = planning_units.copy()
-    gdf["selected"] = solution.selected.astype(int)
+    if solution.is_fractional:
+        gdf["selected"] = [float(format(float(v), ".10g")) for v in solution.selected]
+    else:
+        gdf["selected"] = solution.selected.astype(int)
     gdf.to_file(str(path), driver=driver)
 
 
@@ -60,9 +64,11 @@ def export_frequency_spatial(
         gdf.to_file(str(path), driver=driver)
         return
 
-    counts = np.zeros(len(planning_units), dtype=int)
+    # Proportions: count = Σ x (float), frequency = mean of x.
+    fractional = any(sol.is_fractional for sol in solutions)
+    counts = np.zeros(len(planning_units), dtype=np.float64 if fractional else int)
     for sol in solutions:
-        counts += sol.selected.astype(int)
+        counts += sol.selected.astype(np.float64 if fractional else int)
 
     gdf = planning_units.copy()
     gdf["count"] = counts

@@ -192,21 +192,20 @@ def write_mvbest(
     path : str | Path
         Output file path.
     """
-    from pymarxan.solvers.utils import compute_feature_shortfalls
+    from pymarxan.solvers.utils import (
+        check_targets,
+        compute_feature_shortfalls,
+        compute_held,
+    )
 
     pu_ids = problem.planning_units["id"].tolist()
     pu_index = {pid: i for i, pid in enumerate(pu_ids)}
-    misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
-    shortfalls = compute_feature_shortfalls(problem, solution.selected, pu_index)
-
-    # Precompute achieved amount per feature for selected PUs in one pass
-    sel_set = {pid for pid, i in pu_index.items() if solution.selected[i]}
-    sel_mask = problem.pu_vs_features["pu"].isin(sel_set)
-    achieved_map = (
-        problem.pu_vs_features.loc[sel_mask]
-        .groupby("species")["amount"]
-        .sum()
-        .to_dict()
+    # Held amounts (Σ r·x for proportions) and the shared met rule (exact for binary,
+    # tolerant for fractional), recomputed against the current problem (Stage 4 §6.1).
+    achieved_map = compute_held(problem, solution.selected, pu_index)
+    met_map = check_targets(problem, solution.selected, pu_index, _achieved=achieved_map)
+    shortfalls = compute_feature_shortfalls(
+        problem, solution.selected, pu_index, _achieved=achieved_map,
     )
 
     feat_ids = problem.features["id"].values
@@ -227,7 +226,7 @@ def write_mvbest(
         target = float(feat_targets[k])
         amount_held = achieved_map.get(fid, 0.0)
         shortfall = shortfalls.get(fid, 0.0)
-        target_met = amount_held >= target * misslevel
+        target_met = met_map[fid]
         row = {
             "Feature_ID": fid,
             "Feature_Name": feat_names[k],
@@ -262,7 +261,7 @@ def write_ssoln(
     """Write summed solution showing how many times each PU was selected.
 
     Produces a CSV with one row per planning unit, counting how many
-    solutions included it.
+    solutions included it (Σ x as floats when any solution holds proportions).
 
     Columns: Planning_Unit, Number.
 
@@ -276,6 +275,17 @@ def write_ssoln(
         Output file path.
     """
     pu_ids = problem.planning_units["id"].tolist()
+    if any(sol.is_fractional for sol in solutions):
+        sums = np.zeros(len(pu_ids), dtype=np.float64)
+        for sol in solutions:
+            sums += sol.selected.astype(np.float64)
+        rows = [
+            {"Planning_Unit": pu_id, "Number": float(total)}
+            for pu_id, total in zip(pu_ids, sums)
+        ]
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return
+
     counts = np.zeros(len(pu_ids), dtype=int)
 
     for sol in solutions:

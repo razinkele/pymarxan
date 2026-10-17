@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from pymarxan.solvers.base import require_binary
 from pymarxan.zones.objective import (
     check_overall_targets,
     check_zone_targets,
@@ -104,6 +105,7 @@ def write_zone_solution(
         Output file path.
     """
     if solution.zone_assignment is None:
+        require_binary(solution, "write_zone_solution")
         zones = np.where(solution.selected, 1, 0)
     else:
         zones = solution.zone_assignment
@@ -143,6 +145,9 @@ def write_zone_summary(
     """
     zone_ids = sorted(int(z) for z in problem.zones["id"].tolist())
     first_zone = zone_ids[0] if zone_ids else 1
+    for sol in solutions:
+        if sol.zone_assignment is None:
+            require_binary(sol, "write_zone_summary")
     assignments = [
         np.asarray(sol.zone_assignment, dtype=int)
         if sol.zone_assignment is not None

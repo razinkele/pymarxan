@@ -135,6 +135,21 @@ def _compute_achieved(
     return result
 
 
+def compute_held(
+    problem: ConservationProblem,
+    selected: np.ndarray,
+    pu_index: dict[int, int] | None = None,
+) -> dict[int, float]:
+    """Feature id -> amount held: Σ amount over selected PUs, or Σ amount·x for proportions.
+
+    Public wrapper over ``_compute_achieved`` (review R7). ``pu_index`` maps PU id to its
+    position in ``selected`` and defaults to ``planning_units`` order.
+    """
+    if pu_index is None:
+        pu_index = {int(p): i for i, p in enumerate(problem.planning_units["id"])}
+    return _compute_achieved(problem, selected, pu_index)
+
+
 def compute_boundary(
     problem: ConservationProblem,
     selected: np.ndarray,
