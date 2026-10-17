@@ -395,15 +395,15 @@ persistence is 1 − probability. It is attached automatically when the project 
 | 2 | Expected amounts: every feature amount counts as `amount × (1 − probability)`, and targets, shortfalls, penalties, representation and gap analysis are judged on them | pymarxan extension |
 | 3 | Z-score probability penalty (a soft chance target, not a hard constraint) from a per-cell probability of **presence** (a `prob` column in `puvspr.dat`) and a per-feature `ptarget` in spec.dat (Marxan's column is `ptarget2d`) | Based on Marxan's Probability 2D, except that a feature with zero variance is treated as met (Marxan 3 treats it as failing: Z = 4) |
 
-Modes 1 and 2 have the same meaning in every solver: the MIP, simulated annealing and
-iterative improvement optimise them, the greedy heuristics use them in their scores (mode 1 as
-an effective cost, mode 2 as scaled amounts), and every reported value
-(`Solution.objective`, targets met, the summary and target-met tables) uses them. A unit
-missing from the table has probability 0; a unit listed twice uses its last row. `validate()`
-reports duplicates, values outside [0, 1] and non-finite values (a blank cell reads as NaN)
-in every mode. Wherever the table is read — mode 1 with `PROBABILITYWEIGHTING` above 0, and
-mode 2 — every solver and the evaluator raise `ValueError` on a non-finite probability; modes
-0 and 3, and mode 1 with a weighting of 0 or below, ignore the table.
+Modes 1 and 2 have the same meaning in every single-zone solver: the MIP, simulated annealing and
+iterative improvement optimise them, the greedy heuristics use them in their scores (mode 1 as an
+effective cost, mode 2 as scaled amounts), and every reported value (`Solution.objective`, targets
+met, the summary and target-met tables) uses them. A unit missing from the table has probability 0;
+a unit listed twice uses its last row. `validate()` reports duplicates, values outside [0, 1] and
+non-finite values (a blank cell reads as NaN) in every mode. Wherever the table is read — mode 1
+with `PROBABILITYWEIGHTING` above 0, and mode 2 — every single-zone solver and the evaluator raise
+`ValueError` on a non-finite probability; modes 0 and 3, and mode 1 with a weighting of 0 or below,
+ignore the table. The zone solvers ignore the probability table.
 
 Marxan's own **Probability 1D** (a `prob` column in `pu.dat`, a Z-score on the expected
 amount `Σ amount × (1 − p)` with variance `Σ amount² × p × (1 − p)` against `ptarget1d`) is

@@ -67,7 +67,7 @@ def probability_config_ui():
                     "adds a risk premium probability × cost × weight to the "
                     "objective. Mode 2: each amount counts as amount × (1 − "
                     "probability), and targets are judged on these expected "
-                    "amounts by every solver and report. This is an average, not a "
+                    "amounts by every single-zone solver and report. This is an average, not a "
                     "guarantee: a target met on expected amounts has roughly even "
                     "odds of being met. "
                     "Mode 3: per-(PU, feature) probability of presence via the "
