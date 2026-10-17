@@ -1,4 +1,10 @@
-from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.base import (
+    FractionalSolutionError,
+    Solution,
+    Solver,
+    SolverConfig,
+    require_binary,
+)
 from pymarxan.solvers.export import write_problem
 from pymarxan.solvers.heuristic import HeuristicSolver
 from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
@@ -9,6 +15,7 @@ from pymarxan.solvers.run_mode import RunModePipeline
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
 
 __all__ = [
+    "FractionalSolutionError",
     "HeuristicSolver",
     "IterativeImprovementSolver",
     "MarxanBinarySolver",
@@ -20,5 +27,6 @@ __all__ = [
     "Solver",
     "SolverConfig",
     "presolve_check",
+    "require_binary",
     "write_problem",
 ]

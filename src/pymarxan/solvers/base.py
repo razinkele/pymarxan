@@ -13,7 +13,10 @@ from pymarxan.models.problem import ConservationProblem
 class Solution:
     """Result of a conservation planning optimization run."""
 
-    selected: np.ndarray  # Boolean array: is planning unit i selected?
+    # One entry per planning unit, in planning_units order: a bool array, or float64
+    # proportions, finite and in [0, 1], when solved with non-binary decisions. The dtype
+    # is the discriminator; build_solution enforces this (int 0/1 arrays become bool).
+    selected: np.ndarray
     cost: float
     boundary: float
     objective: float  # cost + BLM * boundary + penalties
@@ -52,8 +55,34 @@ class Solution:
         return all(self.targets_met.values())
 
     @property
+    def is_fractional(self) -> bool:
+        """Solved with proportion / semicontinuous decisions: the dtype decides, not the
+        values (an integral LP optimum is still fractional-typed)."""
+        return self.selected.dtype.kind == "f"
+
+    @property
     def n_selected(self) -> int:
-        return int(self.selected.sum())
+        """Count of planning units with x > 0 (a count, not an area)."""
+        return int(np.count_nonzero(self.selected))
+
+    @property
+    def selected_sum(self) -> float:
+        """Σ x (prioritizr ``eval_n_summary``); equals ``n_selected`` for binary."""
+        return float(self.selected.sum())
+
+
+class FractionalSolutionError(ValueError):
+    """A binary-only tool was given a solution holding proportion decisions."""
+
+
+def require_binary(solution: Solution, context: str) -> None:
+    """Raise ``FractionalSolutionError`` unless ``solution.selected`` is binary (spec §5.2)."""
+    if solution.is_fractional:
+        raise FractionalSolutionError(
+            f"{context} needs a binary solution, but this solution holds proportion "
+            "decisions. Convert explicitly with binarize_solution(problem, solution, "
+            "threshold=...)."
+        )
 
 
 @dataclass
