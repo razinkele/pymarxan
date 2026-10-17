@@ -223,3 +223,10 @@ def test_binarize_can_flip_a_met_target() -> None:
     assert plan.targets_met == {1: False}
     assert plan.shortfall > 0
 
+
+
+@pytest.mark.parametrize("threshold", [np.float32(0.5), np.int64(1), np.float64(0.2)])
+def test_binarize_accepts_numpy_scalar_threshold(threshold: object) -> None:
+    p = three_pu()
+    frac = build_solution(p, X, 1.0)
+    assert binarize_solution(p, frac, threshold=threshold).selected.dtype == bool  # type: ignore[arg-type]

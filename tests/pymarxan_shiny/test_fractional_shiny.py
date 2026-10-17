@@ -108,3 +108,28 @@ def test_mip_decision_kwargs() -> None:
     assert kw == {"decisions": "semicontinuous", "upper": 0.9, "lower": 0.2}
     solver = MIPSolver(**kw)
     assert (solver.decisions, solver.upper, solver.lower) == ("semicontinuous", 0.9, 0.2)
+
+
+def test_build_mip_solver_valid() -> None:
+    from pymarxan_shiny.modules.solver_config.solver_picker import build_mip_solver
+
+    solver, msg = build_mip_solver(
+        {"mip_decisions": "semicontinuous", "mip_upper": 0.8, "mip_lower": 0.25}
+    )
+    assert msg is None
+    assert solver.decisions == "semicontinuous"
+    solver, msg = build_mip_solver({})
+    assert msg is None and solver.decisions == "binary"
+
+
+@pytest.mark.parametrize("config", [
+    {"mip_decisions": "semicontinuous", "mip_upper": 0.2, "mip_lower": 0.25},
+    {"mip_decisions": "proportion", "mip_upper": 0.0},
+])
+def test_build_mip_solver_bad_falls_back_with_message(config: dict) -> None:
+    from pymarxan_shiny.modules.solver_config.solver_picker import build_mip_solver
+
+    solver, msg = build_mip_solver(config)
+    assert solver.decisions == "binary"
+    assert msg is not None and "binary decisions instead" in msg
+    assert "upper" in msg.lower()

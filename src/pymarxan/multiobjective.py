@@ -463,7 +463,8 @@ class MultiObjectiveMIP:
     (A >= R − tol(R)), and the implied point is often infeasible at the ``1e-6`` row check,
     so caps fall back to the solver's value (by design).
 
-    Met counts in ``objective_values`` follow the exact ``check_targets`` rule (A >= R), so
+    For binary decisions, met counts in ``objective_values`` follow the exact
+    ``check_targets`` rule (A >= R) (fractional decisions use the relative tolerance), so
     on data at a target's tolerance boundary (e.g. amounts 0.7 + 0.1 against 0.8) the
     reported count can be below the value a hierarchical cap kept, which the solver reached
     within its tolerance. When the implied point of a stage's plan violates a model row

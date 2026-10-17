@@ -25,7 +25,7 @@ def export_ui():
             ui.tooltip(
                 ui.download_button("download_solution", "Download Solution CSV"),
                 "Download a CSV with columns: PU ID, selected (1/0), cost. "
-                "One row per planning unit.",
+                "One row per planning unit. Proportion runs write the selected share (0-1).",
             ),
             class_="mb-2",
         ),

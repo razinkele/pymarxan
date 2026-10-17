@@ -45,7 +45,8 @@ def spatial_export_ui():
             ui.tooltip(
                 ui.download_button("download_solution_spatial", "Download Solution"),
                 "Download the best solution joined to planning unit geometries. "
-                "Includes a 'selected' column (1 = selected, 0 = not selected).",
+                "Includes a 'selected' column (1 = selected, 0 = not selected; "
+                "proportion runs write the selected share, 0-1).",
             ),
             class_="mb-2",
         ),

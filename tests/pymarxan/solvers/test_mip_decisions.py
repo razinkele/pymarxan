@@ -415,3 +415,20 @@ def test_proportion_unwritten_pu_reads_zero(tiny_problem: ConservationProblem) -
         assert s.selected.dtype == np.float64
         assert s.selected[6] == 0.0
         assert s.all_targets_met
+
+
+def test_snap_does_not_raise_genuine_zero_with_tiny_lower() -> None:
+    out = _extract_selected([0.0, 0.5], [None, 1.0], "semicontinuous", 1.0, 1e-7)
+    assert out.tolist() == [0.0, 0.5]
+
+
+def test_locked_out_unit_stays_zero_with_tiny_lower() -> None:
+    from pymarxan.io.readers import load_project
+
+    problem = load_project("tests/data/simple")
+    problem.planning_units.loc[problem.planning_units["id"] == 1, "status"] = 3
+    sol = MIPSolver(
+        decisions="semicontinuous", upper=1.0, lower=1e-7, mip_backend="cbc",
+    ).solve(problem, ONE)[0]
+    assert sol.selected[0] == 0.0
+    assert sol.n_selected == int((sol.selected > 0).sum())

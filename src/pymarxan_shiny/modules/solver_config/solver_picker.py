@@ -4,6 +4,7 @@ from __future__ import annotations
 from shiny import module, reactive, render, ui
 
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
+from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
@@ -17,6 +18,18 @@ def mip_decision_kwargs(config: dict) -> dict:
     if decisions == "semicontinuous":
         kwargs["lower"] = float(config.get("mip_lower", 0.0))
     return kwargs
+
+
+def build_mip_solver(config: dict) -> tuple[MIPSolver, str | None]:
+    """The configured ``MIPSolver`` and a warning message (or ``None``).
+
+    An invalid Decisions/Upper/Lower combination falls back to binary decisions, and the
+    message tells the user so (the caller shows it; never a silent switch).
+    """
+    try:
+        return MIPSolver(**mip_decision_kwargs(config)), None
+    except ValueError as e:
+        return MIPSolver(), f"{e} — running with binary decisions instead"
 
 
 @module.ui

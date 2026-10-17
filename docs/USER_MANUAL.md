@@ -362,7 +362,7 @@ instead (`ZoneMIPSolver`).
 |-----------|-----------|-------|
 | `binary` | selected or not | integer program |
 | `proportion` | any share `0 ≤ x ≤ upper` | linear program (fast) unless the objective counts targets met |
-| `semicontinuous` | `x = 0` or `lower ≤ x ≤ upper` | integer program (one on/off variable per unit) |
+| `semicontinuous` | `x = 0` or `lower ≤ x ≤ upper` | integer program (one on/off variable per free unit; locked units have none) |
 
 ```python
 from pymarxan.io.readers import load_project
@@ -417,7 +417,8 @@ shares (a binary selection counts as 1).
 - Non-binary decisions cannot be combined with PROBMODE 3, clumping (`target2`), separation,
   space targets, no-good cuts or negative connectivity values; the solver raises `ValueError`.
 - Solver values are clipped to each unit's bounds and values at or below `1e-9` set to 0;
-  semicontinuous values within `1e-6` below `lower` are raised to `lower`. Nothing else is
+  semicontinuous values within `1e-6` below `lower` are raised to `lower`; a semicontinuous unit whose on/off
+  variable is 0 is set to 0. Nothing else is
   rounded. A genuine optimum below `1e-9` (one unit holding a billion times a target) would be
   lost.
 - Tools that only make sense for whole units raise `FractionalSolutionError`: iterative

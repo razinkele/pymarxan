@@ -7,6 +7,7 @@ code path keeps its exact comparisons (spec §5.3).
 from __future__ import annotations
 
 import math
+import numbers
 
 import numpy as np
 import pandas as pd
@@ -760,7 +761,7 @@ def binarize_solution(
     can flip to unmet, and a threshold above the solve's ``upper`` selects nothing. For a
     feasible 0/1 plan re-solve with ``decisions="binary"`` (or ``"semicontinuous"``).
     """
-    if not (isinstance(threshold, int | float) and not isinstance(threshold, bool)
+    if not (isinstance(threshold, numbers.Real) and not isinstance(threshold, bool)
             and math.isfinite(threshold) and 0.0 < threshold <= 1.0):
         raise ValueError(f"threshold must be in (0, 1], got {threshold!r}")
     selected = _coerce_selected(solution.selected, len(problem.planning_units))

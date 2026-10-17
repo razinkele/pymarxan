@@ -62,7 +62,7 @@ def _extract_selected(
 
     Binary: ``bool(round(v))``. Otherwise float64 clipped to ``[0, upper]`` (a scalar, or
     one bound per PU: 1.0 for locked-in units); ``x <= ZERO_TOL`` -> 0. Semicontinuous:
-    ``lower − SNAP_TOL <= x < lower`` -> ``lower``, and ``round(s) == 0`` -> 0 (``s``
+    ``lower − SNAP_TOL <= x < lower`` (``x > 0``) -> ``lower``, and ``round(s) == 0`` -> 0 (``s``
     ``None``: the PU has no on/off variable, e.g. it is locked). Nothing else moves, so a
     value is never lowered except dust, ``s = 0``, or ``x`` above its bound.
     """
@@ -72,7 +72,7 @@ def _extract_selected(
     out = np.clip(np.array([v or 0.0 for v in x_values], dtype=np.float64), 0.0, ub)
     out[out <= ZERO_TOL] = 0.0
     if decisions == "semicontinuous":
-        out[(out >= lower - SNAP_TOL) & (out < lower)] = lower
+        out[(out > 0.0) & (out >= lower - SNAP_TOL) & (out < lower)] = lower
         off = np.array([v is not None and round(v) == 0 for v in s_values], dtype=bool)
         out[off] = 0.0
     return out

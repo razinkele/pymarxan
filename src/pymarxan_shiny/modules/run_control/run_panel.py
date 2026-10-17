@@ -73,7 +73,11 @@ def run_panel_server(
             ui.notification_show("Load a project first!", type="error")
             return
 
-        active = solver()
+        try:
+            active = solver()
+        except ValueError as e:
+            ui.notification_show(f"Cannot build solver: {e}", type="error")
+            return
         if not active.available():
             ui.notification_show(
                 f"Solver '{active.name()}' is not available.", type="error"
