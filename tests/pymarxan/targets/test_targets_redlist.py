@@ -166,3 +166,59 @@ def test_rl_species_targets_rejects_positional_series(make_problem):
         features=[1, 2],
     )
     assert set(ok) == {1, 2}
+
+
+# Every threshold-table cell, written out as literals so a typo in the module's
+# tables fails here. With f = 1e6 km² and no cap, f(1-A) >= 1e5 exceeds every B
+# threshold (<= 50,000), so method="max" returns the A term and "min" the B term.
+_BIG = 1e6
+_SPECIES_A_CELLS = {
+    "A1": {"CR": 0.9, "EN": 0.7, "VU": 0.5},
+    "A2": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+    "A3": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+    "A4": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+}
+_SPECIES_B_CELLS = {
+    "B1": {"CR": 100.0, "EN": 5_000.0, "VU": 20_000.0},
+    "B2": {"CR": 10.0, "EN": 500.0, "VU": 2_000.0},
+}
+_ECOSYSTEM_A_CELLS = {
+    "A1": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+    "A2a": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+    "A2b": {"CR": 0.8, "EN": 0.5, "VU": 0.3},
+    "A3": {"CR": 0.9, "EN": 0.7, "VU": 0.5},
+}
+_ECOSYSTEM_B_CELLS = {
+    "B1": {"CR": 2_000.0, "EN": 20_000.0, "VU": 50_000.0},
+    "B2": {"CR": 200.0, "EN": 2_000.0, "VU": 5_000.0},
+}
+
+
+def _cells(fn, table):
+    return [
+        pytest.param(fn, crit, status, value, id=f"{fn.__name__}-{crit}-{status}")
+        for crit, row in table.items()
+        for status, value in row.items()
+    ]
+
+
+@pytest.mark.parametrize(
+    "fn, crit, status, reduction",
+    _cells(rl_species_targets, _SPECIES_A_CELLS)
+    + _cells(rl_ecosystem_targets, _ECOSYSTEM_A_CELLS),
+)
+def test_rl_criterion_a_cell(make_problem, fn, crit, status, reduction):
+    t = _one(fn, make_problem, _BIG, status=status, criterion_a=crit, criterion_b="B1",
+             cap_km2=None)
+    assert t == pytest.approx((1.0 - reduction) * _BIG, rel=REL)
+
+
+@pytest.mark.parametrize(
+    "fn, crit, status, range_km2",
+    _cells(rl_species_targets, _SPECIES_B_CELLS)
+    + _cells(rl_ecosystem_targets, _ECOSYSTEM_B_CELLS),
+)
+def test_rl_criterion_b_cell(make_problem, fn, crit, status, range_km2):
+    t = _one(fn, make_problem, _BIG, status=status, criterion_a="A1", criterion_b=crit,
+             method="min", cap_km2=None)
+    assert t == pytest.approx(range_km2, rel=REL)
