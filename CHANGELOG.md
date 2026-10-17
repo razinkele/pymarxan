@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.1] — 2026-10-17
+
 ### Fixed
 - `MIPSolver` with `ASYMMETRIC_CONNECTIVITY=1` no longer crashes on duplicate `(id1, id2)`
   connectivity rows (`PulpError: overlapping constraint names`). Duplicate rows share one
@@ -1478,7 +1480,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.42.1...HEAD
+[0.42.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.1
 [0.42.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.0
 [0.41.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.1
 [0.41.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.0
