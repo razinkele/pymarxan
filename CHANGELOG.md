@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-10-17
+
 ### Changed
 - **Reported connectivity now matches the MIP's connectivity term, so reported objectives
   change on every problem with connectivity, for every solver.** `compute_connectivity_penalty`
@@ -1500,7 +1502,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.42.1...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.43.0
 [0.42.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.1
 [0.42.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.0
 [0.41.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.1
