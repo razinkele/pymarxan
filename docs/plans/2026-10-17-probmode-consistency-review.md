@@ -45,3 +45,13 @@ the full clumping/separation fix (documented limitations, backlog).
 
 None of the findings changes the MIP's results; the only moving golden records remain the 8
 Stage 3 PROBMODE 2 cases. The 35.0 anchor holds.
+
+## Plan review, round 2 (grounding, executed)
+
+Clean: 0 Critical, 0 Important, 6 Minor. Every round-1 Important from all four lenses addressed;
+RED counts and the byte-identical replay re-verified; 43 mutants, 36 killed (2 equivalent, 4
+greedy-only, 1 harmless); 450 MIP-model and greedy-plan records identical between base and
+prototype after the shared-helper refactor. Minors applied: greedy ignores a NaN table when the
+premium is off (R2-1); greedy's shared semantics pinned by tests that kill the first-row-wins and
+default-mode-0 mutants (R2-2); warning frequency stated as once per cache build (R2-3); spec
+duplicate-PU rationale corrected (R2-4); Shiny representation help text (R2-5). Loop converged.

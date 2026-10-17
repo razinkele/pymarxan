@@ -129,8 +129,9 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
   denominators (under mode 2, features with no rows get 0.0 instead of a `KeyError` in
   `to_dataframe`).
 - **`validate()` message:** `f"probability lists planning unit IDs more than once:
-  {sorted(dups)}"`. MIP presolve runs `validate()` (P0), so the "PU listed twice" fixture is used
-  only in the delta / full tests, not MIP tests.
+  {sorted(dups)}"`. Presolve only reports (it never raises), so the
+  "PU listed twice" fixture is also used in one MIP test (plan review P6) to pin last-row-wins
+  across solvers.
 - **Golden fix shape:** `STAGE3_PROBMODE2_FIXED: dict[str, tuple[float, dict[str, bool]]]` maps
   case → (new objective, new targets_met). The test asserts `golden[case]["objective"]` and
   `["targets_met"]` still equal the v0.44 values (54.0 or 41.0 and the stored dict), asserts
@@ -151,7 +152,8 @@ expected amounts); docstrings of `MultiObjectiveMIP` (its PROBMODE 2 caveat), `P
   (int 0/1 → bool; other ints and bad floats raise), so representation and gap analysis no
   longer misread an int 0/1 selection as row positions.
 - **PROBMODE 2 with active clumping or separation in SA / II:** the cache build emits one
-  `UserWarning` per solve (clump / separation features are optimised on raw amounts while
+  `UserWarning` per cache build (SA builds one cache per solve; iterative improvement one per
+  solution improved) (clump / separation features are optimised on raw amounts while
   reports use expected amounts); the full fix is backlogged.
 - **Tests added:** COSTTHRESH / THRESHPEN1 / THRESHPEN2 in the delta and full fixtures (pins the
   base-cost rule); one iterative-improvement test; the duplicate-PU fixture also in one MIP test

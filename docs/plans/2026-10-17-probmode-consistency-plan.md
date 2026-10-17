@@ -10,7 +10,7 @@
 
 **Spec:** `docs/plans/2026-10-17-probmode-consistency-design.md` (approved 2026-10-17 after three review-loop rounds and a fresh-eyes final review; §4a fixes every name, type and shape). Executors read it. The spec is the authority, and this plan argues from it.
 
-**Provenance:** every code block below is extracted (`git show`) from a prototype built task by task in a scratch worktree, one commit per task, with the full gate green at every commit. Prototype commits: Task 1 `0959b16`, Task 2 `df8bd2b`, Task 3 `b17856c`, Task 4 `81af6f2` (base `0b9bc85`). Diffs apply with `git apply --whitespace=nowarn` on the previous task's tree. Every block was replayed that way on a fresh worktree from the base, and each task's tree matched the prototype commit. Editors that strip trailing whitespace from pasted context lines break a plain `git apply`. New files are given in full.
+**Provenance:** every code block below is extracted (`git show`) from a prototype built task by task in a scratch worktree, one commit per task, with the full gate green at every commit. Prototype commits: Task 1 `93e0ab9`, Task 2 `111d1c8`, Task 3 `af82518`, Task 4 `a899824` (base `0b9bc85`). Diffs apply with `git apply --whitespace=nowarn` on the previous task's tree. Every block was replayed that way on a fresh worktree from the base, and each task's tree matched the prototype commit. Editors that strip trailing whitespace from pasted context lines break a plain `git apply`. New files are given in full.
 
 ## Global Constraints
 
@@ -49,6 +49,8 @@ The plan-review round-1 rulings P1–P9 (synthesis `docs/plans/2026-10-17-probmo
 - **Tasks 1–2, where NaN raises:** only on paths that read the table (modes 1 and 2); greedy builds its map only in modes 1 and 2; `validate()` reports non-finite values in every mode.
 - **Task 2, iterative-improvement test:** ITIMPTYPE 3 only swaps and never acts from the solver's all-selected start, so it is tested through `improve()` from {PU 1}, which swaps to {PU 2} only when the premium counts.
 - **Task 2, warning frequency:** the PROBMODE 2 + clumping/separation warning fires once per cache build, so a RUNMODE chaining SA into II warns twice.
+- **Task 1, greedy and a NaN table (round 2 R2-1):** greedy reads the table only when the premium is on (mode 1, γ > 0) or in mode 2, so a NaN table with the premium off is ignored, as on every other path.
+- **Task 3, Shiny help (round 2 R2-5):** the representation card's description paragraph (`pymarxan_shiny/modules/results/representation.py`) gains the PROBMODE 2 sentence; `help_content` has no representation entry.
 - **Task 3, every mode:** representation's binary path and gap's protected amount use `compute_held` in every mode, as spec §4 says; outside mode 2 the numbers are identical to before.
 - **Task 4, roadmap:** the PROBMODE backlog line is struck through as "done in v0.45" (the file's v0.43/v0.44 convention) rather than deleted.
 - **Task 4, manual wording:** the greedy heuristics *use* modes 1 and 2 in their scores; they do not optimise the objective.
@@ -324,6 +326,49 @@ class TestNonFiniteProbabilities:
     def test_mode_0_ignores_the_table(self) -> None:
         p = _simple(_NAN_PROB, PROBMODE=0)
         build_solution(p, np.array([False, True, False, True, False, True]), 1.0)
+
+    @pytest.mark.parametrize("mode", [1, None])
+    @pytest.mark.parametrize("gamma", [0.0, -1.0])
+    def test_premium_off_ignores_the_table(self, mode: int | None, gamma: float) -> None:
+        """Mode 1 with weighting <= 0 reads no probabilities, in every path (greedy too)."""
+        params: dict[str, Any] = {"PROBABILITYWEIGHTING": gamma}
+        if mode is not None:
+            params["PROBMODE"] = mode
+        p = _simple(_NAN_PROB, **params)
+        build_solution(p, np.array([False, True, False, True, False, True]), 1.0)
+        _mip(p)
+        HeuristicSolver().solve(p, SolverConfig(num_solutions=1, seed=1))
+
+
+def _greedy_plan(problem: ConservationProblem, heurtype: int) -> list[int]:
+    (s,) = HeuristicSolver(heurtype=heurtype).solve(
+        problem, SolverConfig(num_solutions=1, seed=1),
+    )
+    return [int(v) for v in s.selected]
+
+
+class TestGreedySharedSemantics:
+    """Greedy's half of the shared-helper refactor (round-2 R2-2)."""
+
+    _P = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+    @pytest.mark.parametrize(("mode", "heurtype"), [(1, 1), (2, 0)])
+    def test_duplicate_pu_last_row_wins(self, mode: int, heurtype: int) -> None:
+        low = pd.DataFrame({"pu": [1, 2, 3, 4, 5, 6], "probability": self._P})
+        high = low.assign(probability=[0.1, 0.9, 0.3, 0.4, 0.5, 0.6])
+        dup = pd.concat(
+            [pd.DataFrame({"pu": [2], "probability": [0.9]}), low], ignore_index=True,
+        )
+        params: dict[str, Any] = {"PROBMODE": mode, "PROBABILITYWEIGHTING": 5.0}
+        plan = _greedy_plan(_simple(dup, **params), heurtype)
+        assert plan == _greedy_plan(_simple(low, **params), heurtype)  # last row (0.2)
+        assert plan != _greedy_plan(_simple(high, **params), heurtype)  # not the first (0.9)
+
+    def test_table_without_probmode_is_mode_1(self) -> None:
+        prob = pd.DataFrame({"pu": [1, 6], "probability": [0.9, 0.9]})
+        default = _greedy_plan(_simple(prob, PROBABILITYWEIGHTING=5.0), 1)
+        assert default == _greedy_plan(_simple(prob, PROBMODE=1, PROBABILITYWEIGHTING=5.0), 1)
+        assert default != _greedy_plan(_simple(prob, PROBMODE=0, PROBABILITYWEIGHTING=5.0), 1)
 ```
 
 Modify `tests/pymarxan/solvers/test_stage3_golden_v040.py` (apply this diff):
@@ -418,7 +463,7 @@ index 6531154..e679139 100644
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_probmode_evaluator.py tests/pymarxan/solvers/test_stage3_golden_v040.py -q`
-Expected: FAIL — 28 failed, 125 passed — the 8 Stage 3 probmode2 golden cases (got 54.0 / 41.0, want 59.1 / 55.4) and 20 evaluator tests (max_features met count 2 not 1; binarized feature 2 reported met; compute_held ×3 incl. int 0/1 and int 2; shortfall/penalty; γ = −1 negative premium; duplicate-PU and NaN validate; the shared helpers; NaN raising in the evaluator ×3, the MIP ×2 and greedy ×2); the regression pins (min_set, proportion, no-table, other modes, γ = 0) pass
+Expected: FAIL — 28 failed, 132 passed — the 8 Stage 3 probmode2 golden cases (got 54.0 / 41.0, want 59.1 / 55.4) and 20 evaluator tests (max_features met count 2 not 1; binarized feature 2 reported met; compute_held ×3 incl. int 0/1 and int 2; shortfall/penalty; γ = −1 negative premium; duplicate-PU and NaN validate; the shared helpers; NaN raising in the evaluator ×3, the MIP ×2 and greedy ×2); the regression pins (min_set, proportion, no-table, other modes, γ = 0, premium-off-ignores-the-table) and the greedy shared-semantics tests pass (round-2 R2-2: the base greedy already used last-row-wins and default mode 1; those tests are evidenced against mutants instead)
 
 - [ ] **Step 3: Implement**
 
@@ -470,7 +515,7 @@ Modify `src/pymarxan/solvers/heuristic.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/heuristic.py b/src/pymarxan/solvers/heuristic.py
-index 0f9cbc8..7f2fcb1 100644
+index 0f9cbc8..3b3e44c 100644
 --- a/src/pymarxan/solvers/heuristic.py
 +++ b/src/pymarxan/solvers/heuristic.py
 @@ -9,11 +9,11 @@ from __future__ import annotations
@@ -486,7 +531,7 @@ index 0f9cbc8..7f2fcb1 100644
  
  
  class HeuristicSolver(Solver):
-@@ -191,20 +191,21 @@ class HeuristicSolver(Solver):
+@@ -191,20 +191,23 @@ class HeuristicSolver(Solver):
          pv_pu = problem.pu_vs_features["pu"].values
          pv_sp = problem.pu_vs_features["species"].values
          pv_am = problem.pu_vs_features["amount"].values
@@ -494,7 +539,8 @@ index 0f9cbc8..7f2fcb1 100644
          # Probability support
 -        prob_mode = int(problem.parameters.get("PROBMODE", 1))
 +        # Shared helpers (solvers/utils.py): PROBMODE default 1 with a table, last row
-+        # wins, non-finite values raise.
++        # wins, non-finite values raise. The table is read only where it is used (mode 2,
++        # or mode 1 with weighting > 0), as in every other path.
 +        prob_mode = _probmode(problem)
          prob_weight = float(
              problem.parameters.get("PROBABILITYWEIGHTING", 1.0)
@@ -505,9 +551,10 @@ index 0f9cbc8..7f2fcb1 100644
 -            p_val = problem.probability["probability"].values
 -            for pk in range(len(p_pu)):
 -                prob_map[int(p_pu[pk])] = float(p_val[pk])
++        reads_table = prob_mode == 2 or (prob_mode == 1 and prob_weight > 0)
 +        prob_map: dict[int, float] = (
 +            _probability_map(problem)
-+            if problem.probability is not None and prob_mode in (1, 2)
++            if problem.probability is not None and reads_table
 +            else {}
 +        )
  
@@ -793,12 +840,12 @@ index af836aa..418ed54 100644
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_probmode_evaluator.py tests/pymarxan/solvers/test_stage3_golden_v040.py -q`
-Expected: 153 passed
+Expected: 160 passed
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes (prototype: 3636 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
+Expected: ruff and mypy clean; the full suite passes (prototype: 3643 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
 
 - [ ] **Step 6: Commit**
 
@@ -1355,10 +1402,10 @@ Modify `src/pymarxan/solvers/cache.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/cache.py b/src/pymarxan/solvers/cache.py
-index e8bf3c4..6038ca7 100644
+index e8bf3c4..f856229 100644
 --- a/src/pymarxan/solvers/cache.py
 +++ b/src/pymarxan/solvers/cache.py
-@@ -27,10 +27,25 @@ Connectivity
+@@ -27,10 +27,26 @@ Connectivity
  ``CONNECTIVITY_WEIGHT > 0`` with a connectivity table builds CSR adjacency arrays
  (``conn_out_*``; asymmetric also ``conn_in_*``) plus symmetric self-pair rewards
  (``conn_self``), mirroring ``compute_connectivity_penalty`` (the MIP's term). Both
@@ -1376,7 +1423,8 @@ index e8bf3c4..6038ca7 100644
 +penalty delta. In every other case ``held_csr`` *is* ``pu_feat_csr``, so both are resolved
 +at build time and no flip pays a check. ``pu_feat_csr`` / ``pu_feat_matrix`` stay raw for
 +``ClumpState`` / ``SepState`` (a documented PROBMODE 2 limitation; the build warns when
-+PROBMODE 2 meets active clumping or separation). The table is read through the shared
++PROBMODE 2 meets active clumping or separation — once per cache build, i.e. once per SA solve
++and once per solution iterative improvement improves). The table is read through the shared
 +helpers in ``solvers/utils.py`` (``_probmode``, ``_probability_vector``), as the evaluator,
 +the MIP and the greedy heuristic do.
  """
@@ -1384,7 +1432,7 @@ index e8bf3c4..6038ca7 100644
  
  import warnings
  from dataclasses import dataclass, field
-@@ -38,11 +53,15 @@ from functools import cached_property
+@@ -38,11 +54,15 @@ from functools import cached_property
  
  import numpy as np
  from scipy.sparse import coo_matrix, csr_matrix
@@ -1401,7 +1449,7 @@ index e8bf3c4..6038ca7 100644
  @dataclass(frozen=True)
  class ProblemCache:
      """Precomputed arrays derived from a ConservationProblem.
-@@ -165,10 +184,26 @@ class ProblemCache:
+@@ -165,10 +185,26 @@ class ProblemCache:
      conn_in_start: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.int32))
      conn_in_idx: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int32))
      conn_in_val: np.ndarray = field(default_factory=lambda: np.zeros(0))
@@ -1428,7 +1476,7 @@ index e8bf3c4..6038ca7 100644
      def pu_feat_matrix(self) -> np.ndarray:
          """Dense (n_pu, n_feat) view — densified on first access (clumping / separation /
          probmode-3 / analysis). A plain problem never triggers this."""
-@@ -274,12 +309,13 @@ class ProblemCache:
+@@ -274,12 +310,13 @@ class ProblemCache:
          misslevel = float(params.get("MISSLEVEL", 1.0))
          cost_thresh = float(params.get("COSTTHRESH", 0.0))
          thresh_pen1 = float(params.get("THRESHPEN1", 0.0))
@@ -1444,7 +1492,7 @@ index e8bf3c4..6038ca7 100644
          # Per-cell probability of PRESENCE — read once into a dense matrix.
          # Marxan's PROB2D `prob` is the probability the feature is present at
          # the cell (clumping.cpp / probability.cpp ComputeP_AllPUsSelected_2D:
-@@ -474,10 +510,22 @@ class ProblemCache:
+@@ -474,10 +511,22 @@ class ProblemCache:
              np.bincount(conn_out_row, weights=conn_out_val, minlength=n_pu)
              if conn_mode == 2
              else np.zeros(n_pu, dtype=np.float64)
@@ -1467,7 +1515,7 @@ index e8bf3c4..6038ca7 100644
              n_feat=n_feat,
              costs=costs,
              statuses=statuses,
-@@ -519,19 +567,24 @@ class ProblemCache:
+@@ -519,19 +568,24 @@ class ProblemCache:
              conn_in_start=conn_in_start,
              conn_in_idx=conn_in_idx,
              conn_in_val=conn_in_val,
@@ -1492,7 +1540,7 @@ index e8bf3c4..6038ca7 100644
          selected : np.ndarray
              (n_pu,) boolean array indicating selected planning units.
  
-@@ -539,22 +592,22 @@ class ProblemCache:
+@@ -539,22 +593,22 @@ class ProblemCache:
          -------
          np.ndarray
              (n_feat,) float64 — total amount held for each feature.
@@ -1517,7 +1565,7 @@ index e8bf3c4..6038ca7 100644
          held[cols] += sign * csr.data[s:e]
  
      def _compute_zscore_penalty(
-@@ -629,10 +682,14 @@ class ProblemCache:
+@@ -629,10 +683,14 @@ class ProblemCache:
          shortfalls = np.maximum(0.0, effective_targets - held)
          penalty = float(np.dot(self._det_spf, shortfalls))
  
@@ -1532,7 +1580,7 @@ index e8bf3c4..6038ca7 100644
              obj += compute_cost_threshold_penalty(
                  total_cost, self.cost_thresh, self.thresh_pen1, self.thresh_pen2
              )
-@@ -729,23 +786,29 @@ class ProblemCache:
+@@ -729,23 +787,29 @@ class ProblemCache:
          # (round-3 H14 — same mask as compute_full_objective).
          # Only the PU's nonzero features change shortfall (absent features contribute 0),
          # so restrict to the CSR row's columns → O(nnz_row). Integer-exact vs the dense
@@ -1566,7 +1614,7 @@ index e8bf3c4..6038ca7 100644
              new_cost = total_cost + cost_delta
              old_ct_penalty = compute_cost_threshold_penalty(
                  total_cost,
-@@ -885,10 +948,40 @@ class ProblemCache:
+@@ -885,10 +949,40 @@ class ProblemCache:
          # Correct.
          
          return total
@@ -1655,7 +1703,7 @@ Expected: 73 passed
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes (prototype: 3709 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
+Expected: ruff and mypy clean; the full suite passes (prototype: 3716 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
 
 - [ ] **Step 6: Commit**
 
@@ -1675,6 +1723,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Create: `src/pymarxan/analysis/_totals.py`
 - Modify: `src/pymarxan/analysis/gap_analysis.py`
 - Modify: `src/pymarxan/analysis/representation.py`
+- Modify: `src/pymarxan_shiny/modules/results/representation.py`
 - Create: `tests/pymarxan/analysis/test_probmode_totals.py`
 
 **Interfaces:**
@@ -2047,6 +2096,29 @@ index 2233e2b..6fbff0a 100644
          total = total_amount.get(fid, 0.0)
 ```
 
+Modify `src/pymarxan_shiny/modules/results/representation.py` (apply this diff):
+
+```diff
+diff --git a/src/pymarxan_shiny/modules/results/representation.py b/src/pymarxan_shiny/modules/results/representation.py
+index 4fdc438..c4c797b 100644
+--- a/src/pymarxan_shiny/modules/results/representation.py
++++ b/src/pymarxan_shiny/modules/results/representation.py
+@@ -17,11 +17,12 @@ def representation_ui():
+         help_card_header("Representation (30x30)"),
+         ui.p(
+             "Per-feature share of each feature's total amount captured by "
+             "the current solution, and whether it clears the policy "
+             "threshold (default 30% for the Global Biodiversity Framework "
+-            "Target 3).",
++            "Target 3). Under PROBMODE 2 the percentages are of expected "
++            "(persistence-adjusted) amounts, not of area.",
+             class_="text-muted small mb-3",
+         ),
+         ui.input_slider(
+             "threshold", "Representation threshold", min=0, max=100, value=30, post="%"
+         ),
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_probmode_totals.py -q`
@@ -2055,12 +2127,12 @@ Expected: 16 passed
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes (prototype: 3725 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
+Expected: ruff and mypy clean; the full suite passes (prototype: 3732 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pymarxan/analysis/_totals.py src/pymarxan/analysis/gap_analysis.py src/pymarxan/analysis/representation.py tests/pymarxan/analysis/test_probmode_totals.py
+git add src/pymarxan/analysis/_totals.py src/pymarxan/analysis/gap_analysis.py src/pymarxan/analysis/representation.py src/pymarxan_shiny/modules/results/representation.py tests/pymarxan/analysis/test_probmode_totals.py
 git commit -m "fix(analysis): representation and gap analysis use PROBMODE 2 expected amounts
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -2169,10 +2241,10 @@ Modify `CHANGELOG.md` (apply this diff):
 
 ```diff
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 1057bcb..9d097a4 100644
+index 1057bcb..b8154b4 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -5,10 +5,61 @@ All notable changes to **pymarxan** are documented in this file.
+@@ -5,10 +5,65 @@ All notable changes to **pymarxan** are documented in this file.
  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
  
@@ -2193,7 +2265,8 @@ index 1057bcb..9d097a4 100644
 +  and the greedy heuristics are unchanged (they now read the table through the same shared
 +  helpers; their models and plans do not move). Under PROBMODE 2 with active clumping or
 +  separation, SA/II still optimise those features on raw amounts and now warn
-+  (`UserWarning`) when the cache is built.
++  (`UserWarning`) once per cache build: once per SA solve, and once per solution iterative
++  improvement improves.
 +- **PROBMODE 2 reports use expected amounts.** Targets met, shortfall, penalty and held amounts
 +  (`build_solution`, `compute_held`, `write_mvbest`, the summary CSV and the Shiny summary and
 +  target-met views), representation and gap analysis now count `Σ amount · (1 − p)`, the
@@ -2204,9 +2277,12 @@ index 1057bcb..9d097a4 100644
 +- `validate()` reports a probability table that lists a planning unit more than once, and
 +  non-finite (NaN or infinite) probabilities — a blank `prob.dat` cell reads as NaN — with
 +  their planning unit ids. Callers asserting `validate() == []` will see the new messages.
-+- A non-finite probability now raises `ValueError` (naming the planning unit ids) in every
-+  path that reads the table — the evaluator, `ProblemCache` (SA / II), the MIP and the greedy
-+  heuristics — instead of NaN objectives, a PuLP error, or a silent substitution of 0.
++- A non-finite probability now raises `ValueError` (naming the planning unit ids) wherever the
++  table is read — PROBMODE 1 with `PROBABILITYWEIGHTING` > 0 (including a table with no
++  `PROBMODE`) and PROBMODE 2 — in the evaluator, `ProblemCache` (SA / II), the MIP and the
++  greedy heuristics alike, instead of NaN objectives, a PuLP error, or a silent substitution of
++  0. Configurations that do not read the table (PROBMODE 0 or 3, PROBMODE 1 with weighting
++  0 or below) ignore it in every path; `validate()` reports non-finite values in every mode.
 +- `compute_held` applies the selection contract of `build_solution`: an int 0/1 array is read
 +  as bool, other ints raise `ValueError`.
 +- Docs and UI: PROBMODE 1 and 2 are documented as pymarxan extensions; Marxan's Probability 1D
@@ -2240,7 +2316,7 @@ Modify `docs/USER_MANUAL.md` (apply this diff):
 
 ```diff
 diff --git a/docs/USER_MANUAL.md b/docs/USER_MANUAL.md
-index 10e9ebe..e3785bd 100644
+index 10e9ebe..19a63bc 100644
 --- a/docs/USER_MANUAL.md
 +++ b/docs/USER_MANUAL.md
 @@ -24,10 +24,11 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
@@ -2255,7 +2331,7 @@ index 10e9ebe..e3785bd 100644
  9. [Calibrate](#calibrate)
     - [BLM Calibration](#blm-calibration)
     - [Target Sensitivity](#target-sensitivity)
-@@ -378,10 +379,57 @@ pyMarxan supports ten solver algorithms:
+@@ -378,10 +379,60 @@ pyMarxan supports ten solver algorithms:
  | 3 | Heuristic + iterative improvement |
  | 4 | Heuristic + SA (pick best) |
  | 5 | Heuristic + SA + improvement (highest quality) |
@@ -2280,8 +2356,10 @@ index 10e9ebe..e3785bd 100644
 +an effective cost, mode 2 as scaled amounts), and every reported value
 +(`Solution.objective`, targets met, the summary and target-met tables) uses them. A unit
 +missing from the table has probability 0; a unit listed twice uses its last row. `validate()`
-+reports duplicates, values outside [0, 1] and non-finite values (a blank cell reads as NaN);
-+every solver and the evaluator raise `ValueError` on a non-finite probability.
++reports duplicates, values outside [0, 1] and non-finite values (a blank cell reads as NaN)
++in every mode. Wherever the table is read — mode 1 with `PROBABILITYWEIGHTING` above 0, and
++mode 2 — every solver and the evaluator raise `ValueError` on a non-finite probability; modes
++0 and 3, and mode 1 with a weighting of 0 or below, ignore the table.
 +
 +Marxan's own **Probability 1D** (a `prob` column in `pu.dat`, a Z-score on the expected
 +amount `Σ amount × (1 − p)` with variance `Σ amount² × p × (1 − p)` against `ptarget1d`) is
@@ -2297,9 +2375,10 @@ index 10e9ebe..e3785bd 100644
 +`ptarget` (same mean and variance; zero-variance features differ as noted above).
 +
 +Under PROBMODE 2 some paths still use raw amounts: clumping occupancy (`target2`), separation
-+occurrence and space-target weights (simulated annealing warns when PROBMODE 2 meets active
-+clumping or separation: it optimises those features on raw amounts while reports use expected
-+amounts); the MIP presolve reachability check; irreplaceability and Ferrier importance; and
++occurrence and space-target weights (simulated annealing and iterative improvement warn when
++PROBMODE 2 meets active clumping or separation — once per SA solve, once per solution
++iterative improvement improves: they optimise those features on raw amounts while reports use
++expected amounts); the MIP presolve reachability check; irreplaceability and Ferrier importance; and
 +relative (`prop`) target resolution, which is measured against raw feature totals — so a
 +relative target under mode 2 asks for a share of the raw total out of expected amounts, and is
 +infeasible when `prop` exceeds `Σ_i a_ij(1 − p_i) / Σ_i a_ij` (one minus the amount-weighted
@@ -2313,7 +2392,7 @@ index 10e9ebe..e3785bd 100644
  By default the MIP selects whole planning units (`decisions="binary"`). Two other decision
  types let the plan take **part of a unit** — protecting or restoring a share of its area,
  or committing a share of management effort, e.g. restoration shares or land-use fractions.
-@@ -652,20 +700,20 @@ Download results as CSV files:
+@@ -652,20 +703,20 @@ Download results as CSV files:
  | **ITIMPTYPE** | Improvement strategy for iterative improvement (0–3) |
  | **RUNMODE** | Pipeline combination of heuristic, SA, and improvement algorithms (0–6) |
  | **Selection Frequency** | How often a PU appears in the solution across multiple runs (0–100%) |
@@ -2529,7 +2608,7 @@ Expected: passes; prints the ratios (prototype, 1000 PUs × 50 features, 20k del
 - [ ] **Step 4: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes (prototype: 3725 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
+Expected: ruff and mypy clean; the full suite passes (prototype: 3732 passed, 101 skipped HiGHS cases which run in CI, 21–22 bench deselected); no golden JSON regenerated; no existing test changed except the Stage 3 probmode2 records via STAGE3_PROBMODE2_FIXED.
 
 - [ ] **Step 5: Commit**
 
