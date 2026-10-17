@@ -1,6 +1,6 @@
 # SA optimises connectivity (v0.44.0) — design
 
-**Date:** 2026-10-17 · **Status:** approved approach (A), spec under review
+**Date:** 2026-10-17 · **Status:** approved; amended by the 4-lens review (`2026-10-17-sa-connectivity-review.md`, rulings R1–R6)
 **Follows:** v0.43.0, which aligned `compute_connectivity_penalty` with the MIP's connectivity
 term (`docs/plans/2026-10-17-stage4-proportion-decisions-design.md`, as-built amendment).
 
@@ -94,7 +94,9 @@ Both are O(degree). When `conn_mode == 0` the only cost is one integer compariso
 - **SA consistency:** a seeded SA run on a connectivity problem (no clumping, separation,
   space or PROBMODE 1): the reported `Solution.objective` equals
   `metadata["history"]["best_objective"][-1]` to 1e-9 (`metadata["best_objective"]` is
-  rounded to 4 places). Today this fails; it is the headline regression test.
+  rounded to 4 places), and the plan's connectivity term is non-zero (without that check the
+  symmetric case passed on the old code: its seed-42 plan had connectivity 0). Both modes fail
+  on the old code; it is the headline regression test.
 - **SA behaviour:** on the `test_connectivity_mip` fixture (strong symmetric 1–2 link), seeded
   SA selects both PUs 1 and 2; asymmetric fixture: never PU 1 without PU 2.
 - **II:** iterative improvement's removal/addition passes see the term (a fixture where
