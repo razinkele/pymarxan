@@ -4,13 +4,13 @@
 
 **Goal:** A planning unit can be partly selected (`MIPSolver(decisions="proportion"|"semicontinuous", upper=..., lower=...)`). Every number downstream of the solver is consistent with the fractions, binary results do not change, and tools that only make sense for 0/1 plans refuse fractional plans with a clear error. Nothing rounds silently.
 
-**Architecture:** `Solution.selected` becomes `float64` for non-binary runs and stays `bool` otherwise. **The dtype is the discriminator**, so every binary code path is literally untouched and the binary goldens pin that. The MIP gets continuous `x` (plus a binary on/off `s` per PU for the true semicontinuous floor), a rejection gate at the top of `_build_base`, and `_extract_selected` with upward-only snapping. The evaluators in `solvers/utils.py` become fraction-linear with a target tolerance `1e-6 + 1e-7·|R|` (new `solvers/_tolerance.py`). Readers of `selected` fall into one of three groups: fraction-aware, guarded by `require_binary` / `FractionalSolutionError`, or internal / count-only. A completeness test keeps that classification exhaustive.
+**Architecture:** `Solution.selected` becomes `float64` for non-binary runs and stays `bool` otherwise. **The dtype is the discriminator**, so every binary code path is literally untouched and the binary goldens pin that. The MIP gets continuous `x` (plus a binary on/off `s` per PU for the true semicontinuous floor), a rejection gate at the top of `_build_base`, and `_extract_selected` with upward-only snapping. The evaluators in `solvers/utils.py` become fraction-linear with a purely relative target tolerance `1e-7·|R|` (new `solvers/_tolerance.py`); decision validation and extraction live in the leaf module `solvers/_decisions.py`. Readers of `selected` fall into one of three groups: fraction-aware, guarded by `require_binary` / `FractionalSolutionError`, or internal / count-only. A completeness test keeps that classification exhaustive.
 
 **Tech Stack:** Python 3.11+, PuLP 3.3.2 + CBC (HiGHS is not installed locally; its parametrized cases skip and run in CI), numpy, pandas, Shiny for Python; pytest.
 
-**Spec:** `docs/plans/2026-10-17-stage4-proportion-decisions-design.md` (approved 2026-10-17 after 4 review-loop rounds). Executors read it. The spec is the authority, and this plan argues from it.
+**Spec:** `docs/plans/2026-10-17-stage4-proportion-decisions-design.md` (approved 2026-10-17 after 4 review-loop rounds; as-built amendments from the 4-lens design review at its top). Executors read it. The spec is the authority, and this plan argues from it.
 
-**Provenance:** every code block below is extracted (`git show`) from a prototype built task by task in a scratch worktree, one commit per task. It ran there under the commands shown, with the full gate green at the last commit. Prototype commits: Task 1 `14418d4`, Task 2 `0c9210c`, Task 3 `c8cfe78`, Task 4 `92bff83`, Task 5 `c313133`, Task 6 `816dd70`, Task 7 `4893192`, Task 8 `d395815`, Task 9 `0070744`, Task 10 `2c0fe48` (base `8b133f4`). Diffs apply with `git apply --whitespace=nowarn` (or `--3way`) on the previous task's tree. Editors that strip trailing whitespace from pasted context lines break a plain `git apply`. New files are given in full.
+**Provenance:** every code block below is extracted (`git show`) from a prototype built task by task in a scratch worktree, one commit per task. It ran there under the commands shown, with the full gate green at the last commit. Prototype commits: Task 1 `14418d4`, Task 2 `46ba5c6`, Task 3 `d5b4c9a`, Task 4 `d311619`, Task 5 `6394bf2`, Task 6 `e312ad1`, Task 7 `6d48c46`, Task 8 `5183360`, Task 9 `05d8f32`, Task 10 `3d0e59f` (base `8b133f4`). Diffs apply with `git apply --whitespace=nowarn` on the previous task's tree. Every block was replayed that way on a fresh worktree from the base, and each task's tree matched the prototype commit. Editors that strip trailing whitespace from pasted context lines break a plain `git apply`. New files are given in full.
 
 ## Global Constraints
 
@@ -27,7 +27,7 @@
   "Byte-identical" binary model means identical `canonical_model` form (`tests/pymarxan/lp_canon.py`: an order-independent dump of rows, objective and variable bounds). The one intended binary change is spec §6.5: the Shiny summary table now applies MISSLEVEL.
 - The `tests/data/simple` anchor holds: binary `MIPSolver` min_set at BLM 0 gives cost 35.0.
 - Constants are verbatim from the spec:
-  - `TARGET_ABS_TOL = 1e-6`, `TARGET_REL_TOL = 1e-7`;
+  - `TARGET_REL_TOL = 1e-7` (tolerance purely relative; no absolute term);
   - `ZERO_TOL = 1e-9`, `SNAP_TOL = 1e-6`;
   - `decisions ∈ ("binary", "proportion", "semicontinuous")`;
   - binary requires `upper == 1.0` and `lower == 0.0`;
@@ -46,15 +46,38 @@
 
 These are inputs a user will plausibly hit that the spec's acceptance list doesn't name. Each is pinned by a test in its owning task.
 1. **BLM calibration with a proportion solver**: `calibrate_blm` / `pareto_frontier` must work unchanged, return fractional-typed solutions, and give a boundary that never increases as BLM grows. → `test_calibrate_blm_with_proportion_solver` (Task 8, `tests/pymarxan/calibration/test_blm_fractional.py`).
-2. **Locks under the semicontinuous floor**: with `lower < upper < 1`, a locked-in PU sits at exactly `upper` and a locked-out PU at 0, not merely somewhere in the band. → `test_semicontinuous_locks` (Task 4).
+2. **Locks under the semicontinuous floor**: with `lower < upper < 1`, a locked-in PU sits at exactly 1.0 (spec amendment: locked-in = 1.0, `upper` caps only free PUs) and a locked-out PU at 0. → `test_semicontinuous_locks` (Task 4).
 3. **A PU PuLP never writes** (zero cost, no `pu_vs_features` rows, value `None`) must read 0.0 in a float64 selection, not crash or turn the dtype to object. → `test_proportion_unwritten_pu_reads_zero` (Task 4).
 4. **Written fractions survive a round trip**: run and best files re-read with pandas match x to 1e-9 relative, and binary solutions still write ints. → `test_run_best_values_round_trip` (Task 7).
 5. **The Shiny comparison map given a fractional plan** shows an explanation and doesn't raise out of a render function. This test found a real bug while prototyping. → `test_comparison_summary_explains_fractional` (Task 9).
 
+## Design-review rulings (4-lens review, synthesis `docs/plans/2026-10-17-stage4-review.md`)
+
+- **R1, Task 3:** the tolerance is purely relative, `tol(R) = 1e-7·|R|`. Tests cover amount scales 1e-6, 1e-3, 1, 1e4 and 1e8. An empty float plan with targets ≤ 1e-6 reports every target unmet.
+- **R2, Tasks 2–3:** `_coerce_selected(selected, n_pu)` validates the input at `build_solution` / `binarize_solution`:
+  - the length must match;
+  - floats must be finite and in [0, 1];
+  - int 0/1 arrays become bool, fixing a pre-existing fancy-indexing bug;
+  - other ints raise.
+- **R3, Task 4 (user decision):** locked-in is fixed at `x = 1.0` in every mode, as a continuous `x` with upper bound 1 plus the `x == 1` row. Locked units get no semicontinuous `s` or rows. Extraction clips each PU to its own variable's bound.
+- **R4, Task 5:** P9a's floor is the unscaled locked cost. P6 and P11 count locked units in full, and the literal binary formulas are kept when `upper == 1`.
+- **R5, Task 4:** there is no upward snap to `upper`. Extraction keeps the clip, dust removal, the semicontinuous snap to `lower`, and `s = 0` → 0.
+- **R6, Tasks 4–5:** `solvers/_decisions.py` holds `DECISIONS`, `_validate_decisions`, `_bound`, `ZERO_TOL`, `SNAP_TOL` and `_extract_selected`; `mip_solver` re-exports them. `presolve_check` validates its bound arguments.
+- **R7, Tasks 7–9:** `compute_held(problem, selected, pu_index=None)` and `require_binary_solver` are public and re-exported from `pymarxan.solvers`. No private cross-module imports remain.
+- **R8–R9, Tasks 3 and 10:**
+  - The `binarize_solution` docstring and the manual say that thresholding can miss targets and can flip a feature from met to unmet (a pinned test covers this).
+  - The manual example prints `all_targets_met` and points to binary or semicontinuous decisions for a feasible 0/1 plan.
+  - The manual states the evenly-spread assumption behind Σ r·x, the tolerance parity note, which prioritizr formulation the boundary equivalence holds for, that fractional boundary is a linear surrogate, what frequency means for fractional sets, and that the raw-array APIs are binary-only.
+- **Not adopted:**
+  - guards on raw-array constraint/objective APIs (they sit in SA hot paths and no MIP solution reaches them; documented instead);
+  - a metadata `decisions` key;
+  - de-duplicating the Σx/format idiom;
+  - a `DecisionSpec` object.
+
 ## Rulings made while prototyping
 
 Where the spec was silent, these choices were made; each names its task.
-- **Tolerance module (Task 3).** The constants live in the new stdlib-only `solvers/_tolerance.py`, so `_mip_objectives.py` stays "pulp + stdlib only". `solvers.utils` re-exports `TARGET_ABS_TOL`, `TARGET_REL_TOL` and `target_tol`.
+- **Tolerance module (Task 3).** The constants live in the new stdlib-only `solvers/_tolerance.py`, so `_mip_objectives.py` stays "pulp + stdlib only". `solvers.utils` re-exports `TARGET_REL_TOL` and `target_tol`.
 - **Shared conflict helper (Tasks 3, 4).** `utils._nonbinary_conflicts(problem) -> list[str]` (clumping / separation / space reasons) feeds both `build_solution`'s fractional `ValueError` and the MIP gate. `_total_cost` keeps the literal `np.sum(costs[selected])` for bool input.
 - **PROBMODE default (Task 3).** The fractional PROBMODE 3 error uses `compute_probability_penalty`'s own default: PROBMODE absent means 1, so there is no error.
 - **`binarize_solution` (Task 3)** validates the threshold first, including for binary input. It accepts finite non-bool numbers in (0, 1] and rejects NaN. It is re-exported from `pymarxan.solvers`.
@@ -68,12 +91,12 @@ Where the spec was silent, these choices were made; each names its task.
 - **MultiObjectiveMIP (Task 6)** copies `decisions` / `upper` / `lower` from its validated inner `MIPSolver`. In non-binary modes its `rounded()` closure returns `dict(zip(base.pu_ids, base.extract()))`. The proportion test uses `simple` + COSTBUDGET 30 at `rel_tol` 0, where all 3 features are met on active rows (probe: budgets 10–20 meet none, 25 meets 1).
 - **Writers (Task 7):**
   - A binary `write_solution_matrix` keeps its old `np.column_stack` path. If any solution is fractional, every column goes through `_solution_column`: ints for binary columns, `.10g` strings for fractional ones.
-  - `write_mvbest` and `export_summary_csv` take held amounts from `_compute_achieved` for binary too (the sums are identical for float amounts). `export_summary_csv` keeps its "no target column" fallback, where met is True.
+  - `write_mvbest` and `export_summary_csv` take held amounts from `compute_held` (public per R7) for binary too (the sums are identical for float amounts). `export_summary_csv` keeps its "no target column" fallback, where met is True.
   - The fractional ssoln `Number` is the raw float Σx. `read_ssoln` casts to int unless `Number` is a NaN-free float column with some non-integral value, so NaN or text still raise.
   - `export_solution_spatial` writes `float(format(x, ".10g"))`, a float column for GPKG/SHP.
   - In `zones/writers.py` only the `zone_assignment is None` fallbacks are guarded.
 - **Guards (Task 8):**
-  - The solver guards share `solvers.base._require_binary_solver(solver, context)`.
+  - The solver guards share `solvers.base.require_binary_solver(solver, context)` (public per R7).
   - `IterativeImprovementSolver.improve` guards before its ITIMPTYPE 0 early return. SA has no `improve()` entry point, so the SA side of spec §6.2 is covered through `run_mode` chains.
   - `robustness` keeps its bool normalisation for non-float selections, because a hand-built 0/1 int array would otherwise be fancy-indexed. It drops that normalisation only for fractional plans.
   - The completeness test also checks that each GUARDED module, and each guarded function in a MIXED module, contains `require_binary`.
@@ -343,7 +366,7 @@ Expected: 37 passed
 - [ ] **Step 4: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 5: Commit**
 
@@ -366,7 +389,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces (`pymarxan.solvers.base`, re-exported from `pymarxan.solvers`): `Solution.is_fractional -> bool` (dtype kind `"f"`), `Solution.selected_sum -> float`, `Solution.n_selected -> int` (count of `x > 0`), `class FractionalSolutionError(ValueError)`, `require_binary(solution: Solution, context: str) -> None`, and the private `_require_binary_solver(solver: object, context: str) -> None` (reads `getattr(solver, "decisions", "binary")`; used in Task 8).
+- Produces (`pymarxan.solvers.base`, re-exported from `pymarxan.solvers`): `Solution.is_fractional -> bool` (dtype kind `"f"`), `Solution.selected_sum -> float`, `Solution.n_selected -> int` (count of `x > 0`), `class FractionalSolutionError(ValueError)`, `require_binary(solution: Solution, context: str) -> None`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -429,7 +452,7 @@ def test_require_binary_rejects_fractional() -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_fractional_solution.py -q`
-Expected: FAIL — collection error (`ImportError: cannot import name 'FractionalSolutionError'`)
+Expected: FAIL — collection error (`ImportError` on the new names in `pymarxan.solvers.base`)
 
 - [ ] **Step 3: Implement**
 
@@ -480,24 +503,26 @@ Modify `src/pymarxan/solvers/base.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/base.py b/src/pymarxan/solvers/base.py
-index 9d74e7b..a7ebecc 100644
+index 9d74e7b..35fbd3f 100644
 --- a/src/pymarxan/solvers/base.py
 +++ b/src/pymarxan/solvers/base.py
-@@ -11,11 +11,12 @@ from pymarxan.models.problem import ConservationProblem
+@@ -11,11 +11,14 @@ from pymarxan.models.problem import ConservationProblem
  
  @dataclass
  class Solution:
      """Result of a conservation planning optimization run."""
  
 -    selected: np.ndarray  # Boolean array: is planning unit i selected?
-+    # bool array, or float64 proportions in [0, 1] when solved with non-binary decisions
++    # One entry per planning unit, in planning_units order: a bool array, or float64
++    # proportions, finite and in [0, 1], when solved with non-binary decisions. The dtype
++    # is the discriminator; build_solution enforces this (int 0/1 arrays become bool).
 +    selected: np.ndarray
      cost: float
      boundary: float
      objective: float  # cost + BLM * boundary + penalties
      # Feature ID -> met. Zone solvers report the overall (contribution-weighted) feature
      # targets here and the per-zone targets in metadata["zone_targets_met"].
-@@ -49,13 +50,39 @@ class Solution:
+@@ -49,13 +52,39 @@ class Solution:
  
      @property
      def all_targets_met(self) -> bool:
@@ -548,7 +573,7 @@ Expected: 5 passed
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
@@ -573,7 +598,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 
 **Interfaces:**
 - Consumes: Task 2's `Solution.is_fractional`.
-- Produces: new `pymarxan/solvers/_tolerance.py` with `TARGET_ABS_TOL = 1e-6`, `TARGET_REL_TOL = 1e-7`, `target_tol(v: float) -> float` (re-exported by `solvers.utils`); in `solvers/utils.py`: `_is_fractional(selected: np.ndarray) -> bool`, `_nonbinary_conflicts(problem) -> list[str]` (Task 4's gate reuses it), `_total_cost(costs, selected) -> float`, fraction-linear `_compute_achieved` / `compute_boundary` / `compute_connectivity_penalty` / PROBMODE 1 premium / `check_targets` / `compute_feature_shortfalls`, PROBMODE 3 `ValueError` in `compute_probability_penalty`, `build_solution` `ValueError` for fractional + clumping/separation/space, `binarize_solution(problem, solution, threshold=0.5) -> Solution` (re-exported from `pymarxan.solvers`); test helper module `tests/pymarxan/fractional_fixtures.py` (`three_pu`, `X`, `PU_INDEX`).
+- Produces: new `pymarxan/solvers/_tolerance.py` with `TARGET_REL_TOL = 1e-7`, `target_tol(v: float) -> float` (= `1e-7·|v|`) (re-exported by `solvers.utils`); in `solvers/utils.py`: `_is_fractional(selected: np.ndarray) -> bool`, `_coerce_selected(selected, n_pu) -> np.ndarray` (input contract, R2), `_nonbinary_conflicts(problem) -> list[str]` (Task 4's gate reuses it), `_total_cost(costs, selected) -> float`, fraction-linear `_compute_achieved` / `compute_boundary` / `compute_connectivity_penalty` / PROBMODE 1 premium / `check_targets` / `compute_feature_shortfalls`, PROBMODE 3 `ValueError` in `compute_probability_penalty`, `build_solution` `ValueError` for fractional + clumping/separation/space, `binarize_solution(problem, solution, threshold=0.5) -> Solution` (re-exported from `pymarxan.solvers`); test helper module `tests/pymarxan/fractional_fixtures.py` (`three_pu`, `X`, `PU_INDEX`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -623,9 +648,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers import binarize_solution
 from pymarxan.solvers.utils import (
-    TARGET_ABS_TOL,
     TARGET_REL_TOL,
     _compute_achieved,
     _is_fractional,
@@ -642,10 +667,9 @@ from tests.pymarxan.fractional_fixtures import PU_INDEX, X, three_pu
 
 
 def test_target_tol() -> None:
-    assert TARGET_ABS_TOL == 1e-6
     assert TARGET_REL_TOL == 1e-7
-    assert target_tol(0.0) == 1e-6
-    assert target_tol(-1e8) == pytest.approx(1e-6 + 10.0)
+    assert target_tol(0.0) == 0.0
+    assert target_tol(-1e8) == pytest.approx(10.0)
 
 
 def test_is_fractional() -> None:
@@ -779,12 +803,74 @@ def test_binarize_rejects_bad_threshold(threshold: float) -> None:
     frac = build_solution(p, X, 1.0)
     with pytest.raises(ValueError, match="threshold"):
         binarize_solution(p, frac, threshold=threshold)
+
+
+@pytest.mark.parametrize("target", [1e-6, 1e-9])
+def test_empty_fractional_plan_misses_tiny_targets(target: float) -> None:
+    """Review R1: a purely relative tolerance; nothing held never meets a positive target."""
+    p = three_pu()
+    p = p.copy_with(features=p.features.assign(target=[target, target / 10]))
+    s = build_solution(p, np.zeros(3), 1.0)
+    assert s.targets_met == {1: False, 2: False}
+    assert s.shortfall == pytest.approx(1.1 * target)
+    assert s.shortfall > 0
+
+
+def test_zero_target_met_by_any_plan() -> None:
+    p = three_pu()
+    p = p.copy_with(features=p.features.assign(target=[0.0, 0.0]))
+    assert build_solution(p, np.zeros(3), 1.0).targets_met == {1: True, 2: True}
+
+
+@pytest.mark.parametrize(
+    ("selected", "match"),
+    [
+        (np.array([0.5, np.nan, 1.0]), "entry 1 is nan"),
+        (np.array([0.5, 2.0, 1.0]), "entry 1 is 2.0"),
+        (np.array([-0.5, 0.0, 1.0]), "entry 0 is -0.5"),
+        (np.array([1, 2, 0]), "only 0 and 1"),
+        (np.array([True, False]), "one entry per planning unit"),
+        (np.array(["a", "b", "c"]), "bool, integer 0/1 or float"),
+    ],
+)
+def test_selection_contract_rejects(selected: np.ndarray, match: str) -> None:
+    """Review R2: build_solution (and binarize_solution) enforce the selection contract."""
+    with pytest.raises(ValueError, match=match):
+        build_solution(three_pu(), selected, 1.0)
+
+
+def test_selection_contract_coerces() -> None:
+    p = three_pu()
+    s32 = build_solution(p, X.astype(np.float32), 1.0)
+    assert s32.selected.dtype == np.float64
+    assert s32.cost == pytest.approx(40.0)
+    ints = build_solution(p, np.array([1, 0, 1]), 1.0)  # fancy-indexed before Stage 4
+    assert ints.selected.dtype == bool
+    assert ints.cost == 40.0
+    assert ints.objective == build_solution(p, np.array([True, False, True]), 1.0).objective
+    assert build_solution(p, np.array([1, 0, 1], dtype=np.uint8), 1.0).cost == 40.0
+
+
+def test_binarize_can_flip_a_met_target() -> None:
+    """Review R8: binarising re-applies the exact binary rule. 0.7 + 0.1 holds 0.8 within
+    the fractional tolerance but is short of 0.8 in floating point, so it flips to unmet."""
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0, 1.0, 100.0], "status": [0, 0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [0.8], "spf": [1.0]})
+    pvf = pd.DataFrame({"species": [1, 1, 1], "pu": [1, 2, 3], "amount": [0.7, 0.1, 5.0]})
+    p = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pvf)
+    frac = build_solution(p, np.array([1.0, 1.0, 0.0]), 0.0)
+    assert frac.targets_met == {1: True}
+    plan = binarize_solution(p, frac)
+    assert plan.selected.tolist() == [True, True, False]
+    assert plan.targets_met == {1: False}
+    assert plan.shortfall > 0
+
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_fractional_evaluators.py -q`
-Expected: FAIL — collection error (`ImportError` on `target_tol` / `binarize_solution` / the fixtures module's imports)
+Expected: FAIL — collection error (`ModuleNotFoundError: pymarxan.solvers._tolerance` / `ImportError` on the new utils names)
 
 - [ ] **Step 3: Implement**
 
@@ -827,27 +913,28 @@ Create `src/pymarxan/solvers/_tolerance.py`:
 ``solvers.utils`` and ``solvers._mip_objectives`` (pulp + stdlib) can both import it.
 
 An LP optimum leaves every active target row at ``R − O(1e-9·|R|)`` (CBC), so an exact
-``held >= R`` flips on solver noise. Binary plans keep the exact comparison.
+``held >= R`` flips on solver noise. Binary plans keep the exact comparison. The tolerance
+is purely relative: an absolute floor would let a plan holding nothing "meet" any target at
+or below that floor (review R1). A target R = 0 is met by every plan.
 """
 from __future__ import annotations
 
-TARGET_ABS_TOL = 1e-6
 TARGET_REL_TOL = 1e-7
 
 
 def target_tol(v: float) -> float:
-    """``TARGET_ABS_TOL + TARGET_REL_TOL·|v|``: absolute alone fails at large magnitudes."""
-    return TARGET_ABS_TOL + TARGET_REL_TOL * abs(v)
+    """``TARGET_REL_TOL·|v|``, scale-free across amount magnitudes."""
+    return TARGET_REL_TOL * abs(v)
 ```
 
 Modify `src/pymarxan/solvers/utils.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/utils.py b/src/pymarxan/solvers/utils.py
-index 229e875..e7131b0 100644
+index 229e875..c21d090 100644
 --- a/src/pymarxan/solvers/utils.py
 +++ b/src/pymarxan/solvers/utils.py
-@@ -1,15 +1,58 @@
+@@ -1,15 +1,93 @@
 -"""Shared utility functions for conservation planning solvers."""
 +"""Shared utility functions for conservation planning solvers.
 +
@@ -863,7 +950,6 @@ index 229e875..e7131b0 100644
  import pandas as pd
  
  from pymarxan.models.problem import ConservationProblem
-+from pymarxan.solvers._tolerance import TARGET_ABS_TOL as TARGET_ABS_TOL
 +from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 +from pymarxan.solvers._tolerance import target_tol as target_tol
  from pymarxan.solvers.base import Solution
@@ -872,6 +958,42 @@ index 229e875..e7131b0 100644
 +def _is_fractional(selected: np.ndarray) -> bool:
 +    """A proportion selection: the dtype decides, not the values (spec §5.1)."""
 +    return np.asarray(selected).dtype.kind == "f"
++
++
++def _coerce_selected(selected: np.ndarray, n_pu: int) -> np.ndarray:
++    """The ``Solution.selected`` input contract (review R2), enforced where selections enter.
++
++    One entry per planning unit (``ValueError`` otherwise). bool: unchanged. Float kind:
++    float64, finite and within [0, 1]. int / uint holding only 0 and 1: cast to bool (they
++    were fancy-indexed before Stage 4); any other int, or another dtype: ``ValueError``.
++    """
++    arr = np.asarray(selected)
++    if arr.ndim != 1 or arr.shape[0] != n_pu:
++        raise ValueError(
++            f"selected must have one entry per planning unit ({n_pu}), got shape {arr.shape}"
++        )
++    kind = arr.dtype.kind
++    if kind == "b":
++        return arr
++    if kind == "f":
++        arr = arr.astype(np.float64)
++        bad = ~np.isfinite(arr) | (arr < 0.0) | (arr > 1.0)
++        if bad.any():
++            i = int(np.flatnonzero(bad)[0])
++            raise ValueError(
++                f"selected proportions must be finite and within [0, 1]; entry {i} is "
++                f"{float(arr[i])!r}"
++            )
++        return arr
++    if kind in "iu":
++        if np.isin(arr, (0, 1)).all():
++            return arr.astype(bool)
++        i = int(np.flatnonzero(~np.isin(arr, (0, 1)))[0])
++        raise ValueError(
++            f"integer selections must hold only 0 and 1 (entry {i} is {int(arr[i])!r}); pass a "
++            "bool array, or float64 proportions"
++        )
++    raise ValueError(f"selected must be a bool, integer 0/1 or float array, got {arr.dtype}")
 +
 +
 +def _nonbinary_conflicts(problem: ConservationProblem) -> list[str]:
@@ -907,7 +1029,7 @@ index 229e875..e7131b0 100644
      selected: np.ndarray,
      pu_index: dict[int, int],
  ) -> dict[int, float]:
-@@ -27,10 +70,20 @@ def _compute_achieved(
+@@ -27,10 +105,20 @@ def _compute_achieved(
          [pu_index.get(int(pid), -1) for pid in pu_col], dtype=np.intp
      )
      valid = pu_indices >= 0
@@ -928,7 +1050,7 @@ index 229e875..e7131b0 100644
      # Use only selected rows and groupby species
      selected_amounts = pd.DataFrame({
          "species": species_col[sel_mask],
-@@ -54,13 +107,15 @@ def compute_boundary(
+@@ -54,13 +142,15 @@ def compute_boundary(
  ) -> float:
      """Compute total boundary length for a given selection.
  
@@ -944,7 +1066,7 @@ index 229e875..e7131b0 100644
      id1_col = bnd["id1"].values
      id2_col = bnd["id2"].values
      bval_col = bnd["boundary"].values.astype(np.float64)
-@@ -72,16 +127,18 @@ def compute_boundary(
+@@ -72,16 +162,18 @@ def compute_boundary(
          bval = float(bval_col[i])
  
          if id1 == id2:
@@ -965,7 +1087,7 @@ index 229e875..e7131b0 100644
  
  
  def check_targets(
-@@ -93,49 +150,61 @@ def check_targets(
+@@ -93,49 +185,61 @@ def check_targets(
  ) -> dict[int, bool]:
      """Check which feature targets are met by the selection.
  
@@ -1032,7 +1154,7 @@ index 229e875..e7131b0 100644
  
  def compute_penalty(
      problem: ConservationProblem,
-@@ -206,10 +275,14 @@ def compute_connectivity_penalty(
+@@ -206,10 +310,14 @@ def compute_connectivity_penalty(
      Total = CONNECTIVITY_WEIGHT * Σ edges where exactly one PU selected * value
            - CONNECTIVITY_WEIGHT * Σ edges where both PUs selected * value
  
@@ -1047,7 +1169,7 @@ index 229e875..e7131b0 100644
      if problem.connectivity is None:
          return 0.0
  
-@@ -222,17 +295,22 @@ def compute_connectivity_penalty(
+@@ -222,17 +330,22 @@ def compute_connectivity_penalty(
      conn = problem.connectivity
      id1_col = conn["id1"].values
      id2_col = conn["id2"].values
@@ -1070,7 +1192,7 @@ index 229e875..e7131b0 100644
          if s1 and s2:
              total -= val  # bonus for connected pair
          elif s1 or s2:
-@@ -257,10 +335,16 @@ def compute_probability_penalty(
+@@ -257,10 +370,16 @@ def compute_probability_penalty(
      """
      prob_mode = int(problem.parameters.get("PROBMODE", 1))
      if prob_mode == 1:
@@ -1087,7 +1209,7 @@ index 229e875..e7131b0 100644
  
  
  def _compute_probmode1_risk_premium(
-@@ -281,17 +365,21 @@ def _compute_probmode1_risk_premium(
+@@ -281,17 +400,21 @@ def _compute_probmode1_risk_premium(
      for k in range(len(prob_pu)):
          prob_map[int(prob_pu[k])] = float(prob_val[k])
  
@@ -1110,7 +1232,7 @@ index 229e875..e7131b0 100644
  
  def _compute_probmode3_zscore_penalty(
      problem: ConservationProblem,
-@@ -408,11 +496,11 @@ def compute_objective_terms(
+@@ -408,11 +531,11 @@ def compute_objective_terms(
      dict[str, float]
          Keys include ``"base"``, ``"boundary"``, ``"penalty"``,
          ``"cost_threshold"``, ``"probability"``, and ``"objective"``.
@@ -1123,7 +1245,7 @@ index 229e875..e7131b0 100644
          problem, selected, pu_index,
      )
      penalty = compute_penalty(problem, selected, pu_index, _achieved=achieved)
-@@ -469,16 +557,28 @@ def build_solution(
+@@ -469,16 +592,30 @@ def build_solution(
  ) -> Solution:
      """Build a complete Solution from a selection array.
  
@@ -1131,8 +1253,10 @@ index 229e875..e7131b0 100644
      for post-hoc space/adequacy reporting; defaults to geographic centroids when omitted.
 +
 +    A float64 ``selected`` (proportions) is evaluated fraction-linearly (spec §5.3); with
-+    clumping, separation, space targets or PROBMODE 3 it raises ``ValueError``.
++    clumping, separation, space targets or PROBMODE 3 it raises ``ValueError``. The input
++    contract of ``_coerce_selected`` is enforced first.
      """
++    selected = _coerce_selected(selected, len(problem.planning_units))
 +    if _is_fractional(selected):
 +        conflicts = _nonbinary_conflicts(problem)
 +        if conflicts:
@@ -1153,7 +1277,7 @@ index 229e875..e7131b0 100644
      # Compute achieved amounts once, pass to all downstream functions
      achieved = _compute_achieved(problem, selected, pu_index)
      targets_met = check_targets(problem, selected, pu_index, _achieved=achieved)
-@@ -589,5 +689,26 @@ def build_solution(
+@@ -589,5 +726,33 @@ def build_solution(
          sep_shortfalls=sep_shortfalls,
          sep_penalty=sep_penalty_val,
          space_held=space_held,
@@ -1169,13 +1293,20 @@ index 229e875..e7131b0 100644
 +    The only rounding path: binary input is returned unchanged (the same object).
 +    ``0 < threshold <= 1``, else ``ValueError``. ``metadata`` keeps the solution's entries
 +    plus ``"binarized_threshold"``.
++
++    Thresholding a fractional optimum is a **conversion, not an optimisation**: the 0/1
++    plan can miss targets the proportions met and is not the best binary plan. The exact
++    binary target rule is re-applied, so a feature met within the fractional tolerance
++    can flip to unmet, and a threshold above the solve's ``upper`` selects nothing. For a
++    feasible 0/1 plan re-solve with ``decisions="binary"`` (or ``"semicontinuous"``).
 +    """
 +    if not (isinstance(threshold, int | float) and not isinstance(threshold, bool)
 +            and math.isfinite(threshold) and 0.0 < threshold <= 1.0):
 +        raise ValueError(f"threshold must be in (0, 1], got {threshold!r}")
-+    if not solution.is_fractional:
++    selected = _coerce_selected(solution.selected, len(problem.planning_units))
++    if not _is_fractional(selected):
 +        return solution
-+    mask = np.asarray(solution.selected) >= threshold
++    mask = selected >= threshold
 +    return build_solution(
 +        problem, mask, blm=float(problem.parameters.get("BLM", 0.0)),
 +        metadata={**solution.metadata, "binarized_threshold": threshold},
@@ -1185,12 +1316,12 @@ index 229e875..e7131b0 100644
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_fractional_evaluators.py -q`
-Expected: 20 passed
+Expected: 31 passed
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
@@ -1207,6 +1338,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 ### Task 4: `MIPSolver` proportion and semicontinuous decisions
 
 **Files:**
+- Create: `src/pymarxan/solvers/_decisions.py`
 - Modify: `src/pymarxan/solvers/_mip_objectives.py`
 - Modify: `src/pymarxan/solvers/mip_solver.py`
 - Modify: `tests/pymarxan/fractional_fixtures.py`
@@ -1214,7 +1346,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 
 **Interfaces:**
 - Consumes: Task 3's `target_tol`, `_nonbinary_conflicts`, fraction-aware `build_solution`.
-- Produces (`solvers/mip_solver.py`): `DECISIONS`, `ZERO_TOL = 1e-9`, `SNAP_TOL = 1e-6`, `_validate_decisions(decisions, upper, lower) -> tuple[str, float, float]`, `_reject_nonbinary(problem, config, decisions) -> None`, `_extract_selected(x_values, s_values, decisions, upper, lower) -> np.ndarray`, `_on_rule(x)`; `MIPSolver(..., decisions="binary", upper=1.0, lower=0.0)` with public `decisions`/`upper`/`lower`; `_BaseModel` / `_BuiltModel` gain `s: dict[int, LpVariable]`, `decisions`, `upper`, `lower`, and `_BaseModel.extract() -> np.ndarray`; `_and_rule` → `min`, `_src_without_sink_rule` → `max(0, ·)`. `solvers/_mip_objectives.py`: `ObjectiveContext.fractional: bool = False`, `_met_rule(term, fractional=False)`, `_slack_rule(term, fractional=False)`. Fixtures module gains `with_conn`, `Case`, `rejected_cases`, `ONE` (Task 6 and 8 import them).
+- Produces: new leaf module `solvers/_decisions.py` with `DECISIONS`, `ZERO_TOL = 1e-9`, `SNAP_TOL = 1e-6` (semicontinuous lower snap only), `_bound`, `_validate_decisions(decisions, upper, lower) -> tuple[str, float, float]`, `_extract_selected(...)` (clips each PU to its own bound; see the code for the exact signature), all re-exported by `solvers/mip_solver.py`; in `mip_solver.py`: `_reject_nonbinary(problem, config, decisions) -> None`, `_on_rule(x)`, locked-in PUs fixed at 1.0; `MIPSolver(..., decisions="binary", upper=1.0, lower=0.0)` with public `decisions`/`upper`/`lower`; `_BaseModel` / `_BuiltModel` gain `s: dict[int, LpVariable]`, `decisions`, `upper`, `lower`, and `_BaseModel.extract() -> np.ndarray`; `_and_rule` → `min`, `_src_without_sink_rule` → `max(0, ·)`. `solvers/_mip_objectives.py`: `ObjectiveContext.fractional: bool = False`, `_met_rule(term, fractional=False)`, `_slack_rule(term, fractional=False)`. Fixtures module gains `with_conn`, `Case`, `rejected_cases`, `ONE` (Task 6 and 8 import them).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1296,14 +1428,14 @@ import pytest
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers._backends import _available_backends
-from pymarxan.solvers.base import Solution, SolverConfig
-from pymarxan.solvers.mip_solver import (
+from pymarxan.solvers._decisions import (
     SNAP_TOL,
     ZERO_TOL,
-    MIPSolver,
     _extract_selected,
     _validate_decisions,
 )
+from pymarxan.solvers.base import Solution, SolverConfig
+from pymarxan.solvers.mip_solver import MIPSolver
 from tests.pymarxan.fractional_fixtures import rejected_cases, with_conn
 from tests.pymarxan.lp_canon import captured_models
 
@@ -1550,11 +1682,14 @@ def test_upper_cap_and_locks(tiny_problem: ConservationProblem) -> None:
         planning_units=pu, parameters={**tiny_problem.parameters, "MISSLEVEL": 0.8},
     )
     s = _one(p, decisions="proportion", upper=0.5)
-    assert (s.selected <= 0.5).all()
-    assert s.selected[2] == 0.5  # locked in: as fully as allowed
+    free = np.ones(6, dtype=bool)
+    free[[2, 5]] = False
+    assert (s.selected[free] <= 0.5).all()
+    assert s.selected[2] == 1.0  # locked in: whole in every mode (review R3)
     assert s.selected[5] == 0.0
     sc = _one(p, decisions="semicontinuous", upper=0.5, lower=0.2)
-    assert sc.selected[2] == 0.5 and sc.selected[5] == 0.0
+    assert sc.selected[2] == 1.0 and sc.selected[5] == 0.0
+    assert (sc.selected[free] <= 0.5).all()
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -1565,7 +1700,7 @@ def test_targets_met_at_lp_optimum_tiny(tiny_problem: ConservationProblem, backe
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-@pytest.mark.parametrize("scale", [1.0, 1e4, 1e8])
+@pytest.mark.parametrize("scale", [1e-6, 1e-3, 1.0, 1e4, 1e8])
 @pytest.mark.parametrize("seed", range(20))
 def test_targets_met_at_lp_optimum_random(seed: int, scale: float, backend: str) -> None:
     s = _one(random_problem(100 + seed, scale=scale), decisions="proportion", mip_backend=backend)
@@ -1629,22 +1764,29 @@ def test_extract_binary() -> None:
 
 
 def test_extract_proportion_snapping() -> None:
+    """Review R5: no snap up to upper; only clip and dust."""
     vals = [None, 5e-10, 1e-8, 0.4, 0.8 - 5e-7, 0.8, 0.8 + 1e-9, 0.7]
     out = _extract_selected(vals, [], "proportion", 0.8, 0.0)
     assert out.dtype == np.float64
-    assert out.tolist() == [0.0, 0.0, 1e-8, 0.4, 0.8, 0.8, 0.8, 0.7]
+    assert out.tolist() == [0.0, 0.0, 1e-8, 0.4, 0.8 - 5e-7, 0.8, 0.8, 0.7]
     assert ZERO_TOL == 1e-9 and SNAP_TOL == 1e-6
 
 
+def test_extract_per_pu_upper() -> None:
+    """Each PU is clipped to its own bound (1.0 for a locked-in unit, review R3)."""
+    out = _extract_selected([1.0, 1.0, 0.5 + 1e-9], [], "proportion", [1.0, 0.5, 0.5], 0.0)
+    assert out.tolist() == [1.0, 0.5, 0.5]
+
+
 def test_extract_semicontinuous_snapping() -> None:
-    vals = [0.3 - 5e-7, 0.3, 0.5, 1e-7, 1.0 - 1e-7, 0.2]
-    s = [1.0, 1.0, 1.0, 0.0, 1.0, 1e-9]
+    vals = [0.3 - 5e-7, 0.3, 0.5, 1e-7, 1.0 - 1e-7, 0.2, 1.0]
+    s = [1.0, 1.0, 1.0, 0.0, 1.0, 1e-9, None]  # None: no on/off variable (locked)
     out = _extract_selected(vals, s, "semicontinuous", 1.0, 0.3)
-    assert out.tolist() == [0.3, 0.3, 0.5, 0.0, 1.0, 0.0]
+    assert out.tolist() == [0.3, 0.3, 0.5, 0.0, 1.0 - 1e-7, 0.0, 1.0]
 
 
 @pytest.mark.parametrize("seed", range(5))
-def test_extract_never_lowers_except_dust_and_cap(seed: int) -> None:
+def test_extract_never_lowers_except_dust_s0_or_bound(seed: int) -> None:
     rng = np.random.default_rng(seed)
     upper, lower = 0.9, 0.25
     vals = rng.uniform(0.0, 1.0, 200)
@@ -1661,7 +1803,8 @@ def test_extract_never_lowers_except_dust_and_cap(seed: int) -> None:
 
 
 def test_semicontinuous_locks(tiny_problem: ConservationProblem) -> None:
-    """Review focus: locked in sits at upper exactly, locked out at 0, with lower < upper < 1."""
+    """Review focus (R3): locked in is whole (1.0), locked out 0, free x in {0} ∪ [lower,
+    upper], with lower < upper < 1."""
     pu = tiny_problem.planning_units.copy()
     pu.loc[pu["id"] == 3, "status"] = 2
     pu.loc[pu["id"] == 6, "status"] = 3
@@ -1669,9 +1812,9 @@ def test_semicontinuous_locks(tiny_problem: ConservationProblem) -> None:
         planning_units=pu, parameters={**tiny_problem.parameters, "MISSLEVEL": 0.6},
     )
     s = _one(p, decisions="semicontinuous", upper=0.7, lower=0.3)
-    assert s.selected[2] == 0.7
+    assert s.selected[2] == 1.0
     assert s.selected[5] == 0.0
-    x = s.selected
+    x = np.delete(s.selected, [2, 5])
     assert ((x == 0.0) | ((x >= 0.3) & (x <= 0.7))).all(), x
 
 
@@ -1693,9 +1836,92 @@ def test_proportion_unwritten_pu_reads_zero(tiny_problem: ConservationProblem) -
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_mip_decisions.py -q`
-Expected: FAIL — collection error (`ImportError` on `_extract_selected` / `DECISIONS`)
+Expected: FAIL — collection error (`ModuleNotFoundError: No module named 'pymarxan.solvers._decisions'`); with that module present but `mip_solver` unchanged, 165 fail
 
 - [ ] **Step 3: Implement**
+
+Create `src/pymarxan/solvers/_decisions.py`:
+
+```python
+"""Decision types for ``MIPSolver`` / ``MultiObjectiveMIP`` (Stage 4): validation and the
+extraction of ``Solution.selected`` from solver values. numpy / stdlib only, so the solvers
+and ``presolve_check`` share it without import cycles (review R6).
+"""
+from __future__ import annotations
+
+import math
+import numbers
+from collections.abc import Sequence
+
+import numpy as np
+
+DECISIONS = ("binary", "proportion", "semicontinuous")
+ZERO_TOL = 1e-9  # extracted x <= ZERO_TOL is solver dust -> 0 (spec §4)
+SNAP_TOL = 1e-6  # semicontinuous: x within SNAP_TOL below lower snaps up to lower
+
+
+def _bound(name: str, value: object) -> float:
+    if (
+        not isinstance(value, numbers.Real) or isinstance(value, bool)
+        or not math.isfinite(float(value))
+    ):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return float(value)
+
+
+def _validate_decisions(
+    decisions: str, upper: float, lower: float,
+) -> tuple[str, float, float]:
+    """``(decisions, upper, lower)`` validated per the spec §2 table; ``ValueError`` naming
+    the offending argument."""
+    if decisions not in DECISIONS:
+        raise ValueError(
+            "decisions must be one of 'binary', 'proportion', 'semicontinuous', "
+            f"got {decisions!r}"
+        )
+    up, lo = _bound("upper", upper), _bound("lower", lower)
+    if decisions != "semicontinuous" and lo != 0.0:
+        raise ValueError(f"lower only applies to decisions='semicontinuous', got {lower!r}")
+    if decisions == "binary":
+        if up != 1.0:
+            raise ValueError(
+                "upper only applies to decisions='proportion' or 'semicontinuous', "
+                f"got {upper!r}"
+            )
+        return decisions, up, lo
+    if not 0.0 < up <= 1.0:
+        raise ValueError(f"upper must be in (0, 1], got {upper!r}")
+    if decisions == "semicontinuous" and not 0.0 < lo <= up:
+        raise ValueError(f"lower must be in (0, upper], got {lower!r} (upper {up!r})")
+    return decisions, up, lo
+
+
+def _extract_selected(
+    x_values: Sequence[float | None],
+    s_values: Sequence[float | None],
+    decisions: str,
+    upper: float | Sequence[float],
+    lower: float,
+) -> np.ndarray:
+    """PU-ordered ``varValue``s -> ``Solution.selected`` (spec §4, review R5).
+
+    Binary: ``bool(round(v))``. Otherwise float64 clipped to ``[0, upper]`` (a scalar, or
+    one bound per PU: 1.0 for locked-in units); ``x <= ZERO_TOL`` -> 0. Semicontinuous:
+    ``lower − SNAP_TOL <= x < lower`` -> ``lower``, and ``round(s) == 0`` -> 0 (``s``
+    ``None``: the PU has no on/off variable, e.g. it is locked). Nothing else moves, so a
+    value is never lowered except dust, ``s = 0``, or ``x`` above its bound.
+    """
+    if decisions == "binary":
+        return np.array([bool(round(v or 0.0)) for v in x_values], dtype=bool)
+    ub = np.broadcast_to(np.asarray(upper, dtype=np.float64), (len(x_values),))
+    out = np.clip(np.array([v or 0.0 for v in x_values], dtype=np.float64), 0.0, ub)
+    out[out <= ZERO_TOL] = 0.0
+    if decisions == "semicontinuous":
+        out[(out >= lower - SNAP_TOL) & (out < lower)] = lower
+        off = np.array([v is not None and round(v) == 0 for v in s_values], dtype=bool)
+        out[off] = 0.0
+    return out
+```
 
 Modify `src/pymarxan/solvers/_mip_objectives.py` (apply this diff):
 
@@ -1816,25 +2042,36 @@ Modify `src/pymarxan/solvers/mip_solver.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/mip_solver.py b/src/pymarxan/solvers/mip_solver.py
-index f31b14a..0bee858 100644
+index f31b14a..e75ce2a 100644
 --- a/src/pymarxan/solvers/mip_solver.py
 +++ b/src/pymarxan/solvers/mip_solver.py
-@@ -1,11 +1,13 @@
- """MIP solver using PuLP for exact conservation planning optimization."""
- from __future__ import annotations
- 
- import copy
-+import math
-+import numbers
- import warnings
--from collections.abc import Callable
-+from collections.abc import Callable, Sequence
- from dataclasses import dataclass
- 
- import numpy as np
- import pulp
- 
-@@ -40,11 +42,108 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
+@@ -21,10 +21,25 @@ from pymarxan.solvers._backends import (
+     _available_backends as _available_backends,
+ )
+ from pymarxan.solvers._backends import (
+     _make_pulp_solver as _make_pulp_solver,
+ )
++from pymarxan.solvers._decisions import (
++    DECISIONS as DECISIONS,
++)
++from pymarxan.solvers._decisions import (
++    SNAP_TOL as SNAP_TOL,
++)
++from pymarxan.solvers._decisions import (
++    ZERO_TOL as ZERO_TOL,
++)
++from pymarxan.solvers._decisions import (
++    _extract_selected as _extract_selected,
++)
++from pymarxan.solvers._decisions import (
++    _validate_decisions as _validate_decisions,
++)
+ from pymarxan.solvers._mip_objectives import (
+     BUILDERS,
+     ImpliedRule,
+     ObjectiveContext,
+     TargetTerm,
+@@ -40,11 +55,42 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
  from pymarxan.solvers.presolve import (
      _emit_presolve,
      _presolve_data,
@@ -1842,46 +2079,6 @@ index f31b14a..0bee858 100644
  )
 -from pymarxan.solvers.utils import build_solution
 +from pymarxan.solvers.utils import _nonbinary_conflicts, build_solution
-+
-+DECISIONS = ("binary", "proportion", "semicontinuous")
-+ZERO_TOL = 1e-9  # extracted x <= ZERO_TOL is solver dust -> 0 (spec §4)
-+SNAP_TOL = 1e-6  # x within SNAP_TOL below upper (or lower) snaps up to it
-+
-+
-+def _bound(name: str, value: object) -> float:
-+    if (
-+        not isinstance(value, numbers.Real) or isinstance(value, bool)
-+        or not math.isfinite(float(value))
-+    ):
-+        raise ValueError(f"{name} must be a finite number, got {value!r}")
-+    return float(value)
-+
-+
-+def _validate_decisions(
-+    decisions: str, upper: float, lower: float,
-+) -> tuple[str, float, float]:
-+    """``(decisions, upper, lower)`` validated per the spec §2 table; ``ValueError`` naming
-+    the offending argument."""
-+    if decisions not in DECISIONS:
-+        raise ValueError(
-+            "decisions must be one of 'binary', 'proportion', 'semicontinuous', "
-+            f"got {decisions!r}"
-+        )
-+    up, lo = _bound("upper", upper), _bound("lower", lower)
-+    if decisions != "semicontinuous" and lo != 0.0:
-+        raise ValueError(f"lower only applies to decisions='semicontinuous', got {lower!r}")
-+    if decisions == "binary":
-+        if up != 1.0:
-+            raise ValueError(
-+                "upper only applies to decisions='proportion' or 'semicontinuous', "
-+                f"got {upper!r}"
-+            )
-+        return decisions, up, lo
-+    if not 0.0 < up <= 1.0:
-+        raise ValueError(f"upper must be in (0, 1], got {upper!r}")
-+    if decisions == "semicontinuous" and not 0.0 < lo <= up:
-+        raise ValueError(f"lower must be in (0, upper], got {lower!r} (upper {up!r})")
-+    return decisions, up, lo
 +
 +
 +def _reject_nonbinary(
@@ -1913,38 +2110,41 @@ index f31b14a..0bee858 100644
 +            f"decisions={decisions!r} cannot be combined with " + "; ".join(causes)
 +            + ". Use decisions='binary'."
 +        )
-+
-+
-+def _extract_selected(
-+    x_values: Sequence[float | None],
-+    s_values: Sequence[float | None],
-+    decisions: str,
-+    upper: float,
-+    lower: float,
-+) -> np.ndarray:
-+    """PU-ordered ``varValue``s -> ``Solution.selected`` (spec §4).
-+
-+    Binary: ``bool(round(v))``. Otherwise float64 clipped to ``[0, upper]``; snapping only
-+    raises a value or removes dust (``<= ZERO_TOL`` -> 0; within ``SNAP_TOL`` below
-+    ``upper`` / ``lower`` -> that bound; semicontinuous ``round(s) == 0`` -> 0), so it never
-+    takes held amount away from a target.
-+    """
-+    if decisions == "binary":
-+        return np.array([bool(round(v or 0.0)) for v in x_values], dtype=bool)
-+    out = np.clip(np.array([v or 0.0 for v in x_values], dtype=np.float64), 0.0, upper)
-+    out[out <= ZERO_TOL] = 0.0
-+    out[(out >= upper - SNAP_TOL) & (out < upper)] = upper
-+    if decisions == "semicontinuous":
-+        out[(out >= lower - SNAP_TOL) & (out < lower)] = lower
-+        off = np.array([round(v or 0.0) == 0 for v in s_values], dtype=bool)
-+        out[off] = 0.0
-+    return out
  
  
  def _validate_mip_strategy(
      name: str,
      value: str,
-@@ -190,17 +289,22 @@ def _abs_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
+@@ -180,27 +226,51 @@ def _core_target_terms(
+             required=t * misslevel, weight=spf[fid],
+         ))
+     return terms
+ 
+ 
++def _extract(
++    x: dict[int, pulp.LpVariable],
++    s: dict[int, pulp.LpVariable],
++    pu_ids: list[int],
++    decisions: str,
++    lower: float,
++) -> np.ndarray:
++    """``_extract_selected`` on the model's variables: each PU is clipped to its own x
++    upper bound (1.0 for locked-in), and PUs without an on/off variable pass ``None``."""
++    return _extract_selected(
++        [x[pid].varValue for pid in pu_ids],
++        [s[pid].varValue if pid in s else None for pid in pu_ids]
++        if decisions == "semicontinuous" else [],
++        decisions,
++        [float(x[pid].upBound if x[pid].upBound is not None else 1.0) for pid in pu_ids],
++        lower,
++    )
++
++
+ def _value(var: pulp.LpVariable) -> float:
+     return float(var.varValue or 0.0)
+ 
+ 
+ def _abs_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
      """Boundary auxiliary: |x_i − x_j|, as the abs rows bound it."""
      return lambda: abs(_value(a) - _value(b))
  
@@ -1971,7 +2171,7 @@ index f31b14a..0bee858 100644
  @dataclass
  class _BaseModel:
      """Result of ``MIPSolver._build_base``: the model every objective shares (spec §2)."""
-@@ -217,17 +321,30 @@ class _BaseModel:
+@@ -217,19 +287,28 @@ class _BaseModel:
      terms: list[TargetTerm]
      implied: list[ImpliedRule]
      probmode: int
@@ -1989,20 +2189,18 @@ index f31b14a..0bee858 100644
              boundary_expr=self.boundary_expr, conn_expr=self.conn_expr,
              prob_expr=self.prob_expr, amount_exprs=self.amount_exprs, implied=self.implied,
 +            fractional=self.decisions != "binary",
-+        )
-+
-+    def extract(self) -> np.ndarray:
-+        """``Solution.selected`` from the current ``varValue``s (spec §4)."""
-+        return _extract_selected(
-+            [self.x[pid].varValue for pid in self.pu_ids],
-+            [self.s[pid].varValue for pid in self.pu_ids] if self.s else [],
-+            self.decisions, self.upper, self.lower,
          )
  
++    def extract(self) -> np.ndarray:
++        """``Solution.selected`` from the current ``varValue``s (spec §4)."""
++        return _extract(self.x, self.s, self.pu_ids, self.decisions, self.lower)
++
  
  @dataclass
  class _BuiltModel:
-@@ -239,10 +356,14 @@ class _BuiltModel:
+     """Result of ``MIPSolver._build``: the PuLP model plus what ``solve`` needs."""
+ 
+@@ -239,10 +318,14 @@ class _BuiltModel:
      blm: float
      objective_expr: pulp.LpAffineExpression  # natural units
      probmode: int
@@ -2017,7 +2215,7 @@ index f31b14a..0bee858 100644
  
  class MIPSolver(Solver):
      """Solver that formulates the Marxan minimum-set problem as a MILP.
-@@ -293,10 +414,18 @@ class MIPSolver(Solver):
+@@ -293,10 +376,19 @@ class MIPSolver(Solver):
      ``Solution.metadata`` records ``objective``, ``mip_objective_value`` (natural sign: a
      count for ``max_*``) and ``shortfall`` — the configured units, recorded for every
      objective but meaningful only for the two shortfall objectives. ``max_features`` /
@@ -2027,7 +2225,8 @@ index f31b14a..0bee858 100644
 +    ``x ∈ [0, upper]``; prioritizr's ``add_semicontinuous_decisions(u)`` is
 +    ``decisions="proportion", upper=u``) or ``"semicontinuous"`` (``x = 0`` or
 +    ``lower ≤ x ≤ upper``, a MILP with one on/off binary per PU). Non-binary solutions hold
-+    float64 proportions; locked-in PUs are fixed at ``upper``. PROBMODE 3, clumping,
++    float64 proportions; locked-in PUs are fixed whole (x = 1.0) in every mode, ``upper`` and
++    ``lower`` bound the free PUs. PROBMODE 3, clumping,
 +    separation, space targets, ``forbidden_selections`` and negative connectivity values
 +    are rejected with ``ValueError`` for non-binary decisions.
 +
@@ -2036,7 +2235,7 @@ index f31b14a..0bee858 100644
      in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
      ``ValueError`` instead. The data checks run before the model is built: a non-finite
      value (P1) raises ``ValueError`` under both, since PuLP cannot build the model.
-@@ -311,11 +440,15 @@ class MIPSolver(Solver):
+@@ -311,11 +403,15 @@ class MIPSolver(Solver):
          mip_backend: str = "auto",
          objective: str = "min_set",
          shortfall: str = "relative",
@@ -2052,7 +2251,7 @@ index f31b14a..0bee858 100644
              ("drop", "piecewise", "socp"),
          )
          _validate_mip_strategy(
-@@ -366,10 +499,14 @@ class MIPSolver(Solver):
+@@ -366,10 +462,14 @@ class MIPSolver(Solver):
  
          The boundary rows are built when a boundary table exists and BLM > 0 or
          ``need_boundary``. Every auxiliary variable is registered in ``implied`` with the
@@ -2067,7 +2266,7 @@ index f31b14a..0bee858 100644
          if probmode == 3:
              if self.mip_chance_strategy == "piecewise":
                  raise NotImplementedError(
-@@ -426,20 +563,33 @@ class MIPSolver(Solver):
+@@ -426,19 +526,37 @@ class MIPSolver(Solver):
          implied: list[ImpliedRule] = []
  
          # Build the LP model
@@ -2083,28 +2282,31 @@ index f31b14a..0bee858 100644
              pid = int(pu_id_arr[k])
              status = int(pu_st_arr[k])
 -            x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
++            locked = status in (STATUS_LOCKED_IN, STATUS_LOCKED_OUT)
 +            if binary:
 +                x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
 +            else:
++                # Locked-in units are whole (x = 1.0) in every mode; `upper` and the
++                # semicontinuous band apply to free units only (review R3).
 +                x[pid] = pulp.LpVariable(
-+                    f"x_{pid}", lowBound=0, upBound=self.upper, cat="Continuous",
++                    f"x_{pid}", lowBound=0,
++                    upBound=1.0 if status == STATUS_LOCKED_IN else self.upper,
++                    cat="Continuous",
 +                )
-+            if self.decisions == "semicontinuous":
++            if self.decisions == "semicontinuous" and not locked:
 +                s[pid] = pulp.LpVariable(f"s_{pid}", cat="Binary")
 +                model += x[pid] - self.upper * s[pid] <= 0, f"sc_ub_{pid}"
 +                model += x[pid] - self.lower * s[pid] >= 0, f"sc_lb_{pid}"
 +                implied.append((s[pid], _on_rule(x[pid])))
              if status == STATUS_LOCKED_IN:
--                model += x[pid] == 1, f"locked_in_{pid}"
-+                # Non-binary: "selected as fully as allowed" (prioritizr's lb = 1 is
-+                # infeasible when upper < 1; documented deviation, spec §3.2).
-+                model += x[pid] == (1 if binary else self.upper), f"locked_in_{pid}"
++                # prioritizr's lb = 1 with ub = upper < 1 is infeasible; here a locked-in
++                # unit is fixed whole whatever `upper` is (documented deviation, R3).
+                 model += x[pid] == 1, f"locked_in_{pid}"
              elif status == STATUS_LOCKED_OUT:
                  model += x[pid] == 0, f"locked_out_{pid}"
  
          # Cost component
-         pu_cost_arr = problem.planning_units["cost"].values.astype(float)
-@@ -510,21 +660,29 @@ class MIPSolver(Solver):
+@@ -510,21 +628,29 @@ class MIPSolver(Solver):
                      conn_expr += conn_weight * cval * z
              else:
                  # Reward both selected via binary-AND linearization:
@@ -2136,7 +2338,7 @@ index f31b14a..0bee858 100644
                      model += (
                          z >= x[key[0]] + x[key[1]] - 1,
                          f"conn_and3_{key[0]}_{key[1]}",
-@@ -592,10 +750,11 @@ class MIPSolver(Solver):
+@@ -592,10 +718,11 @@ class MIPSolver(Solver):
          return _BaseModel(
              model=model, x=x, pu_ids=pu_ids, blm=blm, cost_expr=cost_expr,
              boundary_expr=boundary_expr, conn_expr=conn_expr, prob_expr=prob_expr,
@@ -2148,7 +2350,7 @@ index f31b14a..0bee858 100644
      def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
          """Build the PuLP model (no warnings, no solve): the base plus this objective."""
          base = self._build_base(problem, config)
-@@ -639,11 +798,12 @@ class MIPSolver(Solver):
+@@ -639,11 +766,12 @@ class MIPSolver(Solver):
              set_objective(model, term)
              model += base.cost_expr <= float(cost_budget), "cost_budget"
          return _BuiltModel(
@@ -2162,7 +2364,7 @@ index f31b14a..0bee858 100644
      def _strategy_metadata(
          self, probmode: int, has_target2: bool, has_sep_active: bool,
      ) -> dict[str, str]:
-@@ -707,14 +867,15 @@ class MIPSolver(Solver):
+@@ -707,15 +835,12 @@ class MIPSolver(Solver):
          # read as 0 (S9).
          has_values = any(pulp.value(x[pid]) is not None for pid in pu_ids)
          if status in infeasible_statuses or not has_values:
@@ -2172,32 +2374,30 @@ index f31b14a..0bee858 100644
 -        selected = np.array(
 -            [bool(round(pulp.value(x[pid]) or 0.0)) for pid in pu_ids],
 -            dtype=bool,
+-        )
 +        # Extract solution (binary: rounded bools; otherwise snapped float64, spec §4)
-+        selected = _extract_selected(
-+            [x[pid].varValue for pid in pu_ids],
-+            [built.s[pid].varValue for pid in pu_ids] if built.s else [],
-+            built.decisions, built.upper, built.lower,
-         )
++        selected = _extract(x, built.s, pu_ids, built.decisions, built.lower)
  
          # build_solution populates Solution.prob_shortfalls + prob_penalty
          # automatically when PROBMODE==3. Under the 'drop' strategy, the
          # MIP solved the deterministic relaxation; the chance-constraint
+         # gap is what build_solution reports post-hoc.
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_mip_decisions.py -q`
-Expected: 135 passed, 61 skipped (HiGHS cases; they run in CI)
+Expected: 176 passed, 101 skipped (HiGHS cases; they run in CI)
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pymarxan/solvers/_mip_objectives.py src/pymarxan/solvers/mip_solver.py tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_mip_decisions.py
+git add src/pymarxan/solvers/_decisions.py src/pymarxan/solvers/_mip_objectives.py src/pymarxan/solvers/mip_solver.py tests/pymarxan/fractional_fixtures.py tests/pymarxan/solvers/test_mip_decisions.py
 git commit -m "feat(stage4): T4 MIPSolver proportion and semicontinuous decisions
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -2258,11 +2458,13 @@ def test_binary_defaults_unchanged() -> None:
     assert "P9a" in _codes(presolve_check(p))
 
 
-def test_p9a_floor_scales_with_upper() -> None:
-    p = _locked(COSTBUDGET=15.0)  # 0.5 · 20 <= 15 < 20
-    assert "P9a" not in _codes(presolve_check(p, decisions="proportion", upper=0.5))
-    msgs = presolve_check(_locked(COSTBUDGET=9.0), decisions="proportion", upper=0.5)
-    assert any(m.startswith("P9a") and "(10)" in m for m in msgs), msgs
+def test_p9a_floor_is_unscaled() -> None:
+    """Locked-in units are whole in every mode (review R3/R4): the forced cost is 20."""
+    msgs = presolve_check(_locked(COSTBUDGET=15.0), decisions="proportion", upper=0.5)
+    assert any(m.startswith("P9a") and "(20)" in m for m in msgs), msgs
+    assert "P9a" not in _codes(
+        presolve_check(_locked(COSTBUDGET=25.0), decisions="proportion", upper=0.5)
+    )
 
 
 def test_p9b_skipped_for_proportion_scaled_for_semicontinuous() -> None:
@@ -2276,47 +2478,59 @@ def test_p9b_skipped_for_proportion_scaled_for_semicontinuous() -> None:
     assert any(m.startswith("P9b") and "(6.4)" in m for m in msgs), msgs
 
 
-def test_p11_ceiling_scales_with_upper() -> None:
-    p = _locked(COSTBUDGET=40.0)  # Σ cost outside locked-out = 75
+def test_p11_ceiling_locked_whole_free_scaled() -> None:
+    p = _locked(COSTBUDGET=48.0)  # binary ceiling 75; at upper 0.5: 20 + 0.5 · 55 = 47.5
     assert "P11" not in _codes(presolve_check(p))
-    msgs = presolve_check(p, decisions="proportion", upper=0.5)  # 37.5 <= 40
-    assert any(m.startswith("P11") and "37.5" in m for m in msgs), msgs
+    msgs = presolve_check(p, decisions="proportion", upper=0.5)
+    assert any(m.startswith("P11") and "47.5" in m for m in msgs), msgs
 
 
-def test_p6_scales_with_upper() -> None:
-    p = _locked()  # f1: target 30, amount outside locked-out = 50
+def test_p6_locked_whole_free_scaled() -> None:
+    p = _locked()  # f1: target 30; locked-in PU 3 holds 5, free units 45
     assert "P6" not in _codes(presolve_check(p))
-    msgs = presolve_check(p, decisions="proportion", upper=0.5)  # 30 > 25
+    msgs = presolve_check(p, decisions="proportion", upper=0.5)  # 5 + 22.5 = 27.5 < 30
     p6 = [m for m in msgs if m.startswith("P6")]
-    assert p6 and "feature 1 target 30" in p6[0], msgs
+    assert p6 and "feature 1 target 30" in p6[0] and "27.5" in p6[0], msgs
+    assert "P6" not in _codes(presolve_check(p, decisions="proportion", upper=0.6))  # 32
+
+
+@pytest.mark.parametrize(
+    "kw", [{"decisions": "x"}, {"decisions": "proportion", "upper": 2.0},
+           {"decisions": "binary", "lower": 0.5}],
+)
+def test_presolve_check_validates_decisions(kw: dict[str, Any]) -> None:
+    """Review R6: a bad argument is a caller error, raised outside the never-raises path."""
+    with pytest.raises(ValueError):
+        presolve_check(_locked(), **kw)
 
 
 def test_presolve_data_passes_bounds() -> None:
-    p = _locked(COSTBUDGET=15.0)
-    assert "P9a" in _codes(_presolve_data(True, p, "MIP"))
-    assert "P9a" not in _codes(
+    p = _locked(COSTBUDGET=48.0)
+    assert "P11" not in _codes(_presolve_data(True, p, "MIP"))
+    assert "P11" in _codes(
         _presolve_data(True, p, "MIP", decisions="proportion", upper=0.5)
     )
 
 
 def test_strict_mip_uses_its_bounds() -> None:
-    p = _locked(COSTBUDGET=15.0, MISSLEVEL=0.5)
+    p = _locked(COSTBUDGET=48.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        with pytest.raises(ValueError, match="P9a"):
-            MIPSolver(objective="max_features", presolve_check="strict").solve(p)
-        sols = MIPSolver(
-            objective="max_features", presolve_check="strict", decisions="proportion",
-            upper=0.5,
-        ).solve(p)
-    assert sols and sols[0].selected[2] == 0.5
-    assert sols[0].cost <= 15.0 + 1e-6
+        assert MIPSolver(objective="max_features", presolve_check="strict").solve(p)
+        with pytest.raises(ValueError, match="P11"):
+            MIPSolver(
+                objective="max_features", presolve_check="strict", decisions="proportion",
+                upper=0.5,
+            ).solve(p)
+        sols = MIPSolver(objective="max_features", decisions="proportion", upper=0.5).solve(p)
+    assert sols and sols[0].selected[2] == 1.0
+    assert sols[0].cost <= 48.0 + 1e-6
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_presolve_decisions.py -q`
-Expected: FAIL — 7 failed (`TypeError: presolve_check() got an unexpected keyword argument 'decisions'` and missing scaling)
+Expected: FAIL — 10 failed (`TypeError: presolve_check() got an unexpected keyword argument 'decisions'`, no validation, no scaling)
 
 - [ ] **Step 3: Implement**
 
@@ -2324,10 +2538,10 @@ Modify `src/pymarxan/solvers/mip_solver.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/mip_solver.py b/src/pymarxan/solvers/mip_solver.py
-index 0bee858..f958760 100644
+index e75ce2a..73c6f81 100644
 --- a/src/pymarxan/solvers/mip_solver.py
 +++ b/src/pymarxan/solvers/mip_solver.py
-@@ -826,11 +826,14 @@ class MIPSolver(Solver):
+@@ -794,11 +794,14 @@ class MIPSolver(Solver):
          For ``min_penalties`` this is the pass-1 model (objective Σ SPF·shortfall).
          """
          if config is None:
@@ -2343,7 +2557,7 @@ index 0bee858..f958760 100644
          return built.model
  
      def solve(
-@@ -838,11 +841,14 @@ class MIPSolver(Solver):
+@@ -806,11 +809,14 @@ class MIPSolver(Solver):
      ) -> list[Solution]:
          if config is None:
              config = SolverConfig()
@@ -2365,10 +2579,23 @@ Modify `src/pymarxan/solvers/presolve.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/presolve.py b/src/pymarxan/solvers/presolve.py
-index 298004f..1f59c19 100644
+index 298004f..639a201 100644
 --- a/src/pymarxan/solvers/presolve.py
 +++ b/src/pymarxan/solvers/presolve.py
-@@ -42,21 +42,27 @@ def _is_nonfinite(message: str) -> bool:
+@@ -15,10 +15,12 @@ from typing import TYPE_CHECKING, Any
+ 
+ import numpy as np
+ import pandas as pd
+ import pulp
+ 
++from pymarxan.solvers._decisions import _validate_decisions
++
+ if TYPE_CHECKING:
+     from pymarxan.models.problem import ConservationProblem
+     from pymarxan.zones.model import ZonalProblem
+ 
+ RATIO_LIMIT = 1e6
+@@ -42,21 +44,27 @@ def _is_nonfinite(message: str) -> bool:
      """A P1 non-finite finding: PuLP refuses such data, so no model can be built."""
      return message.startswith("P1: ") and " non-finite " in message
  
@@ -2398,7 +2625,7 @@ index 298004f..1f59c19 100644
              f"{solver_name}: presolve check: " + " | ".join(messages)
              + " (non-finite data: the model cannot be built)"
          )
-@@ -166,11 +172,17 @@ def _budget_checks(budget: float | None, floor: float, cheapest: float | None,
+@@ -166,11 +174,17 @@ def _budget_checks(budget: float | None, floor: float, cheapest: float | None,
          out.append(f"P11: COSTBUDGET {budget:g} reaches the total cost {ceiling:g}: "
                     "the budget does not constrain the solution")
      return out
@@ -2417,24 +2644,32 @@ index 298004f..1f59c19 100644
      Returns ``[]`` when clean; every message starts with its code (``"P5: ..."``). When
      ``problem.validate()`` fails, returns one ``"P0: ..."`` message and skips the rest.
  
-@@ -181,10 +193,16 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
+@@ -181,14 +195,24 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
      cheapest selectable option; P11 COSTBUDGET at or above the total cost. P10 (model
      coefficients) needs a built model and is only reported through a solver's
      ``presolve_check=`` flag. Zone problems check ``zone_costs`` (what the zone solvers
      optimise), not ``planning_units.cost``.
  
 +    ``decisions`` / ``upper`` / ``lower`` (Stage 4, as ``MIPSolver`` takes them) scale the
-+    core checks: P6 compares the target with ``upper ×`` the reachable amount, P9a's floor
-+    and P11's ceiling are ``upper ×`` the locked-in / not-locked-out cost, and P9b's
++    core checks. Locked-in units are whole in every mode, so P6 compares the target with
++    the locked-in amount plus ``upper ×`` the free amount, P9a's floor is the locked-in cost
++    (unscaled) and P11's ceiling is the locked-in cost plus ``upper ×`` the free cost. P9b's
 +    cheapest option is ``lower × min cost`` for ``"semicontinuous"`` and is skipped for
-+    ``"proportion"`` (any positive budget buys a sliver). Zone checks ignore them.
++    ``"proportion"`` (any positive budget buys a sliver). Zone checks ignore them. Invalid
++    values raise ``ValueError`` (a caller error, as in ``MIPSolver``).
 +
      Through a solver's flag, a non-finite P1 value (cost, amount, target, boundary, spf,
      BLM, MISSLEVEL, COSTBUDGET, zone contribution) raises ``ValueError`` even under
      ``True``, because PuLP cannot build a model from it.
      """
++    # A bad decisions / upper / lower is a caller error, not a data finding (review R6).
++    decisions, upper, lower = _validate_decisions(decisions, upper, lower)
      try:
-@@ -196,11 +214,11 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
+         errors = problem.validate()
+     except Exception as exc:  # validate() should not raise; presolve must not either
+         return [f"P0: problem.validate() raised {exc!r}"]
+     if errors:
+@@ -196,11 +220,11 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
      try:
          from pymarxan.zones.model import ZonalProblem
  
@@ -2447,7 +2682,7 @@ index 298004f..1f59c19 100644
  
  
  def _budget(problem: ConservationProblem) -> float | None:
-@@ -253,11 +271,17 @@ def _common(problem: ConservationProblem, costs: Any, cost_label: Label,
+@@ -253,11 +277,17 @@ def _common(problem: ConservationProblem, costs: Any, cost_label: Label,
      if ghosts:
          out.append("P5: " + _first(ghosts))
      return out
@@ -2466,22 +2701,32 @@ index 298004f..1f59c19 100644
      status = (pu["status"].to_numpy(dtype=int) if "status" in pu.columns
                else np.zeros(len(pu), dtype=int))
      pvf = problem.pu_vs_features
-@@ -265,30 +289,37 @@ def _core_checks(problem: ConservationProblem) -> list[str]:
+@@ -265,30 +295,53 @@ def _core_checks(problem: ConservationProblem) -> list[str]:
      budget = _budget(problem)
      out = _common(problem, costs, _labeller(("PU",), pu["id"]), [], totals, budget)
      misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
      locked_out = {int(p) for p, s in zip(pu["id"].values, status, strict=True) if s == 3}
      avail = pvf[~pvf["pu"].isin(locked_out)].groupby("species")["amount"].sum()
-+    scale = "" if upper == 1.0 else f"{upper:g} x "
++    if upper == 1.0:
++        reach, where = avail, "its total amount"
++    else:
++        # Stage 4 (review R3/R4): locked-in units are whole, free units hold at most upper.
++        locked_in = {int(p) for p, s in zip(pu["id"].values, status, strict=True) if s == 2}
++        rows_in = pvf["pu"].isin(locked_in)
++        held_in = pvf[rows_in].groupby("species")["amount"].sum()
++        free = pvf[~rows_in & ~pvf["pu"].isin(locked_out)].groupby("species")["amount"].sum()
++        reach = held_in.add(upper * free, fill_value=0.0)
++        where = f"the amount reachable at upper {upper:g}"
      short = [
 -        f"feature {int(f)} target {t * misslevel:g} exceeds its total amount "
-+        f"feature {int(f)} target {t * misslevel:g} exceeds {scale}its total amount "
-         f"{float(avail.get(int(f), 0.0)):g} outside locked-out units"
+-        f"{float(avail.get(int(f), 0.0)):g} outside locked-out units"
++        f"feature {int(f)} target {t * misslevel:g} exceeds {where} "
++        f"{float(reach.get(int(f), 0.0)):g} outside locked-out units"
          for f, t in zip(problem.features["id"].values,
                          problem.features["target"].to_numpy(dtype=float), strict=True)
          if t > 0 and float(totals.get(int(f), 0.0)) > 0
 -        and float(avail.get(int(f), 0.0)) < t * misslevel - 1e-9
-+        and upper * float(avail.get(int(f), 0.0)) < t * misslevel - 1e-9
++        and float(reach.get(int(f), 0.0)) < t * misslevel - 1e-9
      ]
      if short:
          out.append("P6: " + _first(short))
@@ -2490,20 +2735,26 @@ index 298004f..1f59c19 100644
      if len(status) and (status == 3).all():
          out.append("P7b: every planning unit is locked out: nothing can be selected")
      free = costs[(status == 0) | (status == 1)]
-+    # Stage 4: x <= upper scales the forced cost and the ceiling; a proportion plan can buy
-+    # any sliver, a semicontinuous one at least lower x a unit.
++    # Stage 4 (review R4): locked-in units are whole, so the forced cost is unscaled; free
++    # units cost at most upper x their cost; a proportion plan can buy any sliver, a
++    # semicontinuous one at least lower x a unit.
 +    cheapest = (
 +        None if not free.size or decisions == "proportion"
 +        else float(free.min()) * (lower if decisions == "semicontinuous" else 1.0)
 +    )
++    if upper == 1.0:
++        ceiling = float(np.clip(costs[status != 3], 0, None).sum())
++    else:
++        ceiling = float(np.clip(costs[status == 2], 0, None).sum()) + upper * float(
++            np.clip(free, 0, None).sum()
++        )
      out += _budget_checks(
          budget,
--        floor=float(costs[status == 2].sum()),
+         floor=float(costs[status == 2].sum()),
 -        cheapest=float(free.min()) if free.size else None,
 -        ceiling=float(np.clip(costs[status != 3], 0, None).sum()),
-+        floor=upper * float(costs[status == 2].sum()),
 +        cheapest=cheapest,
-+        ceiling=upper * float(np.clip(costs[status != 3], 0, None).sum()),
++        ceiling=ceiling,
      )
      return out
  
@@ -2514,12 +2765,12 @@ index 298004f..1f59c19 100644
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/solvers/test_presolve_decisions.py -q`
-Expected: 7 passed
+Expected: 10 passed
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
@@ -2652,16 +2903,20 @@ def test_binary_selection_stays_bool() -> None:
 
 
 def test_presolve_uses_bounds() -> None:
-    p = _simple(COSTBUDGET=15.0)
+    """Locked-in PU 3 (cost 20) is whole: at upper 0.5 the ceiling is 20 + 0.5 · 63 = 51.5."""
+    p = _simple(COSTBUDGET=52.0)
     pu = p.planning_units.copy()
     pu.loc[pu["id"] == 3, "status"] = 2
     p = p.copy_with(planning_units=pu)
     strict = {"presolve_check": "strict", "mip_backend": "cbc"}
-    with pytest.raises(ValueError, match="P9a"):
-        _solve(MultiObjectiveMIP([MaxFeatures(), MinCost()], Hierarchical(0.0), **strict), p)
+    assert _solve(MultiObjectiveMIP([MaxFeatures(), MinCost()], Hierarchical(0.0), **strict), p)
+    with pytest.raises(ValueError, match="P11"):
+        _solve(MultiObjectiveMIP([MaxFeatures(), MinCost()], Hierarchical(0.0),
+                                 decisions="proportion", upper=0.5, **strict), p)
     (s,) = _solve(MultiObjectiveMIP([MaxFeatures(), MinCost()], Hierarchical(0.0),
-                                    decisions="proportion", upper=0.5, **strict), p)
-    assert s.selected[2] == 0.5
+                                    decisions="proportion", upper=0.5, mip_backend="cbc"), p)
+    assert s.selected[2] == 1.0
+    assert (np.delete(s.selected, 2) <= 0.5).all()
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2789,7 +3044,7 @@ Expected: 11 passed
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
@@ -2811,12 +3066,14 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Modify: `src/pymarxan/io/readers.py`
 - Modify: `src/pymarxan/io/spatial_export.py`
 - Modify: `src/pymarxan/io/writers.py`
+- Modify: `src/pymarxan/solvers/__init__.py`
+- Modify: `src/pymarxan/solvers/utils.py`
 - Modify: `src/pymarxan/zones/writers.py`
 - Create: `tests/pymarxan/io/test_fractional_io.py`
 
 **Interfaces:**
 - Consumes: Tasks 2–3 (`is_fractional`, `_compute_achieved`, `check_targets`, `require_binary`).
-- Produces: `io/output.py` `_solution_column(solution) -> list[Any]` (ints for binary, `.10g` strings for fractional) used by `write_run` / `write_best` / `write_solution_matrix`; `write_mvbest` / `export_summary_csv` held via `_compute_achieved`, met via `check_targets`; `write_ssoln` float sums; `read_ssoln` int unless a NaN-free non-integral float column; `export_solution_spatial` / `export_frequency_spatial` floats; `zones/writers.py` `zone_assignment is None` fallbacks guarded.
+- Produces: public `compute_held(problem, selected, pu_index=None) -> dict[int, float]` in `solvers/utils.py` (re-exported from `pymarxan.solvers`); `io/output.py` `_solution_column(solution) -> list[Any]` (ints for binary, `.10g` strings for fractional) used by `write_run` / `write_best` / `write_solution_matrix`; `write_mvbest` / `export_summary_csv` held via `compute_held`, met via `check_targets`; `write_ssoln` float sums; `read_ssoln` int unless a NaN-free non-integral float column; `export_solution_spatial` / `export_frequency_spatial` floats; `zones/writers.py` `zone_assignment is None` fallbacks guarded.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3013,12 +3270,23 @@ def test_run_best_values_round_trip(
     col = pd.read_csv(tmp_path / "output_r002.csv")["Solution"]
     assert col.dtype.kind == "i"
     assert col.tolist() == [int(v) for v in binary.selected]
+
+
+def test_compute_held_public(simple: ConservationProblem, frac: Solution) -> None:
+    """Review R7: the public held-amount helper the readers share."""
+    from pymarxan.solvers import compute_held
+
+    held = compute_held(simple, frac.selected)
+    assert held[1] == pytest.approx(10 * X[0] + 15 + 12 * X[3] + 8 * X[4] + 10)
+    pu_index = {int(q): i for i, q in enumerate(simple.planning_units["id"])}
+    assert compute_held(simple, frac.selected, pu_index) == held
+
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/io/test_fractional_io.py -q`
-Expected: FAIL — 11 failed, 3 passed (truncated ints, no guards, NaN-free float `read_ssoln`)
+Expected: FAIL — 12 failed, 3 passed (`ImportError` on `compute_held` inside tests, truncated ints, no guards, int-only `read_ssoln`)
 
 - [ ] **Step 3: Implement**
 
@@ -3026,7 +3294,7 @@ Modify `src/pymarxan/io/exporters.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/io/exporters.py b/src/pymarxan/io/exporters.py
-index b0cec85..b74dc3a 100644
+index b0cec85..2d5706e 100644
 --- a/src/pymarxan/io/exporters.py
 +++ b/src/pymarxan/io/exporters.py
 @@ -17,39 +17,41 @@ def export_solution_csv(
@@ -3056,7 +3324,7 @@ index b0cec85..b74dc3a 100644
      path: Path | str,
  ) -> None:
      """Export target achievement summary to CSV."""
-+    from pymarxan.solvers.utils import _compute_achieved, check_targets
++    from pymarxan.solvers.utils import check_targets, compute_held
 +
      pu_ids = problem.planning_units["id"].tolist()
      id_to_idx = {pid: i for i, pid in enumerate(pu_ids)}
@@ -3072,7 +3340,7 @@ index b0cec85..b74dc3a 100644
 -        .sum()
 -        .to_dict()
 +    # Held amounts (Σ r·x for proportions) and the shared met rule (Stage 4 §6.1).
-+    achieved_map = _compute_achieved(problem, solution.selected, id_to_idx)
++    achieved_map = compute_held(problem, solution.selected, id_to_idx)
 +    met_map = (
 +        check_targets(problem, solution.selected, id_to_idx, _achieved=achieved_map)
 +        if "target" in problem.features.columns
@@ -3289,7 +3557,7 @@ Modify `src/pymarxan/io/writers.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/io/writers.py b/src/pymarxan/io/writers.py
-index d63cb8f..37caedf 100644
+index d63cb8f..564e49a 100644
 --- a/src/pymarxan/io/writers.py
 +++ b/src/pymarxan/io/writers.py
 @@ -190,25 +190,24 @@ def write_mvbest(
@@ -3300,9 +3568,9 @@ index d63cb8f..37caedf 100644
      """
 -    from pymarxan.solvers.utils import compute_feature_shortfalls
 +    from pymarxan.solvers.utils import (
-+        _compute_achieved,
 +        check_targets,
 +        compute_feature_shortfalls,
++        compute_held,
 +    )
  
      pu_ids = problem.planning_units["id"].tolist()
@@ -3320,7 +3588,7 @@ index d63cb8f..37caedf 100644
 -        .to_dict()
 +    # Held amounts (Σ r·x for proportions) and the shared met rule (exact for binary,
 +    # tolerant for fractional), recomputed against the current problem (Stage 4 §6.1).
-+    achieved_map = _compute_achieved(problem, solution.selected, pu_index)
++    achieved_map = compute_held(problem, solution.selected, pu_index)
 +    met_map = check_targets(problem, solution.selected, pu_index, _achieved=achieved_map)
 +    shortfalls = compute_feature_shortfalls(
 +        problem, solution.selected, pu_index, _achieved=achieved_map,
@@ -3376,6 +3644,75 @@ index d63cb8f..37caedf 100644
  
      for sol in solutions:
          counts += sol.selected.astype(int)
+ 
+```
+
+Modify `src/pymarxan/solvers/__init__.py` (apply this diff):
+
+```diff
+diff --git a/src/pymarxan/solvers/__init__.py b/src/pymarxan/solvers/__init__.py
+index a8ad3de..a320e1d 100644
+--- a/src/pymarxan/solvers/__init__.py
++++ b/src/pymarxan/solvers/__init__.py
+@@ -11,11 +11,11 @@ from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+ from pymarxan.solvers.marxan_binary import MarxanBinarySolver
+ from pymarxan.solvers.mip_solver import MIPSolver
+ from pymarxan.solvers.presolve import PresolveWarning, presolve_check
+ from pymarxan.solvers.run_mode import RunModePipeline
+ from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+-from pymarxan.solvers.utils import binarize_solution
++from pymarxan.solvers.utils import binarize_solution, compute_held
+ 
+ __all__ = [
+     "FractionalSolutionError",
+     "HeuristicSolver",
+     "IterativeImprovementSolver",
+@@ -26,9 +26,10 @@ __all__ = [
+     "SimulatedAnnealingSolver",
+     "Solution",
+     "Solver",
+     "SolverConfig",
+     "binarize_solution",
++    "compute_held",
+     "presolve_check",
+     "require_binary",
+     "write_problem",
+ ]
+```
+
+Modify `src/pymarxan/solvers/utils.py` (apply this diff):
+
+```diff
+diff --git a/src/pymarxan/solvers/utils.py b/src/pymarxan/solvers/utils.py
+index c21d090..e236538 100644
+--- a/src/pymarxan/solvers/utils.py
++++ b/src/pymarxan/solvers/utils.py
+@@ -133,10 +133,25 @@ def _compute_achieved(
+         # groupby keys come back typed as Hashable; the species column is int
+         result[int(fid)] = float(amount)  # type: ignore[call-overload]
+     return result
+ 
+ 
++def compute_held(
++    problem: ConservationProblem,
++    selected: np.ndarray,
++    pu_index: dict[int, int] | None = None,
++) -> dict[int, float]:
++    """Feature id -> amount held: Σ amount over selected PUs, or Σ amount·x for proportions.
++
++    Public wrapper over ``_compute_achieved`` (review R7). ``pu_index`` maps PU id to its
++    position in ``selected`` and defaults to ``planning_units`` order.
++    """
++    if pu_index is None:
++        pu_index = {int(p): i for i, p in enumerate(problem.planning_units["id"])}
++    return _compute_achieved(problem, selected, pu_index)
++
++
+ def compute_boundary(
+     problem: ConservationProblem,
+     selected: np.ndarray,
+     pu_index: dict[int, int],
+ ) -> float:
 ```
 
 Modify `src/pymarxan/zones/writers.py` (apply this diff):
@@ -3428,17 +3765,17 @@ index 3b5bf47..998eef6 100644
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/io/test_fractional_io.py -q`
-Expected: 14 passed
+Expected: 15 passed
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pymarxan/io/exporters.py src/pymarxan/io/output.py src/pymarxan/io/readers.py src/pymarxan/io/spatial_export.py src/pymarxan/io/writers.py src/pymarxan/zones/writers.py tests/pymarxan/io/test_fractional_io.py
+git add src/pymarxan/io/exporters.py src/pymarxan/io/output.py src/pymarxan/io/readers.py src/pymarxan/io/spatial_export.py src/pymarxan/io/writers.py src/pymarxan/solvers/__init__.py src/pymarxan/solvers/utils.py src/pymarxan/zones/writers.py tests/pymarxan/io/test_fractional_io.py
 git commit -m "feat(stage4): T7 fraction-aware writers, readers and exporters
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -3461,6 +3798,7 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Modify: `src/pymarxan/analysis/scenarios.py`
 - Modify: `src/pymarxan/analysis/selection_freq.py`
 - Modify: `src/pymarxan/phylo/diversity.py`
+- Modify: `src/pymarxan/solvers/__init__.py`
 - Modify: `src/pymarxan/solvers/base.py`
 - Modify: `src/pymarxan/solvers/iterative_improvement.py`
 - Create: `tests/pymarxan/analysis/test_fractional_analysis.py`
@@ -3468,8 +3806,8 @@ Claude-Session: https://claude.ai/code/session_01AZEiop9qqxVCrMHKqSDYP8"
 - Create: `tests/pymarxan/test_fractional_readers.py`
 
 **Interfaces:**
-- Consumes: Tasks 2–4 (`require_binary`, `_require_binary_solver`, `_compute_achieved`, `MIPSolver(decisions=...)`), fixtures.
-- Produces: fraction-aware `compute_representation`, `compute_equity`, `compute_selection_frequency`, `evaluate_plans_across_scenarios`; guards in `portfolio_cuts` / `replacement_cost` (solver), `solution_diversity`, `overlap_matrix`, `posthoc_clusters`, `rank_importance`, `compute_phylogenetic_diversity`, `IterativeImprovementSolver.improve` (and so `run_mode` chains); `tests/pymarxan/test_fractional_readers.py` with tables `FRACTION_AWARE`, `GUARDED`, `INTERNAL_OR_COUNT`, `MIXED` (Task 9 removes its Shiny skip).
+- Consumes: Tasks 2–4, 7 (`require_binary`, `compute_held`, `MIPSolver(decisions=...)`), fixtures.
+- Produces: public `require_binary_solver(solver: object, context: str) -> None` in `solvers/base.py` (re-exported; reads `getattr(solver, "decisions", "binary")`); fraction-aware `compute_representation`, `compute_equity`, `compute_selection_frequency`, `evaluate_plans_across_scenarios`; guards in `portfolio_cuts` / `replacement_cost` (solver), `solution_diversity`, `overlap_matrix`, `posthoc_clusters`, `rank_importance`, `compute_phylogenetic_diversity`, `IterativeImprovementSolver.improve` (and so `run_mode` chains); `tests/pymarxan/test_fractional_readers.py` with tables `FRACTION_AWARE`, `GUARDED`, `INTERNAL_OR_COUNT`, `MIXED` (Task 9 removes its Shiny skip).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3647,6 +3985,16 @@ def test_solver_guards(simple: ConservationProblem, decisions: str) -> None:
             generate_portfolio_cuts(simple, solver=solver, k=2)
         with pytest.raises(FractionalSolutionError, match="compute_replacement_cost"):
             compute_replacement_cost(simple, solver=solver)
+
+
+def test_require_binary_solver_public() -> None:
+    """Review R7: the solver guard is public and re-exported."""
+    from pymarxan.solvers import require_binary_solver
+
+    require_binary_solver(MIPSolver(), "x")
+    with pytest.raises(FractionalSolutionError, match="decisions='proportion'"):
+        require_binary_solver(MIPSolver(decisions="proportion"), "x")
+
 ```
 
 Create `tests/pymarxan/calibration/test_blm_fractional.py`:
@@ -3711,6 +4059,7 @@ FRACTION_AWARE = {
     "pymarxan/io/exporters.py",
     "pymarxan/io/output.py",
     "pymarxan/io/spatial_export.py",
+    "pymarxan/solvers/_decisions.py",  # extracts proportions
     "pymarxan/solvers/mip_solver.py",  # produces proportions
     "pymarxan/solvers/utils.py",
     "pymarxan_shiny/modules/mapping/solution_map.py",
@@ -3792,7 +4141,7 @@ def test_mixed_guarded_functions_guard() -> None:
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_fractional_analysis.py tests/pymarxan/calibration/test_blm_fractional.py tests/pymarxan/test_fractional_readers.py -q`
-Expected: FAIL — 11 failed, 5 passed (no guards; boolean-cast representation / equity / frequency)
+Expected: FAIL — 12 failed, 5 passed (no `require_binary_solver`, no guards, boolean-cast representation / equity / frequency)
 
 - [ ] **Step 3: Implement**
 
@@ -3863,7 +4212,7 @@ Modify `src/pymarxan/analysis/portfolio_cuts.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/analysis/portfolio_cuts.py b/src/pymarxan/analysis/portfolio_cuts.py
-index 39de501..916bc45 100644
+index 39de501..7005386 100644
 --- a/src/pymarxan/analysis/portfolio_cuts.py
 +++ b/src/pymarxan/analysis/portfolio_cuts.py
 @@ -21,11 +21,11 @@ raising — same shape as ``Solver.solve`` returning an empty list on
@@ -3873,7 +4222,7 @@ index 39de501..916bc45 100644
  
  from pymarxan.models.problem import ConservationProblem
 -from pymarxan.solvers.base import Solution, SolverConfig
-+from pymarxan.solvers.base import Solution, SolverConfig, _require_binary_solver
++from pymarxan.solvers.base import Solution, SolverConfig, require_binary_solver
  from pymarxan.solvers.mip_solver import MIPSolver
  
  
@@ -3885,7 +4234,7 @@ index 39de501..916bc45 100644
          raise ValueError(f"k must be a positive int; got {k!r}.")
      if solver is None:
          solver = MIPSolver()
-+    _require_binary_solver(solver, "generate_portfolio_cuts")
++    require_binary_solver(solver, "generate_portfolio_cuts")
      if config is None:
          config = SolverConfig(num_solutions=1)
  
@@ -3924,6 +4273,7 @@ index c6a9c42..71d289e 100644
          int(pid) for i, pid in enumerate(pu_ids) if solution.selected[i]
      ]
      n_selected = len(selected_ids)
+ 
 ```
 
 Modify `src/pymarxan/analysis/rank_importance.py` (apply this diff):
@@ -3964,7 +4314,7 @@ Modify `src/pymarxan/analysis/replacement_cost.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/analysis/replacement_cost.py b/src/pymarxan/analysis/replacement_cost.py
-index 5431cd5..7348514 100644
+index 5431cd5..d4f539b 100644
 --- a/src/pymarxan/analysis/replacement_cost.py
 +++ b/src/pymarxan/analysis/replacement_cost.py
 @@ -24,11 +24,11 @@ import math
@@ -3974,7 +4324,7 @@ index 5431cd5..7348514 100644
      ConservationProblem,
  )
 -from pymarxan.solvers.base import SolverConfig
-+from pymarxan.solvers.base import SolverConfig, _require_binary_solver
++from pymarxan.solvers.base import SolverConfig, require_binary_solver
  from pymarxan.solvers.mip_solver import MIPSolver
  
  
@@ -3986,7 +4336,7 @@ index 5431cd5..7348514 100644
      """
      if solver is None:
          solver = MIPSolver()
-+    _require_binary_solver(solver, "compute_replacement_cost")
++    require_binary_solver(solver, "compute_replacement_cost")
  
      pu_ids = problem.planning_units["id"].astype(int).to_numpy()
      scores: dict[int, float] = {int(pid): 0.0 for pid in pu_ids}
@@ -3998,10 +4348,10 @@ Modify `src/pymarxan/analysis/representation.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/analysis/representation.py b/src/pymarxan/analysis/representation.py
-index 7791ee3..a694ee2 100644
+index 7791ee3..2233e2b 100644
 --- a/src/pymarxan/analysis/representation.py
 +++ b/src/pymarxan/analysis/representation.py
-@@ -85,11 +85,18 @@ def compute_representation(
+@@ -85,11 +85,17 @@ def compute_representation(
          for pid, sel in zip(problem.planning_units["id"], solution.selected)
          if sel
      }
@@ -4010,10 +4360,9 @@ index 7791ee3..a694ee2 100644
 -    if mask.any():
 +    if solution.is_fractional:
 +        # Proportion decisions: represented amount Σ r·x (Stage 4 §6.1).
-+        from pymarxan.solvers.utils import _compute_achieved
++        from pymarxan.solvers.utils import compute_held
 +
-+        pu_index = {int(p): i for i, p in enumerate(problem.planning_units["id"])}
-+        held = _compute_achieved(problem, solution.selected, pu_index)
++        held = compute_held(problem, solution.selected)
 +        represented_amount = {fid: float(held.get(fid, 0.0)) for fid in feature_ids}
 +    elif mask.any():
          rep_totals = puvspr.loc[mask].groupby("species")["amount"].sum()
@@ -4123,6 +4472,7 @@ index a983784..387141c 100644
      n = len(solutions)
      frequencies = counts / n
      best = min(solutions, key=lambda s: s.objective)
+ 
 ```
 
 Modify `src/pymarxan/phylo/diversity.py` (apply this diff):
@@ -4159,20 +4509,50 @@ index f6ceb1e..d85fbc5 100644
      }
 ```
 
+Modify `src/pymarxan/solvers/__init__.py` (apply this diff):
+
+```diff
+diff --git a/src/pymarxan/solvers/__init__.py b/src/pymarxan/solvers/__init__.py
+index a320e1d..be341e9 100644
+--- a/src/pymarxan/solvers/__init__.py
++++ b/src/pymarxan/solvers/__init__.py
+@@ -2,10 +2,11 @@ from pymarxan.solvers.base import (
+     FractionalSolutionError,
+     Solution,
+     Solver,
+     SolverConfig,
+     require_binary,
++    require_binary_solver,
+ )
+ from pymarxan.solvers.export import write_problem
+ from pymarxan.solvers.heuristic import HeuristicSolver
+ from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+ from pymarxan.solvers.marxan_binary import MarxanBinarySolver
+@@ -29,7 +30,8 @@ __all__ = [
+     "SolverConfig",
+     "binarize_solution",
+     "compute_held",
+     "presolve_check",
+     "require_binary",
++    "require_binary_solver",
+     "write_problem",
+ ]
+```
+
 Modify `src/pymarxan/solvers/base.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan/solvers/base.py b/src/pymarxan/solvers/base.py
-index a7ebecc..af5f9bd 100644
+index 35fbd3f..8d43726 100644
 --- a/src/pymarxan/solvers/base.py
 +++ b/src/pymarxan/solvers/base.py
-@@ -71,10 +71,21 @@ class Solution:
+@@ -73,10 +73,21 @@ class Solution:
  
  class FractionalSolutionError(ValueError):
      """A binary-only tool was given a solution holding proportion decisions."""
  
  
-+def _require_binary_solver(solver: object, context: str) -> None:
++def require_binary_solver(solver: object, context: str) -> None:
 +    """``FractionalSolutionError`` up front for a solver configured with non-binary
 +    decisions (tools that re-solve and read 0/1 plans, spec §6.2)."""
 +    decisions = getattr(solver, "decisions", "binary")
@@ -4230,17 +4610,17 @@ index 7eb8f66..b80eb36 100644
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/pymarxan/analysis/test_fractional_analysis.py tests/pymarxan/calibration/test_blm_fractional.py tests/pymarxan/test_fractional_readers.py -q`
-Expected: 16 passed
+Expected: 17 passed
 
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/pymarxan/analysis/equity.py src/pymarxan/analysis/portfolio.py src/pymarxan/analysis/portfolio_cuts.py src/pymarxan/analysis/posthoc_clusters.py src/pymarxan/analysis/rank_importance.py src/pymarxan/analysis/replacement_cost.py src/pymarxan/analysis/representation.py src/pymarxan/analysis/robustness.py src/pymarxan/analysis/scenarios.py src/pymarxan/analysis/selection_freq.py src/pymarxan/phylo/diversity.py src/pymarxan/solvers/base.py src/pymarxan/solvers/iterative_improvement.py tests/pymarxan/analysis/test_fractional_analysis.py tests/pymarxan/calibration/test_blm_fractional.py tests/pymarxan/test_fractional_readers.py
+git add src/pymarxan/analysis/equity.py src/pymarxan/analysis/portfolio.py src/pymarxan/analysis/portfolio_cuts.py src/pymarxan/analysis/posthoc_clusters.py src/pymarxan/analysis/rank_importance.py src/pymarxan/analysis/replacement_cost.py src/pymarxan/analysis/representation.py src/pymarxan/analysis/robustness.py src/pymarxan/analysis/scenarios.py src/pymarxan/analysis/selection_freq.py src/pymarxan/phylo/diversity.py src/pymarxan/solvers/__init__.py src/pymarxan/solvers/base.py src/pymarxan/solvers/iterative_improvement.py tests/pymarxan/analysis/test_fractional_analysis.py tests/pymarxan/calibration/test_blm_fractional.py tests/pymarxan/test_fractional_readers.py
 git commit -m "feat(stage4): T8 fraction-aware analysis, binary-only guards, reader completeness test
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -4270,10 +4650,10 @@ Modify `tests/pymarxan/test_fractional_readers.py` (apply this diff):
 
 ```diff
 diff --git a/tests/pymarxan/test_fractional_readers.py b/tests/pymarxan/test_fractional_readers.py
-index d70aed7..54e9c32 100644
+index aa032fe..48cbf5c 100644
 --- a/tests/pymarxan/test_fractional_readers.py
 +++ b/tests/pymarxan/test_fractional_readers.py
-@@ -84,12 +84,10 @@ def _module(rel: str) -> object:
+@@ -85,12 +85,10 @@ def _module(rel: str) -> object:
      return importlib.import_module(rel.removesuffix(".py").replace("/", "."))
  
  
@@ -4683,7 +5063,7 @@ Modify `src/pymarxan_shiny/modules/results/summary_table.py` (apply this diff):
 
 ```diff
 diff --git a/src/pymarxan_shiny/modules/results/summary_table.py b/src/pymarxan_shiny/modules/results/summary_table.py
-index 99cbec9..e504b64 100644
+index 99cbec9..9cc836b 100644
 --- a/src/pymarxan_shiny/modules/results/summary_table.py
 +++ b/src/pymarxan_shiny/modules/results/summary_table.py
 @@ -1,13 +1,40 @@
@@ -4694,7 +5074,7 @@ index 99cbec9..e504b64 100644
  
 +from pymarxan.models.problem import ConservationProblem
 +from pymarxan.solvers.base import Solution
-+from pymarxan.solvers.utils import _compute_achieved, check_targets
++from pymarxan.solvers.utils import check_targets, compute_held
  from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
  
  
@@ -4702,7 +5082,7 @@ index 99cbec9..e504b64 100644
 +    """One row per feature: held (Σ r·x for proportions) and met per ``check_targets``
 +    (MISSLEVEL applied; tolerant for fractional plans, Stage 4 §6.1 / §6.5)."""
 +    pu_index = {int(pid): i for i, pid in enumerate(problem.planning_units["id"].values)}
-+    held = _compute_achieved(problem, solution.selected, pu_index)
++    held = compute_held(problem, solution.selected, pu_index)
 +    met = (
 +        check_targets(problem, solution.selected, pu_index, _achieved=held)
 +        if "target" in problem.features.columns
@@ -4876,7 +5256,7 @@ Expected: 12 passed
 - [ ] **Step 5: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 6: Commit**
 
@@ -4936,16 +5316,17 @@ index 4d8a035..e5873bb 100644
  To add a new solver: inherit `Solver`, implement `solve()`, `name()`, `supports_zones()`.
  
  ### I/O pattern (`io/readers.py`, `io/writers.py`)
+ 
 ````
 
 Modify `CHANGELOG.md` (apply this diff):
 
 ```diff
 diff --git a/CHANGELOG.md b/CHANGELOG.md
-index b716807..43bd61c 100644
+index b716807..e0bb0ac 100644
 --- a/CHANGELOG.md
 +++ b/CHANGELOG.md
-@@ -5,10 +5,27 @@ All notable changes to **pymarxan** are documented in this file.
+@@ -5,10 +5,28 @@ All notable changes to **pymarxan** are documented in this file.
  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
  
@@ -4954,31 +5335,33 @@ index b716807..43bd61c 100644
 +### Added
 +
 +- **Proportion and semicontinuous decisions** (Stage 4 of the prioritizr roadmap): `MIPSolver(decisions="binary" | "proportion" | "semicontinuous", upper=1.0, lower=0.0)` and the same arguments on `MultiObjectiveMIP`. `"proportion"` makes each planning unit a continuous share `x ∈ [0, upper]` (prioritizr's `add_proportion_decisions`; its `add_semicontinuous_decisions(u)` is `decisions="proportion", upper=u`, since prioritizr's version has no lower bound). `"semicontinuous"` is a true floor, `x = 0` or `lower ≤ x ≤ upper`, with one on/off binary per unit (a MILP, not faster than binary). Non-binary solutions hold `float64` proportions in `Solution.selected`; `Solution.is_fractional` and `Solution.selected_sum` (Σ x, prioritizr's `eval_n_summary`) are new, and `n_selected` stays the count of units with x > 0.
-+- Fraction-linear evaluators in `pymarxan.solvers.utils`: held `Σ r·x`, cost `Σ c·x`, boundary `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|` (exactly the MIP's term; prioritizr's optimiser uses the same linearisation, its evaluators use the product `x_i·x_j`), connectivity `−v·min(x_i, x_j) + v·|x_i − x_j|` per row, PROBMODE 1 premium `Σ w·p·c·x`. A fractional target is met when `held ≥ R − tol(R)`, `tol(v) = 1e-6 + 1e-7·|v|` (`TARGET_ABS_TOL`, `TARGET_REL_TOL`, `target_tol`), because LP optima leave active target rows a solver tolerance below R; binary comparisons stay exact.
-+- `binarize_solution(problem, solution, threshold=0.5)`, the only rounding path, and `FractionalSolutionError` / `require_binary(solution, context)` in `pymarxan.solvers`. Tools that only make sense for 0/1 plans raise `FractionalSolutionError`: iterative improvement (and RUNMODE chains through it), `generate_portfolio_cuts` and `compute_replacement_cost` (up front, given a non-binary `MIPSolver`), `solution_diversity`, `ScenarioSet.overlap_matrix`, `compute_solution_clusters`, `compute_rank_importance`, `compute_phylogenetic_diversity` (Faith PD is presence-based) and the zone-writer fallbacks for solutions without `zone_assignment`; the Shiny comparison map shows an explanation instead of the four-colour map.
-+- Fraction-aware readers: `write_run` / `write_best` / `write_solution_matrix` (values written with 10 significant digits), `write_mvbest`, `write_ssoln` / `read_ssoln` (float sums), `export_solution_csv`, `export_summary_csv`, `export_solution_spatial`, `export_frequency_spatial`, `compute_selection_frequency`, `compute_representation` (Σ r·x), `compute_equity` (Σ x·value), `evaluate_plans_across_scenarios`; the Shiny solution map shades units by x, and the solver panel has Decisions / Upper / Lower inputs.
-+- `presolve_check(problem, *, decisions=, upper=, lower=)`: P6, P9a and P11 scale with `upper`; P9b uses `lower × min cost` for semicontinuous and is skipped for proportion. The solvers pass their own bounds.
-+- **Deviations / limits** (deliberate): a locked-in unit is fixed at `upper` ("selected as fully as allowed"; prioritizr's lock-in is infeasible when `upper < 1`). Non-binary decisions reject PROBMODE 3, clumping (`target2`), separation, space targets, `forbidden_selections` no-good cuts and negative connectivity values with a `ValueError`. Extraction snaps solver dust (≤ 1e-9) to 0 and values within 1e-6 below `upper` / `lower` up to the bound, never down otherwise. `ZoneMIPSolver` stays binary. `compute_connectivity_penalty` still differs from the MIP's connectivity term (pre-existing: the MIP rewards both-selected pairs once, the evaluator rewards both and charges exactly-one per row), so `Solution.objective` equals the MIP objective only without connectivity.
++- Fraction-linear evaluators in `pymarxan.solvers.utils`: held `Σ r·x`, cost `Σ c·x`, boundary `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|` (exactly the MIP's term; prioritizr's optimiser uses the same linearisation for its default non-knapsack boundary formulation with Marxan's edge convention, its evaluators use the product `x_i·x_j`; for fractional plans it is a linear compactness penalty, not a measured perimeter), connectivity `−v·min(x_i, x_j) + v·|x_i − x_j|` per row, PROBMODE 1 premium `Σ w·p·c·x`. Held amounts assume features are spread evenly within a unit (as prioritizr does). A fractional target is met when `held ≥ R − tol(R)`, `tol(v) = 1e-7·|v|` (`TARGET_REL_TOL`, `target_tol`; purely relative, so R = 0 is met by any plan and nothing held never meets a positive target), because LP optima leave active target rows a solver tolerance below R; binary comparisons stay exact. This is looser than prioritizr's `eval_target_coverage_summary` (shortfall < 1e-10), which can report LP-optimal targets unmet. `compute_held(problem, selected, pu_index=None)` is the public held-amount helper.
++- `binarize_solution(problem, solution, threshold=0.5)`, the only rounding path, and `FractionalSolutionError` / `require_binary(solution, context)` / `require_binary_solver(solver, context)` in `pymarxan.solvers`. Thresholding a fractional optimum is a conversion, not an optimisation: the 0/1 plan can miss targets, the exact binary target rule is re-applied (a feature met within tolerance can flip to unmet), and a threshold above `upper` selects nothing; re-solve with `decisions="binary"` or `"semicontinuous"` for a feasible 0/1 plan. Tools that only make sense for 0/1 plans raise `FractionalSolutionError`: iterative improvement (and RUNMODE chains through it), `generate_portfolio_cuts` and `compute_replacement_cost` (up front, given a non-binary `MIPSolver`), `solution_diversity`, `ScenarioSet.overlap_matrix`, `compute_solution_clusters`, `compute_rank_importance`, `compute_phylogenetic_diversity` (Faith PD is presence-based) and the zone-writer fallbacks for solutions without `zone_assignment`; the Shiny comparison map shows an explanation instead of the four-colour map.
++- Fraction-aware readers: `write_run` / `write_best` / `write_solution_matrix` (values written with 10 significant digits), `write_mvbest`, `write_ssoln` / `read_ssoln` (float sums), `export_solution_csv`, `export_summary_csv`, `export_solution_spatial`, `export_frequency_spatial`, `compute_selection_frequency` (for fractional sets the mean share; `write_ssoln` sums shares, and mixed binary + fractional sets aggregate shares), `compute_representation` (Σ r·x), `compute_equity` (Σ x·value), `evaluate_plans_across_scenarios`; the Shiny solution map shades units by x, and the solver panel has Decisions / Upper / Lower inputs.
++- `presolve_check(problem, *, decisions=, upper=, lower=)` (invalid values raise `ValueError`): P6 compares a target with the locked-in amount plus `upper ×` the free amount, P9a's floor is the locked-in cost, P11's ceiling the locked-in cost plus `upper ×` the free cost; P9b uses `lower × min cost` for semicontinuous and is skipped for proportion. The solvers pass their own bounds.
++- **Deviations / limits** (deliberate): a locked-in unit is fixed whole (`x = 1.0`) in every mode, and `upper` / `lower` bound only free units (prioritizr's lock-in is infeasible when `upper < 1`). Non-binary decisions reject PROBMODE 3, clumping (`target2`), separation, space targets, `forbidden_selections` no-good cuts and negative connectivity values with a `ValueError`. Extraction clips each unit to its bounds and sets solver dust (≤ 1e-9) to 0; semicontinuous values within 1e-6 below `lower` are raised to `lower`; nothing else is rounded. The raw-array APIs of `pymarxan.constraints` / `pymarxan.objectives` (`evaluate`, `penalty`) are binary-only (any non-zero share counts as selected). `ZoneMIPSolver` stays binary. `compute_connectivity_penalty` still differs from the MIP's connectivity term (pre-existing: the MIP rewards both-selected pairs once, the evaluator rewards both and charges exactly-one per row), so `Solution.objective` equals the MIP objective only without connectivity.
 +
 +### Changed
 +
-+- `write_mvbest` and `export_summary_csv` compute held amounts with `_compute_achieved` and met with `check_targets` (binary output unchanged for loaded projects). `read_ssoln` keeps `Number` as int only when every value is integral. The symmetric-connectivity implied rules used by multi-objective cap checks are `min(x_i, x_j)` / `max(0, x_i − x_j)` (identical on 0/1).
++- `write_mvbest` and `export_summary_csv` compute held amounts with `compute_held` and met with `check_targets` (binary output unchanged for loaded projects). `read_ssoln` keeps `Number` as int only when every value is integral. The symmetric-connectivity implied rules used by multi-objective cap checks are `min(x_i, x_j)` / `max(0, x_i − x_j)` (identical on 0/1).
 +
 +### Fixed
 +
 +- The Shiny target-achievement table ignored MISSLEVEL (`held >= target`); it now uses `check_targets`, as `write_mvbest` and `export_summary_csv` already did.
++- `build_solution` (and `binarize_solution`) enforce the selection contract: one entry per planning unit; bool; float finite and within [0, 1]; integer arrays holding only 0/1 are cast to bool. Integer 0/1 selections were fancy-indexed before (pre-existing: `[1, 0, 1]` summed the costs at positions 1, 0, 1 instead of the units at positions 0 and 2); other integers, NaN or out-of-range values now raise `ValueError`.
 +
  ## [0.41.1] — 2026-10-16
  
  ### Fixed
  - `solve_lexicographic` (the `min_penalties` two-pass solve in `MIPSolver`) now caps pass 2 at `opt + rel_tol·|opt| + max(abs_tol, 1e-9·|opt|)`, the relative floor v0.41.0 gave the hierarchical caps. PuLP writes MPS values to 13 significant figures, so with `rel_tol=0` a primary of about 1e5 or more could exclude its own pass-1 optimum and fall back to the pass-1 plan with a warning. `MIPSolver` uses the default `rel_tol=1e-9`, which already masked this; the cap is now at most `1e-9·|opt|` looser.
+ 
 ```
 
 Modify `docs/USER_MANUAL.md` (apply this diff):
 
 ````diff
 diff --git a/docs/USER_MANUAL.md b/docs/USER_MANUAL.md
-index 7e01713..78f2af9 100644
+index 7e01713..fa3f56c 100644
 --- a/docs/USER_MANUAL.md
 +++ b/docs/USER_MANUAL.md
 @@ -24,10 +24,11 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
@@ -5007,7 +5390,7 @@ index 7e01713..78f2af9 100644
  
  | HEURTYPE | Strategy |
  |----------|----------|
-@@ -343,10 +347,62 @@ pyMarxan supports ten solver algorithms:
+@@ -343,10 +347,90 @@ pyMarxan supports ten solver algorithms:
  | 3 | Heuristic + iterative improvement |
  | 4 | Heuristic + SA (pick best) |
  | 5 | Heuristic + SA + improvement (highest quality) |
@@ -5016,8 +5399,11 @@ index 7e01713..78f2af9 100644
 +### Partial Selection
 +
 +By default the MIP selects whole planning units (`decisions="binary"`). Two other decision
-+types let a unit be **partly** selected — partial protection, restoration shares, land-use
-+fractions:
++types let the plan take **part of a unit** — protecting or restoring a share of its area,
++or committing a share of management effort, e.g. restoration shares or land-use fractions.
++`x` is that share of the unit's area (or effort), between 0 and 1. If you mean protection
++that is only partly *effective* across a whole unit, use zones with a zone contribution
++instead (`ZoneMIPSolver`).
 +
 +| Decisions | Each unit | Model |
 +|-----------|-----------|-------|
@@ -5032,37 +5418,62 @@ index 7e01713..78f2af9 100644
 +problem = load_project("tests/data/simple")
 +
 +sol = MIPSolver(decisions="proportion", upper=0.8).solve(problem)[0]
-+sol.selected        # float64 shares in [0, 0.8]
-+sol.selected_sum    # Σ x; sol.n_selected counts units with x > 0
-+plan = binarize_solution(problem, sol, threshold=0.5)  # explicit 0/1 plan
++print(sol.selected)         # float64 shares in [0, 0.8]
++print(sol.all_targets_met)  # True: the shares meet every target
++print(sol.selected_sum)     # Σ x; sol.n_selected counts units with x > 0
++
++plan = binarize_solution(problem, sol, threshold=0.5)
++print(plan.all_targets_met)  # False: rounding the shares is not a plan
 +```
++
++`binarize_solution` converts shares to a 0/1 plan by threshold; it does not optimise. The
++result can miss targets the shares met (here it misses all three), the exact binary target
++rule is re-applied (so a target met within the fractional tolerance can flip to unmet), and a
++threshold above `upper` selects nothing. For a feasible whole-unit plan, solve with
++`decisions="binary"`, or with `decisions="semicontinuous"` for "nothing, or at least `lower`
++of a unit".
 +
 +**prioritizr mapping.** `add_proportion_decisions()` is `decisions="proportion"`.
 +prioritizr's `add_semicontinuous_decisions(u)` has no lower bound — it is
 +`decisions="proportion", upper=u`. `decisions="semicontinuous"` is a true floor.
 +
-+**How results are computed.** Every number is linear in the shares: cost `Σ c·x`, held
-+amount `Σ r·x`, boundary `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|` (the optimiser's own term; prioritizr's
-+evaluators use `x_i·x_j` instead), connectivity `−v·min(x_i, x_j) + v·|x_i − x_j|` per row. A
-+target counts as met when the held amount is within `1e-6 + 1e-7·|target|` of it, because a
-+linear-program optimum leaves active targets a solver tolerance short; binary plans are judged
-+exactly. The connectivity evaluator differs from the MIP's connectivity term (also for binary
-+plans, a pre-existing difference), so with connectivity the reported objective is not the MIP
-+objective.
++**How results are computed.** Every number is linear in the shares: cost `Σ c·x` and held
++amount `Σ r·x`. Held amounts assume each feature is spread evenly within a unit, the same
++assumption prioritizr makes. Boundary is `Σ b_ii·x_i + Σ b_ij·|x_i − x_j|`, the optimiser's own
++term; with Marxan's boundary convention it equals prioritizr's default (non-knapsack) boundary
++formulation, whose evaluators instead report `x_i·x_j`. For fractional plans the boundary is a
++linear compactness penalty, not a measured perimeter. Connectivity is
++`−v·min(x_i, x_j) + v·|x_i − x_j|` per row. The connectivity evaluator differs from the MIP's
++connectivity term (also for binary plans, a pre-existing difference), so with connectivity the
++reported objective is not the MIP objective.
++
++A target counts as met when the held amount is within `1e-7·|target|` of it (relative only;
++a target of 0 is always met), because a linear-program optimum leaves active targets a solver
++tolerance short; binary plans are judged exactly. This is looser than prioritizr's
++`eval_target_coverage_summary` (shortfall below `1e-10`, absolute), which can report LP-optimal
++targets as unmet where pymarxan reports them met.
++
++For a set of fractional solutions, "selection frequency" (`compute_selection_frequency`,
++`export_frequency_spatial`) is the mean share and the summed-solution `Number`
++(`write_ssoln`) the sum of shares; a set mixing binary and fractional solutions aggregates
++shares (a binary selection counts as 1).
 +
 +**Differences and limits.**
-+- Locked-in units (status 2) are fixed at `upper` — "selected as fully as allowed". prioritizr
-+  makes the model infeasible when `upper < 1`.
++- Locked-in units (status 2) are fixed whole (`x = 1.0`) in every mode; `upper` and `lower`
++  bound only the free units. prioritizr makes the model infeasible when `upper < 1`.
 +- Non-binary decisions cannot be combined with PROBMODE 3, clumping (`target2`), separation,
 +  space targets, no-good cuts or negative connectivity values; the solver raises `ValueError`.
-+- Values within `1e-6` below `upper` (or `lower`) are snapped up to the bound and values at or
-+  below `1e-9` to 0; nothing is rounded otherwise. A genuine optimum below `1e-9` (one unit
-+  holding a billion times a target) would be lost.
++- Solver values are clipped to each unit's bounds and values at or below `1e-9` set to 0;
++  semicontinuous values within `1e-6` below `lower` are raised to `lower`. Nothing else is
++  rounded. A genuine optimum below `1e-9` (one unit holding a billion times a target) would be
++  lost.
 +- Tools that only make sense for whole units raise `FractionalSolutionError`: iterative
 +  improvement and RUNMODE chains through it, portfolio cuts, replacement cost, solution
 +  diversity, scenario overlap, post-hoc clusters, rank importance, phylogenetic diversity and
 +  zone writers; the solution comparison map shows an explanation instead. Convert first
 +  with `binarize_solution`.
++- The raw-array APIs of `pymarxan.constraints` and `pymarxan.objectives` (`evaluate`,
++  `penalty`) are binary-only: they treat any non-zero share as selected.
 +- Zone solvers stay binary.
 +
  ### Zone Configuration
@@ -5076,10 +5487,10 @@ Modify `docs/plans/2026-10-11-prioritizr-parity-roadmap.md` (apply this diff):
 
 ```diff
 diff --git a/docs/plans/2026-10-11-prioritizr-parity-roadmap.md b/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
-index 6e0ec28..fdb2a1f 100644
+index 6e0ec28..b042ac4 100644
 --- a/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
 +++ b/docs/plans/2026-10-11-prioritizr-parity-roadmap.md
-@@ -159,10 +159,20 @@ MIP only; CBC/HiGHS. Zones in a follow-up unless Stage 1's builders make it free
+@@ -159,10 +159,25 @@ MIP only; CBC/HiGHS. Zones in a follow-up unless Stage 1's builders make it free
  
  ---
  
@@ -5090,17 +5501,22 @@ index 6e0ec28..fdb2a1f 100644
 +with scalar `upper` / `lower`; `"proportion", upper=u` is prioritizr's
 +`add_semicontinuous_decisions(u)`, `"semicontinuous"` a true floor. Fractional `Solution`s carry
 +float64 shares; evaluators are fraction-linear (boundary `|x_i − x_j|`, the optimiser's form) with
-+a target tolerance `1e-6 + 1e-7·|R|`; every other `Solution.selected` reader is either
-+fraction-aware or raises `FractionalSolutionError` (pinned by a completeness test).
-+`binarize_solution` is the only rounding path. Locked-in units sit at `upper` (prioritizr:
-+infeasible). `ZoneMIPSolver` and per-PU bounds are out of scope.
++a target tolerance; every other `Solution.selected` reader is either fraction-aware or raises
++`FractionalSolutionError` (pinned by a completeness test). `binarize_solution` is the only
++rounding path. `ZoneMIPSolver` and per-PU bounds are out of scope.
++Spec amendments from the 4-lens review (as built): **R1** the target tolerance is purely
++relative, `tol(R) = 1e-7·|R|` (no absolute floor: a 1e-6 floor let an empty plan "meet" tiny
++targets); **R3** locked-in units are fixed at `x = 1.0` in every mode, `upper` / `lower` bound
++free units only (prioritizr: infeasible when `upper < 1`), and presolve P6/P9a/P11 follow;
++**R5** extraction no longer snaps up to `upper` (clip to each unit's bound, dust ≤ 1e-9 → 0,
++semicontinuous `lower` snap and `s = 0` → 0 only).
 +
  **Goal:** a PU can be partly selected (0–1), or selected above a floor if selected at all. This
  covers partial protection, restoration areas and land-use shares, and pairs with
  `pymarxan.restoration`.
  
  **Scope**
-@@ -198,5 +208,10 @@ Fold these into a stage when one touches the same code:
+@@ -198,5 +213,10 @@ Fold these into a stage when one touches the same code:
  - Neighbour penalties.
  - Shuffle portfolio. Top and extra portfolios need a solver solution pool, which CBC and HiGHS
    lack.
@@ -5116,7 +5532,7 @@ index 6e0ec28..fdb2a1f 100644
 - [ ] **Step 2: Gate**
 
 Run: `~/.local/bin/ruff check src tests && /home/razinka/marxan/.venv/bin/mypy src/pymarxan/ src/pymarxan_shiny/ --ignore-missing-imports && PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/pytest tests/ -q -m "not bench" -p no:cacheprovider`
-Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3444 passed, 61 skipped, 20 deselected at Task 10).
+Expected: ruff and mypy clean; the full suite passes with no golden regenerated (prototype final: 3501 passed, 101 skipped, 20 deselected at Task 10).
 
 - [ ] **Step 3: Commit**
 

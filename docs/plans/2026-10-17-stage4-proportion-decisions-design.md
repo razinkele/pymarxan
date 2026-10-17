@@ -9,6 +9,25 @@ source (commit `f2f5628`): `R/add_proportion_decisions.R`, `R/add_semicontinuous
 `R/eval_target_coverage_summary.R`, `R/eval_n_summary.R`, read 2026-10-17. The findings that
 matter are restated here.
 
+> **As-built amendments (4-lens design review, 2026-10-17; synthesis in
+> `docs/plans/2026-10-17-stage4-review.md`):**
+> - **§5.3 tolerance is purely relative:** `tol(R) = 1e-7·|R|` (`TARGET_ABS_TOL` removed). The
+>   `1e-6` absolute floor made an empty fractional plan "meet" every target below ~1e-6. A
+>   relative-only rule passed 600 of 600 LP rows at amount scales 1e-6 to 1e8 under CBC.
+> - **§3.2 locked-in = 1.0 (user decision):** locked-in PUs are fixed at `x = 1.0` in every mode.
+>   `upper` and the semicontinuous band apply only to free PUs, because status 2 usually encodes
+>   existing, fully protected reserves. Presolve follows: P9a's floor is the unscaled locked cost,
+>   and P6 / P11 count locked units in full.
+> - **§4 snapping:** there is no upward snap to `upper`. A value just below the bound is a genuine
+>   simplex value, and snapping it up can breach COSTBUDGET. Extraction keeps the clip to each PU's
+>   own bound, dust removal (≤ 1e-9 becomes 0), the semicontinuous snap to `lower`, and `s = 0` → 0.
+> - **Input contract:** `build_solution` / `binarize_solution` validate `selected`. The length
+>   must match; floats must be finite and in [0, 1]; int 0/1 arrays become bool (they were
+>   fancy-indexed before, a pre-existing bug); other ints raise.
+> - **Layout:** decision validation and extraction live in the leaf module
+>   `solvers/_decisions.py`, and `presolve_check` validates its bound arguments. The helpers
+>   `compute_held` and `require_binary_solver` are public.
+
 ## 1. Intent
 
 A planning unit can be **partly** selected: partial protection, restoration shares, land-use
