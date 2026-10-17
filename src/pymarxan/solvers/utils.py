@@ -1,11 +1,89 @@
-"""Shared utility functions for conservation planning solvers."""
+"""Shared utility functions for conservation planning solvers.
+
+Selections are bool arrays, or float64 proportions in [0, 1] (Stage 4). Every evaluator
+is linear in the fractions and reduces to the binary formula on 0/1 input; the binary
+code path keeps its exact comparisons (spec §5.3).
+"""
 from __future__ import annotations
+
+import math
 
 import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
+from pymarxan.solvers._tolerance import target_tol as target_tol
 from pymarxan.solvers.base import Solution
+
+
+def _is_fractional(selected: np.ndarray) -> bool:
+    """A proportion selection: the dtype decides, not the values (spec §5.1)."""
+    return np.asarray(selected).dtype.kind == "f"
+
+
+def _coerce_selected(selected: np.ndarray, n_pu: int) -> np.ndarray:
+    """The ``Solution.selected`` input contract (review R2), enforced where selections enter.
+
+    One entry per planning unit (``ValueError`` otherwise). bool: unchanged. Float kind:
+    float64, finite and within [0, 1]. int / uint holding only 0 and 1: cast to bool (they
+    were fancy-indexed before Stage 4); any other int, or another dtype: ``ValueError``.
+    """
+    arr = np.asarray(selected)
+    if arr.ndim != 1 or arr.shape[0] != n_pu:
+        raise ValueError(
+            f"selected must have one entry per planning unit ({n_pu}), got shape {arr.shape}"
+        )
+    kind = arr.dtype.kind
+    if kind == "b":
+        return arr
+    if kind == "f":
+        arr = arr.astype(np.float64)
+        bad = ~np.isfinite(arr) | (arr < 0.0) | (arr > 1.0)
+        if bad.any():
+            i = int(np.flatnonzero(bad)[0])
+            raise ValueError(
+                f"selected proportions must be finite and within [0, 1]; entry {i} is "
+                f"{float(arr[i])!r}"
+            )
+        return arr
+    if kind in "iu":
+        if np.isin(arr, (0, 1)).all():
+            return arr.astype(bool)
+        i = int(np.flatnonzero(~np.isin(arr, (0, 1)))[0])
+        raise ValueError(
+            f"integer selections must hold only 0 and 1 (entry {i} is {int(arr[i])!r}); pass a "
+            "bool array, or float64 proportions"
+        )
+    raise ValueError(f"selected must be a bool, integer 0/1 or float array, got {arr.dtype}")
+
+
+def _nonbinary_conflicts(problem: ConservationProblem) -> list[str]:
+    """Problem settings whose evaluators only make sense for 0/1 selections (spec §3.5).
+
+    Clumping, separation and space are evaluated post hoc by selecting PUs by truthiness.
+    PROBMODE 3 is checked separately (``compute_probability_penalty``).
+    """
+    feats = problem.features
+    out: list[str] = []
+    if "target2" in feats.columns and (feats["target2"] > 0).any():
+        out.append("clumping (a feature has target2 > 0)")
+    if (
+        "sepnum" in feats.columns
+        and "sepdistance" in feats.columns
+        and ((feats["sepnum"] > 1) & (feats["sepdistance"] > 0)).any()
+    ):
+        out.append("separation (a feature has sepdistance > 0 and sepnum > 1)")
+    if "space_target" in feats.columns and (feats["space_target"] > 0).any():
+        out.append("space targets (a feature has space_target > 0)")
+    return out
+
+
+def _total_cost(costs: np.ndarray, selected: np.ndarray) -> float:
+    """Σ c·x (fractional) or the cost of the selected PUs (binary, unchanged)."""
+    if _is_fractional(selected):
+        return float(np.dot(costs.astype(np.float64), selected))
+    return float(np.sum(costs[selected]))
 
 
 def _compute_achieved(
@@ -29,6 +107,16 @@ def _compute_achieved(
     valid = pu_indices >= 0
     # Safe indexing: use 0 for invalid indices, then mask out
     safe_indices = np.where(valid, pu_indices, 0)
+    if _is_fractional(selected):
+        # held_f = Σ_i r_if·x_i (raw amounts, as the binary path)
+        weighted = pd.DataFrame({
+            "species": species_col,
+            "amount": amount_col.astype(np.float64) * np.where(valid, selected[safe_indices], 0.0),
+        })
+        result = {int(fid): 0.0 for fid in problem.features["id"]}
+        for fid, amount in weighted.groupby("species")["amount"].sum().items():
+            result[int(fid)] = float(amount)  # type: ignore[call-overload]
+        return result
     sel_mask = valid & selected[safe_indices]
 
     # Use only selected rows and groupby species
@@ -56,9 +144,11 @@ def compute_boundary(
 
     Diagonal entries (id1==id2) represent external boundary, added when PU is selected.
     Off-diagonal entries represent shared boundary, added when exactly one PU is selected.
+    Fractional: ``Σ b_ii·x_i + Σ b_ij·|x_i − x_j|`` (row-wise), the MIP's boundary term.
     """
     if problem.boundary is None:
         return 0.0
+    fractional = _is_fractional(selected)
 
     bnd = problem.boundary
     id1_col = bnd["id1"].values
@@ -74,12 +164,14 @@ def compute_boundary(
         if id1 == id2:
             idx = pu_index.get(id1)
             if idx is not None and selected[idx]:
-                total += bval
+                total += bval * float(selected[idx]) if fractional else bval
         else:
             idx1 = pu_index.get(id1)
             idx2 = pu_index.get(id2)
             if idx1 is not None and idx2 is not None:
-                if selected[idx1] != selected[idx2]:
+                if fractional:
+                    total += bval * abs(float(selected[idx1]) - float(selected[idx2]))
+                elif selected[idx1] != selected[idx2]:
                     total += bval
     return total
 
@@ -95,21 +187,25 @@ def check_targets(
 
     Uses the MISSLEVEL parameter (default 1.0) to allow fractional
     target achievement.  A target is considered met when the achieved
-    amount >= target * misslevel.
+    amount >= target * misslevel (exactly for binary selections; within
+    ``target_tol`` for fractional ones, spec §5.3).
     """
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     achieved = (
         _achieved if _achieved is not None
         else _compute_achieved(problem, selected, pu_index)
     )
+    fractional = _is_fractional(selected)
 
     targets_met: dict[int, bool] = {}
     feat_ids = problem.features["id"].values
     feat_targets = problem.features["target"].values
     for i in range(len(feat_ids)):
         fid = int(feat_ids[i])
-        target = float(feat_targets[i])
-        targets_met[fid] = achieved.get(fid, 0.0) >= target * misslevel
+        required = float(feat_targets[i]) * misslevel
+        if fractional:
+            required -= target_tol(required)
+        targets_met[fid] = achieved.get(fid, 0.0) >= required
     return targets_met
 
 
@@ -120,12 +216,17 @@ def compute_feature_shortfalls(
     *,
     _achieved: dict[int, float] | None = None,
 ) -> dict[int, float]:
-    """Compute the shortfall for each feature (target*misslevel - achieved, min 0)."""
+    """Compute the shortfall for each feature (target*misslevel - achieved, min 0).
+
+    Fractional selections: 0 when the feature is met within ``target_tol`` (so met ⇔
+    shortfall == 0, as ``check_targets`` decides it).
+    """
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     achieved = (
         _achieved if _achieved is not None
         else _compute_achieved(problem, selected, pu_index)
     )
+    fractional = _is_fractional(selected)
 
     shortfalls: dict[int, float] = {}
     feat_ids = problem.features["id"].values
@@ -133,7 +234,10 @@ def compute_feature_shortfalls(
     for i in range(len(feat_ids)):
         fid = int(feat_ids[i])
         target = float(feat_targets[i]) * misslevel
-        shortfalls[fid] = max(0.0, target - achieved.get(fid, 0.0))
+        short = max(0.0, target - achieved.get(fid, 0.0))
+        if fractional and short <= target_tol(target):
+            short = 0.0
+        shortfalls[fid] = short
     return shortfalls
 
 
@@ -208,6 +312,10 @@ def compute_connectivity_penalty(
 
     If ASYMMETRIC_CONNECTIVITY is set, directionality is preserved.
 
+    Fractional selections, per row: ``−v·min(x_i, x_j) + v·|x_i − x_j|`` (today's ``−v`` /
+    ``+v`` on 0/1). This evaluator differs from the MIP's connectivity term (pre-existing;
+    spec §5.3).
+
     Returns 0.0 if no connectivity data.
     """
     if problem.connectivity is None:
@@ -224,6 +332,7 @@ def compute_connectivity_penalty(
     id2_col = conn["id2"].values
     val_col = conn["value"].values.astype(np.float64)
 
+    fractional = _is_fractional(selected)
     total = 0.0
     for k in range(len(id1_col)):
         idx1 = pu_index.get(int(id1_col[k]))
@@ -231,6 +340,10 @@ def compute_connectivity_penalty(
         if idx1 is None or idx2 is None:
             continue
         val = float(val_col[k])
+        if fractional:
+            x1, x2 = float(selected[idx1]), float(selected[idx2])
+            total += -val * min(x1, x2) + val * abs(x1 - x2)
+            continue
         s1 = selected[idx1]
         s2 = selected[idx2]
         if s1 and s2:
@@ -259,6 +372,12 @@ def compute_probability_penalty(
     if prob_mode == 1:
         return _compute_probmode1_risk_premium(problem, selected)
     if prob_mode == 3:
+        if _is_fractional(selected):
+            raise ValueError(
+                "PROBMODE 3 (Z-score chance constraints) is only defined for binary "
+                "selections; this selection holds proportion decisions. Solve with "
+                "decisions='binary' or convert with binarize_solution()."
+            )
         return _compute_probmode3_zscore_penalty(problem, selected)
     return 0.0
 
@@ -283,13 +402,17 @@ def _compute_probmode1_risk_premium(
 
     costs = problem.planning_units["cost"].values
     pu_ids = problem.planning_units["id"].values
+    fractional = _is_fractional(selected)
 
     total = 0.0
     for i in range(len(pu_ids)):
         if selected[i]:
             pid = int(pu_ids[i])
             prob = prob_map.get(pid, 0.0)
-            total += prob * float(costs[i])
+            if fractional:
+                total += prob * float(costs[i]) * float(selected[i])
+            else:
+                total += prob * float(costs[i])
     return prob_weight * total
 
 
@@ -410,7 +533,7 @@ def compute_objective_terms(
         ``"cost_threshold"``, ``"probability"``, and ``"objective"``.
     """
     costs = np.asarray(problem.planning_units["cost"].values)
-    total_cost = float(np.sum(costs[selected]))
+    total_cost = _total_cost(costs, selected)
     total_boundary = compute_boundary(problem, selected, pu_index)
     achieved = _achieved if _achieved is not None else _compute_achieved(
         problem, selected, pu_index,
@@ -471,12 +594,26 @@ def build_solution(
 
     ``space_spec`` (a :class:`~pymarxan.adequacy.model.SpaceSpec`) configures the attribute space
     for post-hoc space/adequacy reporting; defaults to geographic centroids when omitted.
+
+    A float64 ``selected`` (proportions) is evaluated fraction-linearly (spec §5.3); with
+    clumping, separation, space targets or PROBMODE 3 it raises ``ValueError``. The input
+    contract of ``_coerce_selected`` is enforced first.
     """
+    selected = _coerce_selected(selected, len(problem.planning_units))
+    if _is_fractional(selected):
+        conflicts = _nonbinary_conflicts(problem)
+        if conflicts:
+            raise ValueError(
+                "a selection holding proportion decisions cannot be evaluated with "
+                + "; ".join(conflicts)
+                + ": these are only defined for binary selections. Solve with "
+                "decisions='binary' or convert with binarize_solution()."
+            )
     pu_ids = problem.planning_units["id"].tolist()
     pu_index = {pid: i for i, pid in enumerate(pu_ids)}
 
     costs = np.asarray(problem.planning_units["cost"].values)
-    total_cost = float(np.sum(costs[selected]))
+    total_cost = _total_cost(costs, selected)
     total_boundary = compute_boundary(problem, selected, pu_index)
 
     # Compute achieved amounts once, pass to all downstream functions
@@ -590,4 +727,32 @@ def build_solution(
         sep_penalty=sep_penalty_val,
         space_held=space_held,
         space_penalty=space_penalty_val,
+    )
+
+
+def binarize_solution(
+    problem: ConservationProblem, solution: Solution, threshold: float = 0.5,
+) -> Solution:
+    """The binary plan ``x >= threshold``, re-evaluated by ``build_solution`` (spec §5.2).
+
+    The only rounding path: binary input is returned unchanged (the same object).
+    ``0 < threshold <= 1``, else ``ValueError``. ``metadata`` keeps the solution's entries
+    plus ``"binarized_threshold"``.
+
+    Thresholding a fractional optimum is a **conversion, not an optimisation**: the 0/1
+    plan can miss targets the proportions met and is not the best binary plan. The exact
+    binary target rule is re-applied, so a feature met within the fractional tolerance
+    can flip to unmet, and a threshold above the solve's ``upper`` selects nothing. For a
+    feasible 0/1 plan re-solve with ``decisions="binary"`` (or ``"semicontinuous"``).
+    """
+    if not (isinstance(threshold, int | float) and not isinstance(threshold, bool)
+            and math.isfinite(threshold) and 0.0 < threshold <= 1.0):
+        raise ValueError(f"threshold must be in (0, 1], got {threshold!r}")
+    selected = _coerce_selected(solution.selected, len(problem.planning_units))
+    if not _is_fractional(selected):
+        return solution
+    mask = selected >= threshold
+    return build_solution(
+        problem, mask, blm=float(problem.parameters.get("BLM", 0.0)),
+        metadata={**solution.metadata, "binarized_threshold": threshold},
     )
