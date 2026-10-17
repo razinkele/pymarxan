@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 import pulp
 
+from pymarxan.solvers._decisions import _validate_decisions
+
 if TYPE_CHECKING:
     from pymarxan.models.problem import ConservationProblem
     from pymarxan.zones.model import ZonalProblem
@@ -44,7 +46,13 @@ def _is_nonfinite(message: str) -> bool:
 
 
 def _presolve_data(
-    flag: bool | str, problem: ConservationProblem, solver_name: str,
+    flag: bool | str,
+    problem: ConservationProblem,
+    solver_name: str,
+    *,
+    decisions: str = "binary",
+    upper: float = 1.0,
+    lower: float = 0.0,
 ) -> list[str]:
     """Data checks, run before the model is built (flag off: no work, ``[]``).
 
@@ -54,7 +62,7 @@ def _presolve_data(
     """
     if not flag:
         return []
-    messages = presolve_check(problem)
+    messages = presolve_check(problem, decisions=decisions, upper=upper, lower=lower)
     if any(_is_nonfinite(m) for m in messages):
         raise ValueError(
             f"{solver_name}: presolve check: " + " | ".join(messages)
@@ -168,7 +176,13 @@ def _budget_checks(budget: float | None, floor: float, cheapest: float | None,
     return out
 
 
-def presolve_check(problem: ConservationProblem) -> list[str]:
+def presolve_check(
+    problem: ConservationProblem,
+    *,
+    decisions: str = "binary",
+    upper: float = 1.0,
+    lower: float = 0.0,
+) -> list[str]:
     """Data problems likely to make a solve slow, imprecise or meaningless. Never raises.
 
     Returns ``[]`` when clean; every message starts with its code (``"P5: ..."``). When
@@ -183,10 +197,20 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
     ``presolve_check=`` flag. Zone problems check ``zone_costs`` (what the zone solvers
     optimise), not ``planning_units.cost``.
 
+    ``decisions`` / ``upper`` / ``lower`` (Stage 4, as ``MIPSolver`` takes them) scale the
+    core checks. Locked-in units are whole in every mode, so P6 compares the target with
+    the locked-in amount plus ``upper ×`` the free amount, P9a's floor is the locked-in cost
+    (unscaled) and P11's ceiling is the locked-in cost plus ``upper ×`` the free cost. P9b's
+    cheapest option is ``lower × min cost`` for ``"semicontinuous"`` and is skipped for
+    ``"proportion"`` (any positive budget buys a sliver). Zone checks ignore them. Invalid
+    values raise ``ValueError`` (a caller error, as in ``MIPSolver``).
+
     Through a solver's flag, a non-finite P1 value (cost, amount, target, boundary, spf,
     BLM, MISSLEVEL, COSTBUDGET, zone contribution) raises ``ValueError`` even under
     ``True``, because PuLP cannot build a model from it.
     """
+    # A bad decisions / upper / lower is a caller error, not a data finding (review R6).
+    decisions, upper, lower = _validate_decisions(decisions, upper, lower)
     try:
         errors = problem.validate()
     except Exception as exc:  # validate() should not raise; presolve must not either
@@ -198,7 +222,7 @@ def presolve_check(problem: ConservationProblem) -> list[str]:
 
         if isinstance(problem, ZonalProblem):
             return _zone_checks(problem)
-        return _core_checks(problem)
+        return _core_checks(problem, decisions=decisions, upper=upper, lower=lower)
     except Exception as exc:  # a diagnostic must never crash the caller
         return [f"P0: presolve check failed: {exc!r}"]
 
@@ -255,7 +279,13 @@ def _common(problem: ConservationProblem, costs: Any, cost_label: Label,
     return out
 
 
-def _core_checks(problem: ConservationProblem) -> list[str]:
+def _core_checks(
+    problem: ConservationProblem,
+    *,
+    decisions: str = "binary",
+    upper: float = 1.0,
+    lower: float = 0.0,
+) -> list[str]:
     pu = problem.planning_units
     costs = pu["cost"].to_numpy(dtype=float)
     status = (pu["status"].to_numpy(dtype=int) if "status" in pu.columns
@@ -267,13 +297,23 @@ def _core_checks(problem: ConservationProblem) -> list[str]:
     misslevel = float(problem.parameters.get("MISSLEVEL", 1.0))
     locked_out = {int(p) for p, s in zip(pu["id"].values, status, strict=True) if s == 3}
     avail = pvf[~pvf["pu"].isin(locked_out)].groupby("species")["amount"].sum()
+    if upper == 1.0:
+        reach, where = avail, "its total amount"
+    else:
+        # Stage 4 (review R3/R4): locked-in units are whole, free units hold at most upper.
+        locked_in = {int(p) for p, s in zip(pu["id"].values, status, strict=True) if s == 2}
+        rows_in = pvf["pu"].isin(locked_in)
+        held_in = pvf[rows_in].groupby("species")["amount"].sum()
+        free = pvf[~rows_in & ~pvf["pu"].isin(locked_out)].groupby("species")["amount"].sum()
+        reach = held_in.add(upper * free, fill_value=0.0)
+        where = f"the amount reachable at upper {upper:g}"
     short = [
-        f"feature {int(f)} target {t * misslevel:g} exceeds its total amount "
-        f"{float(avail.get(int(f), 0.0)):g} outside locked-out units"
+        f"feature {int(f)} target {t * misslevel:g} exceeds {where} "
+        f"{float(reach.get(int(f), 0.0)):g} outside locked-out units"
         for f, t in zip(problem.features["id"].values,
                         problem.features["target"].to_numpy(dtype=float), strict=True)
         if t > 0 and float(totals.get(int(f), 0.0)) > 0
-        and float(avail.get(int(f), 0.0)) < t * misslevel - 1e-9
+        and float(reach.get(int(f), 0.0)) < t * misslevel - 1e-9
     ]
     if short:
         out.append("P6: " + _first(short))
@@ -282,11 +322,24 @@ def _core_checks(problem: ConservationProblem) -> list[str]:
     if len(status) and (status == 3).all():
         out.append("P7b: every planning unit is locked out: nothing can be selected")
     free = costs[(status == 0) | (status == 1)]
+    # Stage 4 (review R4): locked-in units are whole, so the forced cost is unscaled; free
+    # units cost at most upper x their cost; a proportion plan can buy any sliver, a
+    # semicontinuous one at least lower x a unit.
+    cheapest = (
+        None if not free.size or decisions == "proportion"
+        else float(free.min()) * (lower if decisions == "semicontinuous" else 1.0)
+    )
+    if upper == 1.0:
+        ceiling = float(np.clip(costs[status != 3], 0, None).sum())
+    else:
+        ceiling = float(np.clip(costs[status == 2], 0, None).sum()) + upper * float(
+            np.clip(free, 0, None).sum()
+        )
     out += _budget_checks(
         budget,
         floor=float(costs[status == 2].sum()),
-        cheapest=float(free.min()) if free.size else None,
-        ceiling=float(np.clip(costs[status != 3], 0, None).sum()),
+        cheapest=cheapest,
+        ceiling=ceiling,
     )
     return out
 

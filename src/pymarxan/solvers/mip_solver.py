@@ -796,7 +796,10 @@ class MIPSolver(Solver):
         if config is None:
             config = SolverConfig()
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
-        data = _presolve_data(self.presolve_check, problem, self.name())
+        data = _presolve_data(
+            self.presolve_check, problem, self.name(),
+            decisions=self.decisions, upper=self.upper, lower=self.lower,
+        )
         built = self._build(problem, config)
         _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         return built.model
@@ -808,7 +811,10 @@ class MIPSolver(Solver):
             config = SolverConfig()
         # S3b: heads-up before building the model when the MILP is likely too large.
         _warn_if_large_mip(problem.n_planning_units, self.warn_above_pu)
-        data = _presolve_data(self.presolve_check, problem, self.name())
+        data = _presolve_data(
+            self.presolve_check, problem, self.name(),
+            decisions=self.decisions, upper=self.upper, lower=self.lower,
+        )
         built = self._build(problem, config)
         _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         model, x, pu_ids = built.model, built.x, built.pu_ids
