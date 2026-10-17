@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-10-17
+
 ### Added
 
 - **Proportion and semicontinuous decisions** (Stage 4 of the prioritizr roadmap): `MIPSolver(decisions="binary" | "proportion" | "semicontinuous", upper=1.0, lower=0.0)` and the same arguments on `MultiObjectiveMIP`. `"proportion"` makes each planning unit a continuous share `x ∈ [0, upper]` (prioritizr's `add_proportion_decisions`; its `add_semicontinuous_decisions(u)` is `decisions="proportion", upper=u`, since prioritizr's version has no lower bound). `"semicontinuous"` is a true floor, `x = 0` or `lower ≤ x ≤ upper`, with one on/off binary per unit (a MILP, not faster than binary). Non-binary solutions hold `float64` proportions in `Solution.selected`; `Solution.is_fractional` and `Solution.selected_sum` (Σ x, prioritizr's `eval_n_summary`) are new, and `n_selected` stays the count of units with x > 0.
@@ -1462,7 +1464,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.41.1...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.42.0
 [0.41.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.1
 [0.41.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.41.0
 [0.40.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.40.0
