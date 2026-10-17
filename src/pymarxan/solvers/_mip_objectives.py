@@ -6,7 +6,8 @@ Each target is one ``TargetTerm`` (prioritizr: one row per target). Builders ret
 objective (``set_objective``) and adds ``COSTBUDGET`` once. The four target builders work
 on any context. ``build_min_cost``, ``build_min_boundary`` and ``build_max_wtd_sum`` are
 core-only: they read ``ObjectiveContext`` fields that ``MIPSolver`` fills from
-``_build_base`` and that zone contexts leave empty. Imports only pulp and the stdlib.
+``_build_base`` and that zone contexts leave empty. Imports only pulp, the stdlib and the
+stdlib-only ``_tolerance``.
 """
 from __future__ import annotations
 
@@ -16,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import pulp
+
+from pymarxan.solvers._tolerance import target_tol
 
 SHORTFALL_UNITS = ("relative", "absolute")
 OBJECTIVE_ALIASES = {"max_n_targets_met": "max_features"}  # prioritizr >= 9 name
@@ -72,14 +75,24 @@ def expr_value(expr: pulp.LpAffineExpression) -> float:
     )
 
 
-def _slack_rule(term: TargetTerm) -> Callable[[], float]:
-    """s = max(0, R − A)."""
-    return lambda: max(0.0, term.required - expr_value(term.achieved))
+def _slack_rule(term: TargetTerm, fractional: bool = False) -> Callable[[], float]:
+    """s = max(0, R − A); fractional: zeroed when ``<= target_tol(R)`` (Stage 4 §3.6)."""
+    if not fractional:
+        return lambda: max(0.0, term.required - expr_value(term.achieved))
+
+    def rule() -> float:
+        short = max(0.0, term.required - expr_value(term.achieved))
+        return 0.0 if short <= target_tol(term.required) else short
+
+    return rule
 
 
-def _met_rule(term: TargetTerm) -> Callable[[], float]:
-    """y = 1 iff A >= R exactly: the ``check_targets`` rule."""
-    return lambda: 1.0 if expr_value(term.achieved) >= term.required else 0.0
+def _met_rule(term: TargetTerm, fractional: bool = False) -> Callable[[], float]:
+    """y = 1 iff A >= R (fractional: A >= R − target_tol(R)): the ``check_targets`` rule."""
+    if not fractional:
+        return lambda: 1.0 if expr_value(term.achieved) >= term.required else 0.0
+    required = term.required - target_tol(term.required)
+    return lambda: 1.0 if expr_value(term.achieved) >= required else 0.0
 
 
 @dataclass
@@ -89,7 +102,8 @@ class ObjectiveContext:
     ``implied`` is the implied-value registry (spec §5): each auxiliary variable a builder
     creates is registered with a rule giving its value implied by x, after every variable
     the rule reads. ``MIPSolver`` fills the expression fields from ``_build_base``; zone
-    contexts keep the defaults.
+    contexts keep the defaults. ``fractional`` (non-binary decisions) selects the tolerant
+    met / slack rules (Stage 4 §3.6).
     """
 
     model: pulp.LpProblem
@@ -102,6 +116,7 @@ class ObjectiveContext:
     prob_expr: pulp.LpAffineExpression = field(default_factory=pulp.LpAffineExpression)
     amount_exprs: dict[int, pulp.LpAffineExpression] = field(default_factory=dict)
     implied: list[ImpliedRule] = field(default_factory=list)
+    fractional: bool = False
     _slack: dict[str, pulp.LpVariable] = field(default_factory=dict, repr=False)
     _met: dict[str, pulp.LpVariable] = field(default_factory=dict, repr=False)
 
@@ -111,7 +126,7 @@ class ObjectiveContext:
             s = pulp.LpVariable(f"{self.prefix}s_{term.key}", lowBound=0)
             self.model += s >= term.required - term.achieved, f"{self.prefix}short_{term.key}"
             self._slack[term.key] = s
-            self.implied.append((s, _slack_rule(term)))
+            self.implied.append((s, _slack_rule(term, self.fractional)))
         return self._slack[term.key]
 
     def met(self, term: TargetTerm) -> pulp.LpVariable:
@@ -120,7 +135,7 @@ class ObjectiveContext:
             y = pulp.LpVariable(f"{self.prefix}y_{term.key}", cat="Binary")
             self.model += term.achieved >= term.required * y, f"{self.prefix}met_{term.key}"
             self._met[term.key] = y
-            self.implied.append((y, _met_rule(term)))
+            self.implied.append((y, _met_rule(term, self.fractional)))
         return self._met[term.key]
 
 

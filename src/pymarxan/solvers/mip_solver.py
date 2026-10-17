@@ -23,6 +23,21 @@ from pymarxan.solvers._backends import (
 from pymarxan.solvers._backends import (
     _make_pulp_solver as _make_pulp_solver,
 )
+from pymarxan.solvers._decisions import (
+    DECISIONS as DECISIONS,
+)
+from pymarxan.solvers._decisions import (
+    SNAP_TOL as SNAP_TOL,
+)
+from pymarxan.solvers._decisions import (
+    ZERO_TOL as ZERO_TOL,
+)
+from pymarxan.solvers._decisions import (
+    _extract_selected as _extract_selected,
+)
+from pymarxan.solvers._decisions import (
+    _validate_decisions as _validate_decisions,
+)
 from pymarxan.solvers._mip_objectives import (
     BUILDERS,
     ImpliedRule,
@@ -42,7 +57,38 @@ from pymarxan.solvers.presolve import (
     _presolve_data,
     _validate_presolve_flag,
 )
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _nonbinary_conflicts, build_solution
+
+
+def _reject_nonbinary(
+    problem: ConservationProblem, config: SolverConfig, decisions: str,
+) -> None:
+    """``ValueError`` for settings that only make sense with 0/1 decisions (spec §3.5)."""
+    if decisions == "binary":
+        return
+    causes: list[str] = []
+    if int(problem.parameters.get("PROBMODE", 0)) == 3:
+        causes.append("PROBMODE 3 (Z-score chance constraints)")
+    causes += _nonbinary_conflicts(problem)
+    if config.metadata and config.metadata.get("forbidden_selections"):
+        causes.append(
+            "forbidden_selections (no-good cuts are only valid for 0/1 variables)"
+        )
+    conn = problem.connectivity
+    if (
+        float(problem.parameters.get("CONNECTIVITY_WEIGHT", 0.0)) > 0
+        and conn is not None
+        and (conn["value"].to_numpy(dtype=float) < 0).any()
+    ):
+        causes.append(
+            "negative connectivity values (the linearised term would no longer equal "
+            "min(x_i, x_j))"
+        )
+    if causes:
+        raise ValueError(
+            f"decisions={decisions!r} cannot be combined with " + "; ".join(causes)
+            + ". Use decisions='binary'."
+        )
 
 
 def _validate_mip_strategy(
@@ -182,6 +228,25 @@ def _core_target_terms(
     return terms
 
 
+def _extract(
+    x: dict[int, pulp.LpVariable],
+    s: dict[int, pulp.LpVariable],
+    pu_ids: list[int],
+    decisions: str,
+    lower: float,
+) -> np.ndarray:
+    """``_extract_selected`` on the model's variables: each PU is clipped to its own x
+    upper bound (1.0 for locked-in), and PUs without an on/off variable pass ``None``."""
+    return _extract_selected(
+        [x[pid].varValue for pid in pu_ids],
+        [s[pid].varValue if pid in s else None for pid in pu_ids]
+        if decisions == "semicontinuous" else [],
+        decisions,
+        [float(x[pid].upBound if x[pid].upBound is not None else 1.0) for pid in pu_ids],
+        lower,
+    )
+
+
 def _value(var: pulp.LpVariable) -> float:
     return float(var.varValue or 0.0)
 
@@ -192,13 +257,18 @@ def _abs_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
 
 
 def _and_rule(a: pulp.LpVariable, b: pulp.LpVariable) -> Callable[[], float]:
-    """Symmetric connectivity auxiliary: x_i·x_j."""
-    return lambda: _value(a) * _value(b)
+    """Symmetric connectivity auxiliary: min(x_i, x_j) (x_i·x_j on 0/1)."""
+    return lambda: min(_value(a), _value(b))
 
 
 def _src_without_sink_rule(i: pulp.LpVariable, j: pulp.LpVariable) -> Callable[[], float]:
-    """Asymmetric connectivity auxiliary: x_i·(1 − x_j)."""
-    return lambda: _value(i) * (1.0 - _value(j))
+    """Asymmetric connectivity auxiliary: max(0, x_i − x_j) (x_i·(1 − x_j) on 0/1)."""
+    return lambda: max(0.0, _value(i) - _value(j))
+
+
+def _on_rule(x: pulp.LpVariable) -> Callable[[], float]:
+    """Semicontinuous indicator: s_i = 1 iff x_i > 0."""
+    return lambda: 1.0 if _value(x) > 0 else 0.0
 
 
 @dataclass
@@ -219,6 +289,10 @@ class _BaseModel:
     probmode: int
     has_target2: bool
     has_sep_active: bool
+    s: dict[int, pulp.LpVariable]  # semicontinuous on/off binaries; empty otherwise
+    decisions: str
+    upper: float
+    lower: float
 
     def context(self) -> ObjectiveContext:
         """One ``ObjectiveContext`` sharing this base's expressions and registry."""
@@ -226,7 +300,12 @@ class _BaseModel:
             self.model, self.cost_expr, self.terms, blm=self.blm,
             boundary_expr=self.boundary_expr, conn_expr=self.conn_expr,
             prob_expr=self.prob_expr, amount_exprs=self.amount_exprs, implied=self.implied,
+            fractional=self.decisions != "binary",
         )
+
+    def extract(self) -> np.ndarray:
+        """``Solution.selected`` from the current ``varValue``s (spec §4)."""
+        return _extract(self.x, self.s, self.pu_ids, self.decisions, self.lower)
 
 
 @dataclass
@@ -241,6 +320,10 @@ class _BuiltModel:
     probmode: int
     has_target2: bool
     has_sep_active: bool
+    s: dict[int, pulp.LpVariable]
+    decisions: str
+    upper: float
+    lower: float
     lex: tuple[pulp.LpAffineExpression, pulp.LpAffineExpression] | None = None
 
 
@@ -295,6 +378,15 @@ class MIPSolver(Solver):
     objective but meaningful only for the two shortfall objectives. ``max_features`` /
     ``max_weighted_features`` count only features with target > 0.
 
+    ``decisions`` (Stage 4): ``"binary"`` (default), ``"proportion"`` (continuous
+    ``x ∈ [0, upper]``; prioritizr's ``add_semicontinuous_decisions(u)`` is
+    ``decisions="proportion", upper=u``) or ``"semicontinuous"`` (``x = 0`` or
+    ``lower ≤ x ≤ upper``, a MILP with one on/off binary per PU). Non-binary solutions hold
+    float64 proportions; locked-in PUs are fixed whole (x = 1.0) in every mode, ``upper`` and
+    ``lower`` bound the free PUs. PROBMODE 3, clumping,
+    separation, space targets, ``forbidden_selections`` and negative connectivity values
+    are rejected with ``ValueError`` for non-binary decisions.
+
     ``presolve_check`` (default ``False``): ``True`` runs
     :func:`~pymarxan.solvers.presolve.presolve_check` plus a scan of the built model (P10)
     in ``solve`` / ``build_model`` and emits one ``PresolveWarning``; ``"strict"`` raises
@@ -313,7 +405,11 @@ class MIPSolver(Solver):
         shortfall: str = "relative",
         warn_above_pu: int | None = 200_000,
         presolve_check: bool | str = False,
+        decisions: str = "binary",
+        upper: float = 1.0,
+        lower: float = 0.0,
     ) -> None:
+        self.decisions, self.upper, self.lower = _validate_decisions(decisions, upper, lower)
         _validate_mip_strategy(
             "mip_chance_strategy", mip_chance_strategy,
             ("drop", "piecewise", "socp"),
@@ -368,6 +464,10 @@ class MIPSolver(Solver):
         ``need_boundary``. Every auxiliary variable is registered in ``implied`` with the
         value its rows imply from x (spec §5).
         """
+        # Stage 4: settings that need 0/1 decisions fail first, before any strategy check.
+        _reject_nonbinary(problem, config, self.decisions)
+        binary = self.decisions == "binary"
+
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = int(problem.parameters.get("PROBMODE", 0))
         if probmode == 3:
@@ -428,15 +528,33 @@ class MIPSolver(Solver):
         # Build the LP model
         model = pulp.LpProblem("MarxanMIP", pulp.LpMinimize)
 
-        # Decision variables: x_i = 1 if PU i is selected
+        # Decision variables: x_i = 1 if PU i is selected (Stage 4: the selected share)
         x = {}
+        s: dict[int, pulp.LpVariable] = {}
         pu_id_arr = problem.planning_units["id"].values
         pu_st_arr = problem.planning_units["status"].values.astype(int)
         for k in range(len(pu_id_arr)):
             pid = int(pu_id_arr[k])
             status = int(pu_st_arr[k])
-            x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
+            locked = status in (STATUS_LOCKED_IN, STATUS_LOCKED_OUT)
+            if binary:
+                x[pid] = pulp.LpVariable(f"x_{pid}", cat="Binary")
+            else:
+                # Locked-in units are whole (x = 1.0) in every mode; `upper` and the
+                # semicontinuous band apply to free units only (review R3).
+                x[pid] = pulp.LpVariable(
+                    f"x_{pid}", lowBound=0,
+                    upBound=1.0 if status == STATUS_LOCKED_IN else self.upper,
+                    cat="Continuous",
+                )
+            if self.decisions == "semicontinuous" and not locked:
+                s[pid] = pulp.LpVariable(f"s_{pid}", cat="Binary")
+                model += x[pid] - self.upper * s[pid] <= 0, f"sc_ub_{pid}"
+                model += x[pid] - self.lower * s[pid] >= 0, f"sc_lb_{pid}"
+                implied.append((s[pid], _on_rule(x[pid])))
             if status == STATUS_LOCKED_IN:
+                # prioritizr's lb = 1 with ub = upper < 1 is infeasible; here a locked-in
+                # unit is fixed whole whatever `upper` is (documented deviation, R3).
                 model += x[pid] == 1, f"locked_in_{pid}"
             elif status == STATUS_LOCKED_OUT:
                 model += x[pid] == 0, f"locked_out_{pid}"
@@ -512,7 +630,9 @@ class MIPSolver(Solver):
                 # Reward both selected via binary-AND linearization:
                 #   z_ij <= x_i, z_ij <= x_j, z_ij >= x_i + x_j - 1
                 #   objective: -conn_weight * c_ij * z_ij
-                # The first row of a duplicated (i, j) / (j, i) pair wins.
+                # The first row of a duplicated (i, j) / (j, i) pair wins. Non-binary
+                # decisions: z is continuous in [0, 1] (a binary z would be forced to 0 by
+                # fractional x); the reward drives it to min(x_i, x_j).
                 seen: set[tuple[int, int]] = set()
                 for ck in range(len(c_id1)):
                     i = int(c_id1[ck])
@@ -522,7 +642,13 @@ class MIPSolver(Solver):
                         continue
                     seen.add(key)
                     cval = float(c_val[ck])
-                    z = pulp.LpVariable(f"zc_{key[0]}_{key[1]}", cat="Binary")
+                    if binary:
+                        z = pulp.LpVariable(f"zc_{key[0]}_{key[1]}", cat="Binary")
+                    else:
+                        z = pulp.LpVariable(
+                            f"zc_{key[0]}_{key[1]}", lowBound=0, upBound=1,
+                            cat="Continuous",
+                        )
                     model += z <= x[key[0]], f"conn_and1_{key[0]}_{key[1]}"
                     model += z <= x[key[1]], f"conn_and2_{key[0]}_{key[1]}"
                     model += (
@@ -594,6 +720,7 @@ class MIPSolver(Solver):
             boundary_expr=boundary_expr, conn_expr=conn_expr, prob_expr=prob_expr,
             amount_exprs=amount_exprs, terms=terms, implied=implied, probmode=probmode,
             has_target2=bool(has_target2), has_sep_active=bool(has_sep_active),
+            s=s, decisions=self.decisions, upper=self.upper, lower=self.lower,
         )
 
     def _build(self, problem: ConservationProblem, config: SolverConfig) -> _BuiltModel:
@@ -641,7 +768,8 @@ class MIPSolver(Solver):
         return _BuiltModel(
             model=model, x=base.x, pu_ids=base.pu_ids, blm=base.blm, objective_expr=term.expr,
             probmode=base.probmode, has_target2=base.has_target2,
-            has_sep_active=base.has_sep_active, lex=lex,
+            has_sep_active=base.has_sep_active, s=base.s, decisions=base.decisions,
+            upper=base.upper, lower=base.lower, lex=lex,
         )
 
     def _strategy_metadata(
@@ -709,11 +837,8 @@ class MIPSolver(Solver):
         if status in infeasible_statuses or not has_values:
             return []
 
-        # Extract solution
-        selected = np.array(
-            [bool(round(pulp.value(x[pid]) or 0.0)) for pid in pu_ids],
-            dtype=bool,
-        )
+        # Extract solution (binary: rounded bools; otherwise snapped float64, spec §4)
+        selected = _extract(x, built.s, pu_ids, built.decisions, built.lower)
 
         # build_solution populates Solution.prob_shortfalls + prob_penalty
         # automatically when PROBMODE==3. Under the 'drop' strategy, the
