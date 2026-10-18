@@ -41,9 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0. Configurations that do not read the table (PROBMODE 0 or 3, PROBMODE 1 with weighting
   0 or below) ignore it in every path; `validate()` reports non-finite values in every mode.
 - `compute_held` applies the selection contract of `build_solution`: an int 0/1 array is read
-  as bool, other ints raise `ValueError`. `compute_representation` and `compute_gap_analysis`
-  now go through it, so they raise `ValueError` on a wrong-length or non-0/1-int selection
-  (previously silently truncated), and under PROBMODE 2 on non-finite probabilities.
+  as bool, other ints raise `ValueError`. `compute_representation` now goes through it, so it
+  raises `ValueError` on a wrong-length or non-0/1-int selection (previously silently
+  truncated). Under PROBMODE 2, `compute_representation` and `compute_gap_analysis` raise
+  `ValueError` on non-finite probabilities.
 - The zone solvers ignore the probability table (as the manual states).
 - Docs and UI: PROBMODE 1 and 2 are documented as pymarxan extensions; Marxan's Probability 1D
   is not yet implemented, and PROBMODE 3 is described as based on Marxan's Probability 2D with
