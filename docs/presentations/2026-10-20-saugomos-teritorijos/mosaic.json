@@ -1,0 +1,30 @@
+{
+ "plain": {
+  "edge_reward": 0.0,
+  "cutting_cost": 24.989592852546384,
+  "n_cut": 12,
+  "edges": 7,
+  "longest_uncut_km": 15,
+  "longest_cut_km": 4,
+  "zone_targets_met": true,
+  "pattern": "CC···············CCC··············CCC······CCCC·····"
+ },
+ "mosaic": {
+  "edge_reward": 1.0,
+  "cutting_cost": 37.59570207506641,
+  "n_cut": 16,
+  "edges": 31,
+  "longest_uncut_km": 9,
+  "longest_cut_km": 1,
+  "zone_targets_met": true,
+  "pattern": "C·C·C·C·····C·C·C·C·C·········C·C·C·C·······C·C·C···"
+ },
+ "settlements": {
+  "Smiltynė": 0.0,
+  "Juodkrantė": 19.0,
+  "Pervalka": 32.0,
+  "Preila": 35.0,
+  "Nida": 46.0
+ },
+ "n_segments": 52
+}
