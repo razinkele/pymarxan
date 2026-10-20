@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optimised a different objective from the one it reported, and zone SA a different
   problem from the MIP. Projects whose `bound.dat` lengths are all 1 are unaffected
   (#8).
+- A `zoneboundcost.dat` row now applies to both zone orders everywhere, as in MarZone
+  (`PopulateConnectionCosts`). `ZoneProblemCache` (zone SA, heuristic, II) already did;
+  the evaluator (`Solution.objective`) and the zone MIP read only the listed order, so a
+  file with each pair listed once gave SA and the MIP different problems and
+  under-reported SA's objective. If rows conflict (`1,2,50` and `2,1,30`), the later
+  row wins for both orders. One shared `zone_boundary_cost_lookup` now builds the table
+  for all three. The v0.37 zone golden records keep every zone assignment; only the
+  reported objectives of the "large" fixture rose.
 
 ## [0.45.0] — 2026-10-18
 

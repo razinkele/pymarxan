@@ -34,6 +34,23 @@ def compute_zone_cost(
     return total
 
 
+def zone_boundary_cost_lookup(problem: ZonalProblem) -> dict[tuple[int, int], float]:
+    """Zone boundary cost per (zone id, zone id), symmetric.
+
+    As MarZone's ``PopulateConnectionCosts`` (``zones.hpp``): each row sets both
+    ``(zone1, zone2)`` and ``(zone2, zone1)``, so a later row overrides an earlier
+    one for that pair in both orders. Empty when there is no zone boundary table.
+    """
+    zbc = problem.zone_boundary_costs
+    lookup: dict[tuple[int, int], float] = {}
+    if zbc is None:
+        return lookup
+    for z1, z2, cost in zip(zbc["zone1"].values, zbc["zone2"].values, zbc["cost"].values):
+        lookup[(int(z1), int(z2))] = float(cost)
+        lookup[(int(z2), int(z1))] = float(cost)
+    return lookup
+
+
 def compute_zone_boundary(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
@@ -48,14 +65,7 @@ def compute_zone_boundary(
     pu_ids = problem.planning_units["id"].values
     pu_index = {int(pid): i for i, pid in enumerate(pu_ids)}
 
-    # Pre-build zone boundary cost lookup
-    zbc = problem.zone_boundary_costs
-    zbc_lookup: dict[tuple[int, int], float] = {}
-    z1_col = zbc["zone1"].values
-    z2_col = zbc["zone2"].values
-    cost_col = zbc["cost"].values
-    for k in range(len(z1_col)):
-        zbc_lookup[(int(z1_col[k]), int(z2_col[k]))] = float(cost_col[k])
+    zbc_lookup = zone_boundary_cost_lookup(problem)
 
     bnd = problem.boundary
     id1_col = bnd["id1"].values

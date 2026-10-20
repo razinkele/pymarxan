@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from pymarxan.zones.objective import (
@@ -70,6 +71,24 @@ class TestComputeZoneBoundary:
         problem = self.problem.copy_with(boundary=bnd)
         zbc = compute_zone_boundary(problem, np.array([1, 2, 1, 2]))
         assert zbc == pytest.approx(275.0)
+
+    def test_one_direction_row_applies_both_ways(self):
+        # MarZone (zones.hpp PopulateConnectionCosts) sets (z1, z2) and (z2, z1) from one row.
+        problem = self.problem.copy_with(
+            zone_boundary_costs=pd.DataFrame({"zone1": [1], "zone2": [2], "cost": [50.0]})
+        )
+        assert compute_zone_boundary(problem, np.array([1, 2, 2, 2])) == 50.0
+        assert compute_zone_boundary(problem, np.array([2, 1, 1, 1])) == 50.0
+
+    def test_conflicting_rows_last_wins_both_ways(self):
+        # MarZone overwrites both directions per row, so the later row wins.
+        problem = self.problem.copy_with(
+            zone_boundary_costs=pd.DataFrame(
+                {"zone1": [1, 2], "zone2": [2, 1], "cost": [50.0, 30.0]}
+            )
+        )
+        assert compute_zone_boundary(problem, np.array([1, 2, 2, 2])) == 30.0
+        assert compute_zone_boundary(problem, np.array([2, 1, 1, 1])) == 30.0
 
 
 class TestCheckZoneTargets:

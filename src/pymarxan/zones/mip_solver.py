@@ -34,7 +34,11 @@ from pymarxan.zones.diagnostics import (
     min_forced_cost,
 )
 from pymarxan.zones.model import ZonalProblem, warn_zone_input_issues
-from pymarxan.zones.objective import _feature_arrays, build_zone_solution
+from pymarxan.zones.objective import (
+    _feature_arrays,
+    build_zone_solution,
+    zone_boundary_cost_lookup,
+)
 
 ZONE_MIP_OBJECTIVES = (
     "min_set",
@@ -405,13 +409,7 @@ def _build_zone_boundary_expr(
     if problem.boundary is None or problem.zone_boundary_costs is None:
         return pulp.lpSum([])
 
-    # Build zone boundary cost lookup
-    zbc = problem.zone_boundary_costs
-    zbc_lookup: dict[tuple[int, int], float] = {}
-    for k in range(len(zbc)):
-        z1 = int(zbc["zone1"].values[k])
-        z2 = int(zbc["zone2"].values[k])
-        zbc_lookup[(z1, z2)] = float(zbc["cost"].values[k])
+    zbc_lookup = zone_boundary_cost_lookup(problem)
 
     pu_set = set(int(p) for p in pu_ids)
     bnd = problem.boundary

@@ -3,6 +3,7 @@ import copy
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from pymarxan.solvers.base import SolverConfig
@@ -128,3 +129,21 @@ def test_mip_objective_matches_reported_objective_with_non_unit_lengths():
     zones = sol.zone_assignment
     assert (zones[1:] != zones[:-1]).any() and (zones > 0).all()
     assert sol.objective == pytest.approx(sol.metadata["mip_objective_value"], abs=1e-6)
+
+
+@pytest.mark.parametrize("rows", [
+    {"zone1": [1], "zone2": [2], "cost": [-50.0]},
+    {"zone1": [2], "zone2": [1], "cost": [-50.0]},
+])
+def test_one_direction_zone_boundary_row_matches_both_directions(rows):
+    """A single (z1, z2) row means the same as listing both orders (MarZone)."""
+    base = load_zone_project(DATA_DIR)
+    both = base.copy_with(zone_boundary_costs=pd.DataFrame(
+        {"zone1": [1, 2], "zone2": [2, 1], "cost": [-50.0, -50.0]}))
+    one = base.copy_with(zone_boundary_costs=pd.DataFrame(rows))
+    config = SolverConfig(num_solutions=1)
+    sol_both = ZoneMIPSolver().solve(both, config)[0]
+    sol_one = ZoneMIPSolver().solve(one, config)[0]
+    assert sol_one.metadata["mip_objective_value"] == pytest.approx(
+        sol_both.metadata["mip_objective_value"], abs=1e-6)
+    assert sol_one.objective == pytest.approx(sol_one.metadata["mip_objective_value"], abs=1e-6)

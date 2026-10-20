@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from pymarxan.zones.cache import ZoneProblemCache
@@ -412,6 +413,23 @@ class TestNonUnitBoundaryLengths:
     def test_zone_boundary_term_scales_with_length(self, long_edges):
         c = ZoneProblemCache.from_zone_problem(long_edges)
         assert c._compute_zone_boundary(np.array([1, 2, 1, 2])) == pytest.approx(275.0)
+
+
+class TestZoneBoundaryCostSymmetry:
+    """One zoneboundcost.dat row covers both zone orders everywhere (MarZone)."""
+
+    @pytest.mark.parametrize("rows", [
+        {"zone1": [1], "zone2": [2], "cost": [50.0]},
+        {"zone1": [2], "zone2": [1], "cost": [50.0]},
+        {"zone1": [1, 2], "zone2": [2, 1], "cost": [50.0, 30.0]},
+    ])
+    def test_cache_matches_reference(self, zone_problem, rows):
+        problem = zone_problem.copy_with(zone_boundary_costs=pd.DataFrame(rows))
+        c = ZoneProblemCache.from_zone_problem(problem)
+        for assignment in [[1, 2, 2, 2], [2, 1, 1, 1], [1, 2, 1, 2]]:
+            a = np.array(assignment, dtype=int)
+            full = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=1.0)
+            assert full == pytest.approx(compute_zone_objective(problem, a, 1.0))
 
 
 class TestMissLevel:

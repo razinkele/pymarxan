@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pymarxan.zones.model import ZonalProblem
-from pymarxan.zones.objective import _feature_arrays
+from pymarxan.zones.objective import _feature_arrays, zone_boundary_cost_lookup
 
 
 @dataclass
@@ -199,16 +199,11 @@ class ZoneProblemCache:
 
         # --- Zone boundary costs: dict[(zone_col, zone_col)] -> cost ---
         zbc: dict[tuple[int, int], float] = {}
-        if problem.zone_boundary_costs is not None:
-            zb_z1 = problem.zone_boundary_costs["zone1"].values
-            zb_z2 = problem.zone_boundary_costs["zone2"].values
-            zb_ct = problem.zone_boundary_costs["cost"].values
-            for k in range(len(zb_z1)):
-                zcol1 = zone_id_to_col.get(int(zb_z1[k]))
-                zcol2 = zone_id_to_col.get(int(zb_z2[k]))
-                if zcol1 is not None and zcol2 is not None:
-                    zbc[(zcol1, zcol2)] = float(zb_ct[k])
-                    zbc[(zcol2, zcol1)] = float(zb_ct[k])
+        for (zid1, zid2), cost in zone_boundary_cost_lookup(problem).items():
+            zcol1 = zone_id_to_col.get(zid1)
+            zcol2 = zone_id_to_col.get(zid2)
+            if zcol1 is not None and zcol2 is not None:
+                zbc[(zcol1, zcol2)] = cost
 
         # --- Connectivity: adjacency list ---
         conn_neighbors: list[list[tuple[int, float]]] = [[] for _ in range(n_pu)]
