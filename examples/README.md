@@ -43,6 +43,43 @@ Things it demonstrates that the tutorial does not:
   map flexible, but the single concentrated spawning ground is critical at
   every target level.
 
+## `curonian_spit_reedbeds.py`
+
+Reed beds on the lagoon shore of the Curonian Spit: a narrow, **linear**
+habitat whose biodiversity depends on staying **fragmented**, a mosaic of
+cut and uncut stretches rather than a few long uniform runs. Classic Marxan
+rewards compact reserves, so this example inverts it. It:
+
+1. splits the shore from Smiltynė to the border south of Nida into 52
+   one-kilometre segments, each touching only its neighbours;
+2. gives each segment a reed area, a cutting cost (higher far from the
+   villages that give road access) and two habitats: old-reed nesting
+   habitat (counts only where the reed is left) and cut-reed mosaic habitat
+   (counts only where it is cut);
+3. models one cutting season as Marxan with Zones, with zones `cut` and
+   `leave`, every segment in one of them, and a zone target per habitat;
+4. rewards fragmentation with a **negative zone boundary cost** between
+   `cut` and `leave`, so every cut/uncut edge earns a credit;
+5. solves exactly (zone MIP) and sweeps the reward.
+
+```bash
+python examples/curonian_spit_reedbeds.py
+```
+
+Things it demonstrates that the tutorial does not:
+
+- **Fragmentation as an objective** — a plain BLM can only penalise edges;
+  a negative zone boundary cost rewards them. On the bundled data, without it
+  the cheapest plan cuts four solid blocks (7 edges, a 15 km uncut stretch); with a reward of
+  1 k€ per edge it becomes an interleaved mosaic (31 edges, longest uncut
+  stretch 9 km) for about 13 k€ more cutting.
+- **The reward is a calibration knob** — like BLM, the sweep shows what each
+  extra edge costs, and the exact optimum makes edges and cost rise
+  monotonically with the reward.
+- **Unit boundary lengths** — the zone MIP scales zone boundary costs by the
+  shared boundary length and the zone evaluator does not, so the example
+  keeps every length at 1.
+
 ## `validate_marxan_parity.py`
 
 The runnable companion to [`docs/VALIDATION.md`](../docs/VALIDATION.md).

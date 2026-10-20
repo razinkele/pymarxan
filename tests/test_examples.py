@@ -34,6 +34,11 @@ def baltic():
 
 
 @pytest.fixture(scope="module")
+def reedbeds():
+    return _load("curonian_spit_reedbeds.py")
+
+
+@pytest.fixture(scope="module")
 def validation():
     return _load("validate_marxan_parity.py")
 
@@ -121,3 +126,100 @@ def test_validation_exact_optimum_is_ground_truth(validation):
 def test_validation_marxan_format_roundtrips(validation):
     problem = validation.load_simple_problem()
     assert validation.roundtrips_through_marxan_format(problem)
+
+
+# --------------------------------------------------------------------
+# curonian_spit_reedbeds.py
+# --------------------------------------------------------------------
+
+
+def test_reedbed_problem_is_a_linear_two_zone_chain(reedbeds):
+    problem = reedbeds.build_reedbed_problem()
+    n = reedbeds.N_SEGMENTS
+    assert problem.n_planning_units == n
+    assert dict(zip(problem.zones["id"], problem.zones["name"], strict=True)) == {
+        reedbeds.CUT: "cut", reedbeds.LEAVE: "leave",
+    }
+    # Every segment must be either cut or left (no third "unmanaged" state).
+    assert problem.parameters["MANDATORYALLOCATION"] == 1
+    bnd = problem.boundary
+    # A shoreline: each segment touches only the next one, no self-boundary rows.
+    assert sorted(zip(bnd["id1"], bnd["id2"], strict=True)) == [(i, i + 1) for i in range(1, n)]
+    # Unit edges: the zone MIP scales zone boundary costs by length, the
+    # evaluator does not, so the example relies on every length being 1.
+    assert (bnd["boundary"] == 1.0).all()
+    assert problem.validate() == []
+
+
+def test_reedbed_problem_is_deterministic(reedbeds):
+    p1 = reedbeds.build_reedbed_problem()
+    p2 = reedbeds.build_reedbed_problem()
+    assert p1.zone_costs.equals(p2.zone_costs)
+    assert p1.pu_vs_features.equals(p2.pu_vs_features)
+    assert p1.zone_targets.equals(p2.zone_targets)
+
+
+def test_edge_reward_is_a_negative_symmetric_zone_boundary_cost(reedbeds):
+    zbc = reedbeds.build_reedbed_problem(edge_reward=1.5).zone_boundary_costs
+    pairs = {(int(a), int(b)): float(c)
+             for a, b, c in zip(zbc["zone1"], zbc["zone2"], zbc["cost"], strict=True)}
+    assert pairs == {(reedbeds.CUT, reedbeds.LEAVE): -1.5, (reedbeds.LEAVE, reedbeds.CUT): -1.5}
+    assert reedbeds.build_reedbed_problem(edge_reward=0.0).zone_boundary_costs is None
+
+
+@pytest.mark.parametrize("edge_reward", [0.0, 0.4, 3.0])
+def test_mosaic_mip_matches_brute_force_on_a_short_shore(reedbeds, edge_reward):
+    """Exact optimum of a 10-segment shore by enumerating all 2^10 cut/leave plans."""
+    import itertools
+
+    import numpy as np
+
+    from pymarxan.zones.objective import compute_zone_objective
+
+    problem = reedbeds.build_reedbed_problem(n_segments=10, edge_reward=edge_reward)
+    best = min(
+        compute_zone_objective(problem, np.array(plan), 0.0)
+        for plan in itertools.product((reedbeds.CUT, reedbeds.LEAVE), repeat=10)
+    )
+    solution = reedbeds.solve_mosaic(problem)
+    assert solution.objective == pytest.approx(best)
+
+
+def test_edge_reward_fragments_the_cutting(reedbeds):
+    plain = reedbeds.summarize_mosaic(
+        *_solved(reedbeds, reedbeds.build_reedbed_problem(edge_reward=0.0))
+    )
+    mosaic = reedbeds.summarize_mosaic(*_solved(reedbeds, reedbeds.build_reedbed_problem()))
+    assert plain.zone_targets_met and mosaic.zone_targets_met
+    # Without the reward the cheapest plan cuts a few solid blocks; with it the
+    # shore becomes an interleaved cut/uncut mosaic.
+    assert mosaic.edges > 2 * plain.edges
+    assert mosaic.longest_uncut_km < plain.longest_uncut_km
+    # Fragmentation is bought, not free: the reward-free plan is the cheapest.
+    assert mosaic.cutting_cost >= plain.cutting_cost - 1e-9
+
+
+def test_mip_objective_matches_the_zone_evaluator(reedbeds):
+    problem, solution = _solved(reedbeds, reedbeds.build_reedbed_problem())
+    assert solution.metadata["mip_objective_value"] == pytest.approx(solution.objective)
+
+
+def test_reward_sweep_trades_cost_for_edges_monotonically(reedbeds):
+    rows = reedbeds.reward_sweep([0.0, 0.5, 1.0, 2.0, 4.0])
+    assert [r.edge_reward for r in rows] == [0.0, 0.5, 1.0, 2.0, 4.0]
+    # Exact optima of cost - R * edges: edges and cost can only rise with R.
+    for lo, hi in zip(rows, rows[1:]):
+        assert hi.edges >= lo.edges
+        assert hi.cutting_cost >= lo.cutting_cost - 1e-9
+    assert rows[-1].edges > rows[0].edges
+
+
+def test_reedbed_main_runs(reedbeds, capsys):
+    reedbeds.main()
+    out = capsys.readouterr().out
+    assert "Curonian Spit" in out
+    assert "edges" in out
+
+
+def _solved(reedbeds, problem):
+    return problem, reedbeds.solve_mosaic(problem)

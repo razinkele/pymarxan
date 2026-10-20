@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `examples/curonian_spit_reedbeds.py`: planning a cut/uncut mosaic in the linear
+  reed beds of the Curonian Spit lagoon shore, where fragmentation keeps biodiversity
+  high. A negative zone boundary cost between the `cut` and `leave` zones rewards
+  every cut/uncut edge; the zone MIP is checked against brute force on a short shore.
+  Pinned by `tests/test_examples.py`.
+
 ## [0.45.0] — 2026-10-18
 
 ### Changed
