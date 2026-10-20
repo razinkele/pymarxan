@@ -481,7 +481,7 @@ class ZoneProblemCache:
         """Compute zone boundary cost between adjacent PUs in different zones.
 
         For each edge (i, j) where both are in different non-zero zones,
-        add the zone_boundary_costs for that pair of zones.
+        add the boundary length times the zone_boundary_costs for that pair.
         """
         total = 0.0
         for i in range(self.n_pu):
@@ -489,7 +489,7 @@ class ZoneProblemCache:
             if zid_i == 0:
                 continue
             zcol_i = self.zone_id_to_col.get(zid_i, 0)
-            for j, _w in self.neighbors[i]:
+            for j, w in self.neighbors[i]:
                 if j <= i:
                     continue  # count each edge once
                 zid_j = int(assignment[j])
@@ -498,7 +498,7 @@ class ZoneProblemCache:
                 if zid_i == zid_j:
                     continue
                 zcol_j = self.zone_id_to_col.get(zid_j, 0)
-                total += self.zone_boundary_costs.get((zcol_i, zcol_j), 0.0)
+                total += w * self.zone_boundary_costs.get((zcol_i, zcol_j), 0.0)
         return total
 
     def _compute_zone_penalty(self, held_per_zone: np.ndarray) -> float:
@@ -577,7 +577,7 @@ class ZoneProblemCache:
         - Add any cross-zone cost from (new_zone, zone_j) if applicable
         """
         delta = 0.0
-        for j, _w in self.neighbors[idx]:
+        for j, w in self.neighbors[idx]:
             zid_j = int(assignment[j])
             if zid_j == 0:
                 continue
@@ -586,12 +586,12 @@ class ZoneProblemCache:
             # Remove old cross-zone cost
             if old_zone != 0 and old_zone != zid_j:
                 old_col = self.zone_id_to_col.get(old_zone, 0)
-                delta -= self.zone_boundary_costs.get((old_col, zcol_j), 0.0)
+                delta -= w * self.zone_boundary_costs.get((old_col, zcol_j), 0.0)
 
             # Add new cross-zone cost
             if new_zone != 0 and new_zone != zid_j:
                 new_col = self.zone_id_to_col.get(new_zone, 0)
-                delta += self.zone_boundary_costs.get((new_col, zcol_j), 0.0)
+                delta += w * self.zone_boundary_costs.get((new_col, zcol_j), 0.0)
         return delta
 
     def _penalty_delta(

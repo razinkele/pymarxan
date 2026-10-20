@@ -33,9 +33,8 @@ All data are synthetic and analytic (positions of the villages are
 approximate), so the script is deterministic, needs no network access and
 doubles as a regression fixture — see ``tests/test_examples.py``.
 
-Every boundary length is 1. The zone MIP multiplies a zone boundary cost by
-the shared boundary length while the zone evaluator (and zone SA) does not,
-so unit edges keep the three in agreement.
+Every boundary length is 1, so each cut/uncut edge earns exactly the reward;
+a zone boundary cost is multiplied by the shared boundary length, as in MarZone.
 
 Run it::
 

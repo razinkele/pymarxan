@@ -111,3 +111,20 @@ class TestZoneMIPSolver:
         sol = self.solver.solve(self.problem, config)[0]
         expected_selected = sol.zone_assignment > 0
         np.testing.assert_array_equal(sol.selected, expected_selected)
+
+
+def test_mip_objective_matches_reported_objective_with_non_unit_lengths():
+    """The MIP's own objective equals Solution.objective when lengths != 1 (issue #8)."""
+    problem = load_zone_project(DATA_DIR)
+    bnd = problem.boundary.copy()
+    lengths = {(1, 2): 2.0, (2, 3): 0.5, (3, 4): 3.0}
+    for (a, b), length in lengths.items():
+        bnd.loc[(bnd["id1"] == a) & (bnd["id2"] == b), "boundary"] = length
+    # A negative zone boundary cost rewards cut/uncut edges, so the optimum has some.
+    zbc = problem.zone_boundary_costs.copy()
+    zbc.loc[zbc["zone1"] != zbc["zone2"], "cost"] = -50.0
+    problem = problem.copy_with(boundary=bnd, zone_boundary_costs=zbc)
+    sol = ZoneMIPSolver().solve(problem, SolverConfig(num_solutions=1))[0]
+    zones = sol.zone_assignment
+    assert (zones[1:] != zones[:-1]).any() and (zones > 0).all()
+    assert sol.objective == pytest.approx(sol.metadata["mip_objective_value"], abs=1e-6)

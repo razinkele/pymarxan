@@ -375,6 +375,45 @@ class TestDeltaObjective:
             assignment[idx] = new_zone
 
 
+class TestNonUnitBoundaryLengths:
+    """Zone boundary cost scales with the shared boundary length (issue #8)."""
+
+    @pytest.fixture
+    def long_edges(self, zone_problem):
+        bnd = zone_problem.boundary.copy()
+        lengths = {(1, 2): 2.0, (2, 3): 0.5, (3, 4): 3.0}
+        for (a, b), length in lengths.items():
+            bnd.loc[(bnd["id1"] == a) & (bnd["id2"] == b), "boundary"] = length
+        return zone_problem.copy_with(boundary=bnd)
+
+    @pytest.mark.parametrize("blm", [0.0, 1.0])
+    def test_full_objective_matches_reference(self, long_edges, blm):
+        c = ZoneProblemCache.from_zone_problem(long_edges)
+        for assignment in [[1, 2, 1, 2], [2, 2, 1, 1], [1, 0, 2, 2]]:
+            a = np.array(assignment, dtype=int)
+            full = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=blm)
+            assert full == pytest.approx(compute_zone_objective(long_edges, a, blm))
+
+    def test_delta_matches_full_recompute(self, long_edges):
+        c = ZoneProblemCache.from_zone_problem(long_edges)
+        rng = np.random.default_rng(8)
+        a = np.array([1, 2, 1, 2], dtype=int)
+        for _ in range(50):
+            idx, new_zone = int(rng.integers(4)), int(rng.integers(3))
+            held = c.compute_held(a)
+            before = c.compute_full_zone_objective(a, held=held, blm=1.0)
+            delta = c.compute_delta_zone_objective(idx, int(a[idx]), new_zone, a,
+                                                   held=held, blm=1.0)
+            a = a.copy()
+            a[idx] = new_zone
+            after = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=1.0)
+            assert delta == pytest.approx(after - before, abs=1e-9)
+
+    def test_zone_boundary_term_scales_with_length(self, long_edges):
+        c = ZoneProblemCache.from_zone_problem(long_edges)
+        assert c._compute_zone_boundary(np.array([1, 2, 1, 2])) == pytest.approx(275.0)
+
+
 class TestMissLevel:
     """Verify MISSLEVEL is applied to zone target matrix."""
 

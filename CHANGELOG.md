@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every cut/uncut edge; the zone MIP is checked against brute force on a short shore.
   Pinned by `tests/test_examples.py`.
 
+### Fixed
+
+- Zone boundary costs now scale with the shared boundary length in the zone
+  evaluator (`compute_zone_boundary`, so `Solution.objective`), `ZoneProblemCache`
+  and the zone SA per-flip delta, matching MarZone (`zones.hpp` `ConnectionCost2`)
+  and the zone MIP, which already did. Before, with non-unit lengths the MIP
+  optimised a different objective from the one it reported, and zone SA a different
+  problem from the MIP. Projects whose `bound.dat` lengths are all 1 are unaffected
+  (#8).
+
 ## [0.45.0] — 2026-10-18
 
 ### Changed

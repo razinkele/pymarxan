@@ -60,6 +60,17 @@ class TestComputeZoneBoundary:
         zbc = compute_zone_boundary(self.problem, assignment)
         assert zbc == 150.0
 
+    def test_scales_with_boundary_length(self):
+        # MarZone (zones.hpp ConnectionCost2): length * zone pair cost. Edge lengths
+        # 2.0, 0.5, 3.0 -> 50 * (2.0 + 0.5 + 3.0) = 275 (issue #8).
+        bnd = self.problem.boundary.copy()
+        lengths = {(1, 2): 2.0, (2, 3): 0.5, (3, 4): 3.0}
+        for (a, b), length in lengths.items():
+            bnd.loc[(bnd["id1"] == a) & (bnd["id2"] == b), "boundary"] = length
+        problem = self.problem.copy_with(boundary=bnd)
+        zbc = compute_zone_boundary(problem, np.array([1, 2, 1, 2]))
+        assert zbc == pytest.approx(275.0)
+
 
 class TestCheckZoneTargets:
     def setup_method(self):
