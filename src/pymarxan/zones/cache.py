@@ -475,8 +475,8 @@ class ZoneProblemCache:
     def _compute_zone_boundary(self, assignment: np.ndarray) -> float:
         """Compute zone boundary cost between adjacent PUs in different zones.
 
-        For each edge (i, j) where both are in different non-zero zones,
-        add the boundary length times the zone_boundary_costs for that pair.
+        For each edge (i, j) with both ends in a non-zero zone, add the boundary
+        length times the zone_boundary_costs for that pair (same-zone pairs too).
         """
         total = 0.0
         for i in range(self.n_pu):
@@ -489,8 +489,6 @@ class ZoneProblemCache:
                     continue  # count each edge once
                 zid_j = int(assignment[j])
                 if zid_j == 0:
-                    continue
-                if zid_i == zid_j:
                     continue
                 zcol_j = self.zone_id_to_col.get(zid_j, 0)
                 total += w * self.zone_boundary_costs.get((zcol_i, zcol_j), 0.0)
@@ -568,8 +566,9 @@ class ZoneProblemCache:
         """Compute zone boundary cost delta for changing PU idx's zone.
 
         For each neighbor j of idx:
-        - Remove any cross-zone cost from (old_zone, zone_j) if applicable
-        - Add any cross-zone cost from (new_zone, zone_j) if applicable
+        - Remove the (old_zone, zone_j) pair cost if old_zone is non-zero
+        - Add the (new_zone, zone_j) pair cost if new_zone is non-zero
+        Same-zone pairs count too, so moving into a zone's interior can pay or earn.
         """
         delta = 0.0
         for j, w in self.neighbors[idx]:
@@ -578,13 +577,11 @@ class ZoneProblemCache:
                 continue
             zcol_j = self.zone_id_to_col.get(zid_j, 0)
 
-            # Remove old cross-zone cost
-            if old_zone != 0 and old_zone != zid_j:
+            if old_zone != 0:
                 old_col = self.zone_id_to_col.get(old_zone, 0)
                 delta -= w * self.zone_boundary_costs.get((old_col, zcol_j), 0.0)
 
-            # Add new cross-zone cost
-            if new_zone != 0 and new_zone != zid_j:
+            if new_zone != 0:
                 new_col = self.zone_id_to_col.get(new_zone, 0)
                 delta += w * self.zone_boundary_costs.get((new_col, zcol_j), 0.0)
         return delta

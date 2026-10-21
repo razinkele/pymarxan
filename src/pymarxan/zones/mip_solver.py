@@ -428,10 +428,9 @@ def _build_zone_boundary_expr(
             continue
         bval = float(bval_col[bk])
 
+        # Same-zone pairs (z1 == z2) included, as in MarZone ConnectionCost2.
         for z1 in zone_ids:
             for z2 in zone_ids:
-                if z1 == z2:
-                    continue
                 zbc_cost = zbc_lookup.get((z1, z2), 0.0)
                 if zbc_cost == 0.0:
                     continue

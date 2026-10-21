@@ -185,6 +185,29 @@ def test_mosaic_mip_matches_brute_force_on_a_short_shore(reedbeds, edge_reward):
     assert solution.objective == pytest.approx(best)
 
 
+@pytest.mark.parametrize("same_zone", [(0.3, -0.7), (-0.5, 0.2)])
+def test_mip_matches_brute_force_with_same_zone_costs(reedbeds, same_zone):
+    """Same-zone pair costs (cut-cut, leave-leave) in the MIP match enumeration (#10)."""
+    import itertools
+
+    import numpy as np
+    import pandas as pd
+
+    from pymarxan.zones.objective import compute_zone_objective
+
+    base = reedbeds.build_reedbed_problem(n_segments=10, edge_reward=0.4)
+    cut_cut, leave_leave = same_zone
+    zbc = pd.concat([base.zone_boundary_costs, pd.DataFrame({
+        "zone1": [reedbeds.CUT, reedbeds.LEAVE], "zone2": [reedbeds.CUT, reedbeds.LEAVE],
+        "cost": [cut_cut, leave_leave]})], ignore_index=True)
+    problem = base.copy_with(zone_boundary_costs=zbc)
+    best = min(
+        compute_zone_objective(problem, np.array(plan), 0.0)
+        for plan in itertools.product((reedbeds.CUT, reedbeds.LEAVE), repeat=10)
+    )
+    assert reedbeds.solve_mosaic(problem).objective == pytest.approx(best)
+
+
 def test_edge_reward_fragments_the_cutting(reedbeds):
     plain = reedbeds.summarize_mosaic(
         *_solved(reedbeds, reedbeds.build_reedbed_problem(edge_reward=0.0))

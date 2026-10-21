@@ -55,9 +55,11 @@ def compute_zone_boundary(
     problem: ZonalProblem,
     zone_assignment: np.ndarray,
 ) -> float:
-    """Compute zone boundary cost between adjacent PUs in different zones.
+    """Compute the zone boundary cost of an assignment.
 
-    Each edge contributes its boundary length times the zone pair cost.
+    Each edge with both ends in a zone contributes its boundary length times the
+    zone pair cost, including same-zone pairs ``zbc(z, z)`` as in MarZone
+    (``zones.hpp`` ``ConnectionCost2``). Zone 0 (unassigned) never pays or earns.
     """
     if problem.boundary is None or problem.zone_boundary_costs is None:
         return 0.0
@@ -86,7 +88,7 @@ def compute_zone_boundary(
 
         z1 = int(zone_assignment[idx1])
         z2 = int(zone_assignment[idx2])
-        if z1 == 0 or z2 == 0 or z1 == z2:
+        if z1 == 0 or z2 == 0:
             continue
 
         # MarZone (zones.hpp ConnectionCost2): shared boundary length x zone pair cost.

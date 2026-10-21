@@ -422,6 +422,7 @@ class TestZoneBoundaryCostSymmetry:
         {"zone1": [1], "zone2": [2], "cost": [50.0]},
         {"zone1": [2], "zone2": [1], "cost": [50.0]},
         {"zone1": [1, 2], "zone2": [2, 1], "cost": [50.0, 30.0]},
+        {"zone1": [1, 2, 1], "zone2": [2, 2, 1], "cost": [50.0, 10.0, -5.0]},
     ])
     def test_cache_matches_reference(self, zone_problem, rows):
         problem = zone_problem.copy_with(zone_boundary_costs=pd.DataFrame(rows))
@@ -430,6 +431,35 @@ class TestZoneBoundaryCostSymmetry:
             a = np.array(assignment, dtype=int)
             full = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=1.0)
             assert full == pytest.approx(compute_zone_objective(problem, a, 1.0))
+
+
+class TestSameZonePairs:
+    """zbc(z, z) is charged on edges inside zone z, in the full objective and the delta (#10)."""
+
+    @pytest.fixture
+    def same_zone(self, zone_problem):
+        return zone_problem.copy_with(zone_boundary_costs=pd.DataFrame(
+            {"zone1": [1, 2, 1], "zone2": [2, 2, 1], "cost": [50.0, 10.0, -5.0]}
+        ))
+
+    def test_zone_boundary_term(self, same_zone):
+        c = ZoneProblemCache.from_zone_problem(same_zone)
+        assert c._compute_zone_boundary(np.array([1, 1, 2, 2])) == pytest.approx(-5 + 50 + 10)
+
+    def test_delta_matches_full_recompute(self, same_zone):
+        c = ZoneProblemCache.from_zone_problem(same_zone)
+        rng = np.random.default_rng(10)
+        a = np.array([1, 1, 2, 2], dtype=int)
+        for _ in range(60):
+            idx, new_zone = int(rng.integers(4)), int(rng.integers(3))
+            held = c.compute_held(a)
+            before = c.compute_full_zone_objective(a, held=held, blm=1.0)
+            delta = c.compute_delta_zone_objective(idx, int(a[idx]), new_zone, a,
+                                                   held=held, blm=1.0)
+            a = a.copy()
+            a[idx] = new_zone
+            after = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=1.0)
+            assert delta == pytest.approx(after - before, abs=1e-9)
 
 
 class TestMissLevel:

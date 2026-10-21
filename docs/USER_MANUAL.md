@@ -709,7 +709,7 @@ Download results as CSV files:
 | **PROBMODE** | Probability mode (pymarxan extensions over `prob.dat`): 1 = risk premium in the objective (default with a probability table), 2 = expected (persistence-adjusted) amounts; 3 = Z-score probability penalty based on Marxan's Probability 2D. Marxan's Probability 1D is not yet implemented — see [Probability (PROBMODE)](#probability-probmode) |
 | **Zone** | A management category (e.g. no-take, buffer, sustainable use) in multi-zone planning |
 | **Zone Contribution** | How much a PU in a given zone contributes to a feature's target (0–1 multiplier) |
-| **Zone Boundary Cost** | Penalty for adjacent PUs being in different zone types |
+| **Zone Boundary Cost** | Cost per unit of shared boundary between adjacent PUs in a given pair of zones, including the same zone twice (`zone1 = zone2`); negative values reward that adjacency. Unassigned PUs (zone 0) pay nothing |
 | **Constraint** | An additional rule beyond targets — contiguity, minimum neighbors, budget caps, etc. |
 | **Objective** | The MIP objective: `min_set` (default), `max_features`, `max_weighted_features`, `min_shortfall`, `min_largest_shortfall`, `min_penalties` (core only); the Shiny selector does not yet drive it |
 | **puvspr.dat** | Planning Unit vs. Species file — maps features to PUs with amounts |

@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row wins for both orders. One shared `zone_boundary_cost_lookup` now builds the table
   for all three. The v0.37 zone golden records keep every zone assignment; only the
   reported objectives of the "large" fixture rose.
+- Same-zone zone boundary costs (`zoneboundcost.dat` rows with `zone1 = zone2`) are
+  now charged on edges inside that zone, as in MarZone (`ConnectionCost2`), by the
+  evaluator, `ZoneProblemCache` (full objective and per-flip delta) and the zone MIP.
+  Before, they were read and silently ignored. A negative same-zone cost rewards
+  clumping within a zone. Zone 0 (unassigned) still pays nothing. Not adopted:
+  MarZone's default of 1 for every zone pair when there is no `zoneboundcost.dat`,
+  which adds a constant to its reported objective but doesn't change the optimum
+  (#10).
 
 ## [0.45.0] — 2026-10-18
 

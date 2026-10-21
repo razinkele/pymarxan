@@ -80,6 +80,27 @@ class TestComputeZoneBoundary:
         assert compute_zone_boundary(problem, np.array([1, 2, 2, 2])) == 50.0
         assert compute_zone_boundary(problem, np.array([2, 1, 1, 1])) == 50.0
 
+    def test_same_zone_pairs_are_charged(self):
+        # MarZone (zones.hpp ConnectionCost2) charges zbc(z, z) on edges inside zone z (#10).
+        problem = self.problem.copy_with(zone_boundary_costs=pd.DataFrame(
+            {"zone1": [1, 2], "zone2": [2, 2], "cost": [50.0, 10.0]}
+        ))
+        # edges 1-2 inside zone 1 (zbc(1,1) unset -> 0), 2-3 cross (50), 3-4 inside zone 2 (10)
+        assert compute_zone_boundary(problem, np.array([1, 1, 2, 2])) == 60.0
+
+    def test_negative_same_zone_cost_rewards_clumping(self):
+        problem = self.problem.copy_with(zone_boundary_costs=pd.DataFrame(
+            {"zone1": [1], "zone2": [1], "cost": [-5.0]}
+        ))
+        assert compute_zone_boundary(problem, np.array([1, 1, 1, 1])) == -15.0
+
+    def test_unassigned_zone_has_no_pair_cost(self):
+        problem = self.problem.copy_with(zone_boundary_costs=pd.DataFrame(
+            {"zone1": [1], "zone2": [1], "cost": [-5.0]}
+        ))
+        # only edge 3-4 has both ends in zone 1; zone 0 (unassigned) never pays or earns
+        assert compute_zone_boundary(problem, np.array([0, 0, 1, 1])) == -5.0
+
     def test_conflicting_rows_last_wins_both_ways(self):
         # MarZone overwrites both directions per row, so the later row wins.
         problem = self.problem.copy_with(
