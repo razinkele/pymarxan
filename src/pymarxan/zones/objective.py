@@ -403,9 +403,11 @@ def compute_zone_objective(
 ) -> float:
     """Full MarZone-style objective.
 
-    zone_cost + BLM × standard_boundary + zone_boundary + overall_penalty + zone_penalty
-    + connectivity. Reference implementation (DataFrame-based); ``ZoneProblemCache`` must
-    agree to 1e-10.
+    zone_cost + BLM × (standard_boundary + zone_boundary) + overall_penalty + zone_penalty
+    + connectivity. MarZone scales its whole connection term by BLM (``zones.hpp``
+    ``ConnectionCost2``); ``standard_boundary`` is pymarxan's zone 0 / zone > 0 perimeter,
+    which under MANDATORYALLOCATION 1 reduces to MarZone's self-boundary ``fixedcost``.
+    Reference implementation (DataFrame-based); ``ZoneProblemCache`` must agree to 1e-10.
     """
     cost = compute_zone_cost(problem, zone_assignment)
     std_boundary = compute_standard_boundary(problem, zone_assignment)
@@ -414,7 +416,11 @@ def compute_zone_objective(
     zone_penalty = compute_zone_penalty(problem, zone_assignment)
     connectivity = compute_zone_connectivity(problem, zone_assignment)
     return (
-        cost + blm * std_boundary + zone_boundary + overall_penalty + zone_penalty + connectivity
+        cost
+        + blm * (std_boundary + zone_boundary)
+        + overall_penalty
+        + zone_penalty
+        + connectivity
     )
 
 

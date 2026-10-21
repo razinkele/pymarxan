@@ -143,7 +143,9 @@ def build_reedbed_problem(
         features=features,
         pu_vs_features=pvf,
         boundary=pd.DataFrame({"id1": ids[:-1], "id2": ids[1:], "boundary": 1.0}),
-        parameters={"BLM": 0.0, "MANDATORYALLOCATION": 1},
+        # BLM scales the zone boundary costs (MarZone); with every segment assigned and no
+        # self-boundaries the standard boundary is 0, so BLM 1 leaves the reward as given.
+        parameters={"BLM": 1.0, "MANDATORYALLOCATION": 1},
         zones=pd.DataFrame({"id": [CUT, LEAVE], "name": ["cut", "leave"]}),
         zone_costs=zone_costs,
         zone_contributions=zone_contributions,

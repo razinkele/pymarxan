@@ -6,6 +6,7 @@ import pytest
 
 from pymarxan.zones.objective import (
     check_zone_targets,
+    compute_standard_boundary,
     compute_zone_boundary,
     compute_zone_cost,
     compute_zone_objective,
@@ -110,6 +111,29 @@ class TestComputeZoneBoundary:
         )
         assert compute_zone_boundary(problem, np.array([1, 2, 2, 2])) == 30.0
         assert compute_zone_boundary(problem, np.array([2, 1, 1, 1])) == 30.0
+
+
+class TestZoneBoundaryScaledByBLM:
+    """MarZone scales the whole boundary term by BLM (zones.hpp ConnectionCost2) (#9)."""
+
+    def setup_method(self):
+        self.problem = load_zone_project(DATA_DIR)
+
+    @pytest.mark.parametrize("blm", [0.5, 1.0, 2.0])
+    def test_boundary_terms_scale_together(self, blm):
+        a = np.array([1, 2, 1, 2])
+        std = compute_standard_boundary(self.problem, a)
+        zbc = compute_zone_boundary(self.problem, a)
+        assert zbc == 150.0
+        gained = (compute_zone_objective(self.problem, a, blm)
+                  - compute_zone_objective(self.problem, a, 0.0))
+        assert gained == pytest.approx(blm * (std + zbc))
+
+    def test_blm_zero_drops_zone_boundary_costs(self):
+        a = np.array([1, 2, 1, 2])
+        assert compute_zone_objective(self.problem, a, 0.0) == pytest.approx(
+            compute_zone_cost(self.problem, a) + compute_zone_penalty(self.problem, a)
+        )
 
 
 class TestCheckZoneTargets:

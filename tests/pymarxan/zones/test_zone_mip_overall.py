@@ -91,38 +91,35 @@ class TestFixtureUnderNewSemantics:
 # zone2}), with problem.parameters["BLM"] = 0.0. Kept only the assignments meeting every zone
 # target (check_zone_targets) AND every overall target (check_overall_targets) and took the
 # minimum compute_zone_objective(p, a, 0.0), separately for ZONETARGETCONTRIB=0 (raw) and =1
-# (weighted). Both modes turned out to share the same unique argmin/objective on this fixture:
-# raw had 10 feasible assignments (best (1, 1, 2, 2) at 460.0, next 480.0), weighted had 4
-# feasible assignments -- a strict subset of raw's -- with the same best (1, 1, 2, 2) at 460.0
-# (next 500.0). Both argmins are unique.
-RAW_OPTIMUM = (1, 1, 2, 2)
-RAW_OBJECTIVE = 460.0
+# (weighted). BLM 0 switches off both boundary terms, the fixture's zone boundary cost of 50
+# per zone1/zone2 edge included (MarZone scales it by BLM, #9; re-derived 2026-10-21). Raw had
+# 10 feasible assignments (best (1, 2, 1, 0) at 380.0, next 410.0); weighted had 4 -- a strict
+# subset of raw's -- (best (1, 1, 2, 2) at 410.0, next 420.0). Both argmins are unique.
+RAW_OPTIMUM = (1, 2, 1, 0)
+RAW_OBJECTIVE = 380.0
 WEIGHTED_OPTIMUM = (1, 1, 2, 2)
-WEIGHTED_OBJECTIVE = 460.0
+WEIGHTED_OBJECTIVE = 410.0
 
 # With every feature's overall target zeroed (BLM = 0.0) the overall tier is inert and only
 # the zone tier binds. Derived the same way: enumerate all 81 assignments, keep those meeting
 # every zone target (check_zone_targets), and take the minimum compute_zone_objective(p, a,
 # 0.0), separately for ZONETARGETCONTRIB=0 (raw) and =1 (weighted). Raw had 22 feasible
-# assignments (best (1, 1, 0, 2) at 310.0, next 350.0); weighted had 5 (best (1, 1, 2, 2) at
-# 460.0, next 500.0). Both argmins are unique, and here -- unlike the overall-target-bound
-# case above -- the two modes disagree.
-ZERO_TARGET_RAW_OPTIMUM = (1, 1, 0, 2)
-ZERO_TARGET_RAW_OBJECTIVE = 310.0
-ZERO_TARGET_WEIGHTED_OPTIMUM = (1, 1, 2, 2)
-ZERO_TARGET_WEIGHTED_OBJECTIVE = 460.0
+# assignments (best (1, 2, 0, 1) at 300.0, next 310.0); weighted had 5 (best (1, 2, 2, 1) at
+# 400.0, next 410.0). Both argmins are unique, and the two modes disagree.
+ZERO_TARGET_RAW_OPTIMUM = (1, 2, 0, 1)
+ZERO_TARGET_RAW_OBJECTIVE = 300.0
+ZERO_TARGET_WEIGHTED_OPTIMUM = (1, 2, 2, 1)
+ZERO_TARGET_WEIGHTED_OBJECTIVE = 400.0
 
 
 class TestFixtureModeSwitch:
     """Raw vs. weighted zone-target modes on the fixture, now that overall targets bind.
 
-    Empirically the two modes land on the *same* unique optimum here: enforcing the
-    overall targets already excludes the raw optimum (1, 1, 0, 2) @ 310 that held before
-    overall targets were enforced (its overall f2 = 12 + 4 x 0.3 = 13.2 < 15), which is
-    exactly what pushed raw up to 460 and made it collide with weighted's (already-460)
-    optimum. Raw's feasible set (10 assignments) still strictly contains weighted's (4);
-    the two just happen to share an argmin. Kept as two solves so a future fixture change
-    that does separate them is caught by whichever constant drifts.
+    Raw's feasible set (10 assignments) strictly contains weighted's (4), and with both
+    boundary terms off at BLM 0 the two modes land on different unique optima (380 vs 410).
+    Before zone boundary costs were scaled by BLM (#9) the 50-per-edge cost still applied
+    at BLM 0 and the two modes happened to share (1, 1, 2, 2) @ 460. Kept as two solves so
+    either constant drifting is caught.
     """
 
     def _solve(self, flag: int):

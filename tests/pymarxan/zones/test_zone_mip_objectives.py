@@ -166,12 +166,15 @@ def test_boundary_ignored_warning_negative_cases() -> None:
 
 
 def test_boundary_ignored_warning_zone_boundary_cost_only() -> None:
+    # Zone boundary costs are scaled by BLM (MarZone, #9): at BLM 0 nothing is ignored.
     bnd = pd.DataFrame({"id1": [1], "id2": [2], "boundary": [1.0]})
-    p = _with_budget(make_anchor_problem(blm=0.0), 7).copy_with(
-        boundary=bnd,
-        zone_boundary_costs=pd.DataFrame({"zone1": [1], "zone2": [2], "cost": [3.0]}),
-    )
-    assert _boundary_hits(ZoneMIPSolver(objective="min_shortfall"), p) == 2  # solve + build
+    zbc = pd.DataFrame({"zone1": [1], "zone2": [2], "cost": [3.0]})
+    quiet = _with_budget(make_anchor_problem(blm=0.0), 7).copy_with(
+        boundary=bnd, zone_boundary_costs=zbc)
+    assert _boundary_hits(ZoneMIPSolver(objective="min_shortfall"), quiet) == 0
+    loud = _with_budget(make_anchor_problem(blm=0.5), 7).copy_with(
+        boundary=bnd, zone_boundary_costs=zbc)
+    assert _boundary_hits(ZoneMIPSolver(objective="min_shortfall"), loud) == 2  # solve + build
 
 
 def test_budget_floor_message() -> None:

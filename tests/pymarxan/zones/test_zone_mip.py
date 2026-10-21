@@ -149,8 +149,9 @@ def test_one_direction_zone_boundary_row_matches_both_directions(rows):
     assert sol_one.objective == pytest.approx(sol_one.metadata["mip_objective_value"], abs=1e-6)
 
 
+@pytest.mark.parametrize("blm", [0.0, 1.0, 2.0])
 @pytest.mark.parametrize("same_zone_cost", [-1000.0, 40.0])
-def test_same_zone_boundary_costs_enter_the_mip(same_zone_cost):
+def test_same_zone_boundary_costs_enter_the_mip(same_zone_cost, blm):
     """zbc(z, z) rows are charged inside zone z by the MIP too (#10).
 
     Exact optimum by enumerating every assignment that meets the zone and overall
@@ -166,8 +167,8 @@ def test_same_zone_boundary_costs_enter_the_mip(same_zone_cost):
 
     base = load_zone_project(DATA_DIR)
     problem = base.copy_with(zone_boundary_costs=pd.DataFrame(
-        {"zone1": [1, 2], "zone2": [2, 2], "cost": [50.0, same_zone_cost]}))
-    blm = float(problem.parameters["BLM"])
+        {"zone1": [1, 2], "zone2": [2, 2], "cost": [50.0, same_zone_cost]}),
+        parameters={**base.parameters, "BLM": blm})
     best = min(
         compute_zone_objective(problem, np.array(a), blm)
         for a in itertools.product((0, 1, 2), repeat=4)

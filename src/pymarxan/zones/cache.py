@@ -362,8 +362,7 @@ class ZoneProblemCache:
 
         return (
             zone_cost
-            + blm * std_boundary
-            + zone_boundary
+            + blm * (std_boundary + zone_boundary)
             + overall_penalty
             + zone_penalty
             + connectivity
@@ -447,8 +446,7 @@ class ZoneProblemCache:
 
         return float(
             cost_delta
-            + blm * std_boundary_delta
-            + zone_boundary_delta
+            + blm * (std_boundary_delta + zone_boundary_delta)
             + penalty_delta
             + connectivity_delta
         )

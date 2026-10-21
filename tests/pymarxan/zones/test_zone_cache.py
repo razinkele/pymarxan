@@ -462,6 +462,34 @@ class TestSameZonePairs:
             assert delta == pytest.approx(after - before, abs=1e-9)
 
 
+class TestZoneBoundaryBLM:
+    """Cache scales the zone boundary term by BLM like the reference (#9)."""
+
+    @pytest.mark.parametrize("blm", [0.0, 0.5, 2.0])
+    def test_full_objective_matches_reference(self, zone_problem, blm):
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        for assignment in [[1, 2, 1, 2], [2, 2, 1, 1], [1, 0, 2, 2]]:
+            a = np.array(assignment, dtype=int)
+            full = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=blm)
+            assert full == pytest.approx(compute_zone_objective(zone_problem, a, blm))
+
+    @pytest.mark.parametrize("blm", [0.0, 0.5])
+    def test_delta_matches_full_recompute(self, zone_problem, blm):
+        c = ZoneProblemCache.from_zone_problem(zone_problem)
+        rng = np.random.default_rng(9)
+        a = np.array([1, 2, 1, 2], dtype=int)
+        for _ in range(50):
+            idx, new_zone = int(rng.integers(4)), int(rng.integers(3))
+            held = c.compute_held(a)
+            before = c.compute_full_zone_objective(a, held=held, blm=blm)
+            delta = c.compute_delta_zone_objective(idx, int(a[idx]), new_zone, a,
+                                                   held=held, blm=blm)
+            a = a.copy()
+            a[idx] = new_zone
+            after = c.compute_full_zone_objective(a, held=c.compute_held(a), blm=blm)
+            assert delta == pytest.approx(after - before, abs=1e-9)
+
+
 class TestMissLevel:
     """Verify MISSLEVEL is applied to zone target matrix."""
 

@@ -76,7 +76,7 @@ class ZoneMIPSolver(Solver):
             (``diagnose_zone_infeasibility``)
 
     Objective ``min_set`` (default; minimize):
-        zone costs + BLM * standard boundary + zone boundary costs + penalty
+        zone costs + BLM * (standard boundary + zone boundary costs) + penalty
 
     Budgeted objectives (require ``COSTBUDGET``; Σ zone cost <= COSTBUDGET):
         ``max_features``           count of met targets (prioritizr ``max_n_targets_met``;
@@ -179,9 +179,8 @@ class ZoneMIPSolver(Solver):
         if self.objective == "min_set":
             return
         blm = float(problem.parameters.get("BLM", 0.0))
-        zbc = problem.zone_boundary_costs
-        has_zbc = zbc is not None and bool((zbc["cost"].astype(float) != 0).any())
-        if problem.boundary is not None and (blm > 0 or has_zbc):
+        # Both boundary terms are scaled by BLM (MarZone), so BLM 0 ignores nothing.
+        if problem.boundary is not None and blm != 0:
             warnings.warn(
                 f"ZoneMIPSolver: objective {self.objective!r} ignores boundary penalties "
                 "(BLM / zone boundary costs); prioritizr applies them — planned follow-up",
@@ -227,17 +226,19 @@ class ZoneMIPSolver(Solver):
             boundary_expr = _build_standard_boundary_expr(
                 problem, x, pu_ids, zone_ids, model
             )
-            # Zone boundary costs between adjacent PUs in different zones
-            zone_boundary_expr = _build_zone_boundary_expr(
-                problem, x, pu_ids, zone_ids, model
+            # Zone boundary costs between adjacent PUs, scaled by BLM like MarZone's
+            # ConnectionCost2; at BLM 0 they vanish, so no w variables are built.
+            zone_boundary_expr = (
+                _build_zone_boundary_expr(problem, x, pu_ids, zone_ids, model)
+                if blm != 0
+                else pulp.lpSum([])
             )
             # Zone-target penalty (slack) and hard constraints share one achieved expression
             zone_exprs = _zone_achieved_exprs(problem, x)
             penalty_expr, _ = _build_penalty_expr(problem, zone_exprs, model)
             model += (
                 cost_expr
-                + blm * boundary_expr
-                + zone_boundary_expr
+                + blm * (boundary_expr + zone_boundary_expr)
                 + penalty_expr,
                 "objective",
             )

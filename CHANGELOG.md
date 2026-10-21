@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (zones):** zone boundary costs are now multiplied by BLM, as in MarZone,
+  which scales its whole connection term by BLM (`zones.hpp` `ConnectionCost2`):
+  `objective = zone_cost + BLM × (standard_boundary + zone_boundary) + penalties +
+  connectivity`, in the evaluator, `ZoneProblemCache`, zone SA/heuristic/II and the zone
+  MIP. At BLM 0, zone boundary costs no longer apply; set BLM 1 to keep the old
+  behaviour, which is exact when every PU is assigned and there are no self-boundaries.
+  Results change for zone projects with BLM ≠ 1. `standard_boundary` stays as pymarxan's
+  zone 0 / zone > 0 perimeter. Under MANDATORYALLOCATION 1 it reduces to MarZone's
+  self-boundary term, so a MarZone project that lists its available zone now matches
+  MarZone's boundary term exactly. The zone MIP builds no zone-pair variables at BLM 0,
+  and its budgeted objectives warn about ignored boundary penalties only when BLM ≠ 0.
+  `examples/curonian_spit_reedbeds.py` now sets BLM 1 (identical results); the v0.37 zone
+  golden records and the zone-target mode constants were re-derived (#9).
+
 ### Added
 
 - `examples/curonian_spit_reedbeds.py`: planning a cut/uncut mosaic in the linear

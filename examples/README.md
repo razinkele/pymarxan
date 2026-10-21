@@ -76,9 +76,10 @@ Things it demonstrates that the tutorial does not:
 - **The reward is a calibration knob** — like BLM, the sweep shows what each
   extra edge costs, and the exact optimum makes edges and cost rise
   monotonically with the reward.
-- **Unit boundary lengths** — the zone MIP scales zone boundary costs by the
-  shared boundary length and the zone evaluator does not, so the example
-  keeps every length at 1.
+- **BLM 1 and unit boundary lengths** — zone boundary costs are multiplied by
+  BLM and by the shared boundary length, as in Marxan with Zones. With BLM 1,
+  every length 1 and every segment assigned, each cut/uncut edge earns exactly
+  the reward.
 
 ## `validate_marxan_parity.py`
 

@@ -178,7 +178,7 @@ def test_mosaic_mip_matches_brute_force_on_a_short_shore(reedbeds, edge_reward):
 
     problem = reedbeds.build_reedbed_problem(n_segments=10, edge_reward=edge_reward)
     best = min(
-        compute_zone_objective(problem, np.array(plan), 0.0)
+        compute_zone_objective(problem, np.array(plan), problem.parameters["BLM"])
         for plan in itertools.product((reedbeds.CUT, reedbeds.LEAVE), repeat=10)
     )
     solution = reedbeds.solve_mosaic(problem)
@@ -202,7 +202,7 @@ def test_mip_matches_brute_force_with_same_zone_costs(reedbeds, same_zone):
         "cost": [cut_cut, leave_leave]})], ignore_index=True)
     problem = base.copy_with(zone_boundary_costs=zbc)
     best = min(
-        compute_zone_objective(problem, np.array(plan), 0.0)
+        compute_zone_objective(problem, np.array(plan), problem.parameters["BLM"])
         for plan in itertools.product((reedbeds.CUT, reedbeds.LEAVE), repeat=10)
     )
     assert reedbeds.solve_mosaic(problem).objective == pytest.approx(best)
