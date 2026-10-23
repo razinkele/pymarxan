@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] — 2026-10-23
+
 ### Changed
 
 - **Breaking (zones):** zone boundary costs are now multiplied by BLM, as in MarZone,
@@ -1637,7 +1639,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.46.0
 [0.45.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.45.0
 [0.44.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.44.0
 [0.43.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.43.0
