@@ -1,6 +1,6 @@
 # Marxan Probability 1D (planned v0.47.0) — design
 
-**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–2 (2026-10-29)
+**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–3 (2026-10-29)
 · **Status:** design approved in conversation (approach A); written spec under review.
 **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
 **Follows:** v0.45.0 (PROBMODE 1/2 consistency), whose review established that Marxan C++ has no
@@ -111,11 +111,31 @@ and gains the chance term. There is no mode with both; the warnings and the CHAN
 `_loss_probability_vector` are pure and never warn: they run ~31 times per 10-run solve, per
 `copy_with` in sweeps, and on every Shiny render, and `ConservationProblem` is unhashable, so
 "once per problem" cannot be tracked on it. One function `_probability_diagnostics(problem) ->
-list[str]` returns every message below; it is emitted (each message one `UserWarning`) by
-`load_project`, by `validate()` (as entries in its returned list), and once at the top of each
-`Solver.solve`, never per run or per cache build. Calibration sweeps and replacement cost call
-solvers, so they emit once per solve; the plan states the exact counts, which a test pins
-(a 10-run solve emits each message once; a 5-point BLM sweep emits it five times).
+list[str]` returns every message below. `_emit_probability_diagnostics(problem)` issues each as
+one `UserWarning`. It is called by `load_project` and at the top of every top-level solve, and is
+guarded by a `contextvars.ContextVar` so a solve nested inside another (RunModePipeline's inner
+SA / heuristic solves, RUNMODE 4/5's two per run, II, replacement cost's inner solves) stays
+silent. Call sites (round 3, I-4; `Solver.solve` is abstract, `base.py:113`, so each emits):
+`SimulatedAnnealingSolver`, `IterativeImprovementSolver`, `HeuristicSolver`, `MIPSolver`,
+`ZonationSolver`, `MarxanBinarySolver`, `RunModePipeline`, `ZoneSASolver`, `ZoneIISolver`,
+`ZoneHeuristicSolver`, `ZoneMIPSolver`, and `MultiObjectiveMIP.solve` (`multiobjective.py:557`,
+not a `Solver`; it builds through `mip._build_base` and never reaches `MIPSolver.solve`).
+Sweeps (`calibrate_blm`, `calibrate_spf`, `run_sweep`, `run_sensitivity`,
+`run_sweep_parallel`) and `compute_replacement_cost` / `generate_portfolio_cuts` call a
+top-level solve per point, so they emit once per point. `load_project` then `solve` emitting
+the same message twice is intended (load time and solve time are separate moments for a user).
+Counts are only observable with warnings recorded or the filter at "always": Python's default
+filter shows an identical message once per call site.
+
+**`validate()` stays errors-only (round 3, I-3).** It gains real errors only: an invalid
+PROBMODE, and `prob` values that are non-finite or outside [0, 1]. Advisory diagnostics never go
+into it: `presolve.py:215-219` disables every presolve check on any `validate()` entry, and
+`presolve_check="strict"` then raises from `MIPSolver` / `ZoneMIPSolver`. The Shiny upload
+(`upload.py:77,104`) shows `_probability_diagnostics` next to `validate()`.
+
+The "differs from v0.46" message repeats on every load and solve until the project sets
+`PROBMODE` explicitly (`_probmode` is pure and `save_project` does not write a resolved mode);
+that is intended, and the message names the remedy.
 
 Messages:
 - the implicit mode differs from v0.46's (1 / 0): name both modes, say modes 3–5 carry no
@@ -201,12 +221,14 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
 ### 3.5 Solvers
 
 - **`ProblemCache`** stays stateless with respect to the selection (today
-  `compute_delta_objective(idx, selected, held, total_cost, blm)`, `cache.py:704`, takes the
+  `compute_delta_objective(idx, selected, held, total_cost, blm)`, `cache.py:710`, takes the
   caller's state). It gains, per chance term, immutable per-cell contribution arrays (E and V
   terms and the per-cell "variance term > 0" flag, CSR-aligned with `held_csr`), and drops its
-  internal dense mode-3 delta term (`cache.py:834-836`).
+  internal dense mode-3 delta term (`cache.py:834-850`). Its only callers are SA
+  (`simulated_annealing.py:206,273`) and II (`iterative_improvement.py:213,295`).
 - **`ChanceState` sidecar** (round 2, I-2), in the `ClumpState` / `SepState` pattern
-  (`from_selection`, `delta_penalty`, `apply_flip`): per chance term, per-feature running `E`,
+  (`from_selection`, `delta_penalty`, `apply_flip`, `penalty_total`): per chance term,
+  per-feature running `E`,
   `V`, `nonzero`. `delta_penalty(idx)` re-scores only the flipped PU's features and **never
   mutates** state (the analogue of Marxan bug (a)); `apply_flip(idx)` commits. Built
   `from_selection` at SA run start (`simulated_annealing.py:149`) and at the start of each II
@@ -216,26 +238,49 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
   `_swap_pass_loop` (`iterative_improvement.py:337-362`) flips two PUs in place and calls
   `compute_full_objective`, which keeps a from-scratch chance term; it also serves the initial
   objective. Both terms can be active at once (mode 5); their penalties add.
-- **Resync (round 2, I-1).** Running sums lose precision when a large-variance cell is removed
-  (measured: V relative error 5.7e-4 at amounts 1–1e6; 1.2 % in a toy case; with p = 1e-17 cells
-  beside a = 1e4, p = 0.5 cells, 171 states had `nonzero > 0` but running `V ≤ 0`, so `√V` was
-  NaN and the penalty silently 0). Rules: (1) `nonzero > 0 ∧ V ≤ 0` → recompute that feature's
-  E / V from its cells over the current selection (CSC column of the contribution arrays) before
-  scoring; (2) after an update that cancels more than 1e-8 of the previous V (|ΔV| > (1 −
-  1e-8)·V_old on a removal), recompute that feature likewise; (3) a full from-scratch resync of
-  all features once per temperature step. Rules (1) and (2) apply inside `delta_penalty` on a
-  scratch copy of the touched features, so the no-mutation rule holds.
-- **Cost.** Prototype on the real layout (round 2): 48.6 µs per flip vs 12.4 µs for mode 0 at
-  2000 × 20 (3.9×), 47.5 vs 12.5 µs at 10 000 × 50 (3.8×), against 3.5–4.9 ms for today's
-  mode 3.
+- **Error-bounded recompute (rounds 2–3).** Running sums lose precision (round 2: V relative
+  error 5.7e-4 at amounts 1–1e6; with p = 1e-17 cells beside a = 1e4, p = 0.5 cells, 171 states
+  had `nonzero > 0` but running `V ≤ 0`, so `√V` was NaN and the penalty silently 0). Drift
+  builds up over many moderate removals and from the initial sum, not only from one large
+  cancellation (round 3: a largest-first removal chain at amounts spanning 1e6 gave |delta − full
+  diff| 6.8e-6, at 1e8 5.3e-2, and a "one removal cancels > 1 − 1e-8 of V" rule never fired).
+  So each feature carries float error bounds since its last recompute:
+  `BV += eps·(|V_old| + |ΔV|)`, `BE += eps·(|E_old| + |ΔE|)` per update (eps = machine epsilon).
+  The feature is **recomputed from its cells over the current selection** (CSC column of the
+  contribution arrays) when `V ≤ 0` while `nonzero > 0`, or `BV > τ·V`, or `BE > τ·√V`
+  (τ = 1e-12); after a recompute both bounds reset to `4·eps·|value|`; when `nonzero` reaches 0,
+  E and V snap to the exact sums of the remaining zero-variance cells (V = 0). The E bound
+  matters because Z amplifies E error by 1/√V. Measured (round 3): every adversarial case
+  ≤ 7.4e-14 for τ from 1e-12 to 1e-9, the 1e8 chain included; at 2000 × 20 and 10 000 × 50,
+  0–101 recomputes in 4000–6000 flips. No periodic full resync is needed (its jumps were
+  ≤ 2e-15), so SA's tracked objective needs no correction term. The rules run inside
+  `delta_penalty` on a scratch copy of the touched features, so the no-mutation rule holds.
+- **Commit == preview.** `apply_flip(idx, adding)` commits the cached result of the last
+  `delta_penalty` when `(idx, adding)` matches, and otherwise computes through the same code
+  path; the committed state equals the previewed state bit for bit. (Recomputing at commit
+  measured 5.6–6.3×, over the bench bound.)
+- **Cost.** Measured on the real layout with the rules above and cached commits (round 3):
+  4.9–5.1× mode 0 per flip, against ~300× for today's mode 3. "Per flip" means delta, plus
+  commit on an accepted flip, for mode 0 and the chance modes alike.
+- **Full objective (round 3, I-5).** `compute_full_objective` no longer includes the chance
+  term either, so the cache's own delta == full contract holds for every mode. SA adds
+  `ChanceState.penalty_total()` to its initial objective, as it does for `SepState`
+  (`simulated_annealing.py:151,188-190`); the swap pass adds a from-scratch chance term; the
+  evaluator / `build_solution` keep the full chance term. Counting it in both places is the trap
+  this avoids.
 - **Reported == tracked:** `Solution.objective` from the evaluator equals SA's and II's tracked
   objective for modes 3, 4, 5 (test).
 - **`MIPSolver`:** only `drop` works today (`mip_solver.py:479-492`; `piecewise` / `socp`
   raise `NotImplementedError`, pinned by `test_probmode3_solvers.py:119,125`). Modes 4 and 5 do
   the same: `drop` solves without the chance terms and its post-hoc report includes them
   (including the Z = 4 penalty); `piecewise` / `socp` raise.
-- **Greedy** ignores chance terms (as for mode 3); **non-binary decisions** are rejected for
-  modes 3–5.
+- **Greedy** and **Zonation** ignore chance terms during optimisation (as for mode 3) and
+  report them afterwards through `build_solution`; each emits a diagnostic saying so, like the
+  zone solvers. **Non-binary decisions** are rejected for modes 3–5.
+- **`MarxanBinarySolver`** writes the project with `save_project` (`marxan_binary.py:54`), so the
+  spec file now carries `ptarget1d` / `ptarget2d`, and pu.dat `prob` already round-trips. A
+  Marxan 3 binary then switches its own 1D / 2D terms on from the files (§1), whatever
+  pymarxan's PROBMODE says; its diagnostic says so. (Marxan v4's handling not verified.)
 - **Shiny probability panel** (round 1, C3; round 2, I-5; required, not optional): the mode
   radio offers 0 ("none"), 1–5 and is initialised from `_probmode(problem)` on load. Shiny cannot
   tell a user's radio change from `ui.update_radio_buttons`, so the mode effect writes
@@ -266,6 +311,10 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
   `PROBZEROVAR 1`).
 - §3.2 I/O: `test_io_probability.py::test_puvspr_no_prob_when_all_zero` (asserts the bug being
   fixed) and `test_writers.py::TestWriteSpec::test_roundtrip` (`ptarget1d` joins its drop list).
+- §3.5 cache change: `test_cache_probmode3.py::TestProbmode3Delta::test_delta_matches_full_under_probmode3`
+  moves to `ChanceState` (delta == difference of `penalty_total`), and
+  `tests/benchmarks/bench_prob.py::test_probmode3_delta_under_2500us_at_500pu` is re-pointed at
+  `ChanceState` (it would otherwise pass while measuring nothing).
 - §3.1 implicit rule: no existing test reaches it (patched into every `_probmode` site: 3778
   passed), so every mode-selection test is new.
 - **No golden record uses PROBMODE 3** (stage 1/3/4 JSON checked); none moves.
@@ -293,8 +342,11 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
 - **Mode 5 with `prob.dat`:** held amounts and costs stay raw (catches `_probmode2_active`
   generalised to "mode ≥ 2", or the premium leaking into modes 3–5).
 - **Z uses the raw target:** MISSLEVEL ≠ 1 does not change Z (Marxan's `spec.target`).
-- **Diagnostics counts:** a 10-run solve emits each message once; a 5-point BLM sweep five
-  times; `_probmode` itself never warns.
+- **Diagnostics counts** (warnings recorded, filter "always"; problem built in code with
+  implicit mode 4): a 10-run SA solve and a 10-run `RunModePipeline` solve (RUNMODE 1 and 4)
+  each emit each message once; a 5-point `calibrate_blm` five times; `MultiObjectiveMIP.solve`
+  once; `_probmode` and `validate()` never warn, and `validate()` returns no advisory entries
+  (so `presolve_check` still runs).
 - **Zero-variance rule** in both terms: all p = 0, nothing selected, q ∈ {0, 1}; default and
   opt-out.
 - **Tiny p:** p = 1e-17 gives V > 0 (not Z = 4).
@@ -311,8 +363,11 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
 - **Shiny:** load a problem whose mode is implicit 4, move the weight slider:
   `"PROBMODE" not in p.parameters`; the radio initialises to "4"; a mode-0 problem initialises
   to "0".
-- **Bench** (`bench` marker): per-flip cost of modes 3/4/5 ≤ 6× mode 0 (comparative, not
-  wall-clock), at 2000 × 20 and 10 000 × 50.
+- **Bench** (`bench` marker): per-flip cost (delta, plus commit on an accepted flip) of modes
+  3/4/5 ≤ 6× mode 0 (comparative, not wall-clock), at 2000 × 20 and 10 000 × 50.
+- **Commit == preview:** after `delta_penalty(i)` then `apply_flip(i, adding)`, the state equals
+  a fresh `from_selection` of the new selection to 1e-12, and equals the previewed scratch state
+  exactly.
 
 ## 5. Left to the plan
 
