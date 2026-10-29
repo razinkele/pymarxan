@@ -1,6 +1,6 @@
 # Marxan Probability 1D (planned v0.47.0) — design
 
-**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–4 (2026-10-29)
+**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–4 and a final review (2026-10-29)
 · **Status:** design approved in conversation (approach A); written spec under review.
 **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
 **Follows:** v0.45.0 (PROBMODE 1/2 consistency), whose review established that Marxan C++ has no
@@ -79,9 +79,14 @@ own full recompute, and its zero-variance test is exact (§3.4) by design.
 **3 = 2D** (chance term from puvspr `prob`), **4 = 1D**, **5 = 1D + 2D**. `validate()` reports
 any other value (today a typo silently means "no probability").
 
-One helper, `_chance_terms(problem) -> frozenset[{"1d", "2d"}]` in `solvers/utils.py`, replaces
-every `PROBMODE == 3` branch. Sites (round 1, I6): `utils.py:460,716`;
-`cache.py:331,623,699,834`; `mip_solver.py:76,479,781` (`_strategy_metadata`, also
+Two helpers in `solvers/utils.py` replace every `PROBMODE == 3` branch (final review, I-4):
+`_chance_terms(problem) -> frozenset[str]` (terms **requested** by the mode: 3 → `{"2d"}`,
+4 → `{"1d"}`, 5 → both) and `_active_chance_terms(problem)` (requested **and** with data, §3.1
+"term without data"). Requested: non-binary rejection (`mip_solver.py:76`), the MIP strategy gate
+and `_strategy_metadata` (479, 781), the `run_panel` notice (keeps today's behaviour, where
+mode 3 alone rejects non-binary decisions). Active: the evaluator, `ProblemCache` /
+`ChanceState`, `Solution` fields, mvbest / target-met columns, diagnostics' "ignored" messages. Sites (round 1, I6): `utils.py:460,716`;
+`cache.py:331,624,698,834`; `mip_solver.py:76,479,781` (`_strategy_metadata`, also
 `multiobjective.py:649`); `results/target_met.py:52`; `run_control/run_panel.py:250`;
 `help/help_content.py:865`; `probability/probability_config.py`; `solvers/base.py:30-33,129`
 (`supports_probmode3` keeps its name and means "supports chance terms", modes 3–5; docstring
@@ -125,7 +130,10 @@ on threads must use `copy_context().run`; no solver spawns threads today, and Sh
 Solver-specific messages (greedy / Zonation ignore chance terms; the Marxan binary switches its
 own terms on; zone solvers ignore them) are not in `_probability_diagnostics(problem)`: each such
 solver emits its own message through the same guarded emitter, so RunModePipeline's inner
-heuristic step stays silent while SA optimises the terms. Call sites (round 3, I-4; `Solver.solve` is abstract, `base.py:113`, so each emits):
+heuristic step stays silent while SA optimises the terms. `RunModePipeline` emits its own
+message per RUNMODE (final review, I-8): RUNMODE 1 (heuristic only, `run_mode.py:137-139`) emits
+"chance terms ignored during optimisation"; RUNMODEs 0 and 2–6 emit none (SA or II optimises
+the terms). Call sites (round 3, I-4; `Solver.solve` is abstract, `base.py:113`, so each emits):
 `SimulatedAnnealingSolver`, `IterativeImprovementSolver`, `HeuristicSolver`, `MIPSolver`,
 `ZonationSolver`, `MarxanBinarySolver`, `RunModePipeline`, `ZoneSASolver`, `ZoneIISolver`,
 `ZoneHeuristicSolver`, `ZoneMIPSolver`, and `MultiObjectiveMIP.solve` (`multiobjective.py:557`,
@@ -146,7 +154,7 @@ filter shows an identical message once per call site.
 
 **`validate()` stays errors-only (round 3, I-3).** It gains real errors only: an invalid
 PROBMODE, and `prob` values that are non-finite or outside [0, 1]. Advisory diagnostics never go
-into it: `presolve.py:215-219` disables every presolve check on any `validate()` entry, and
+into it: `solvers/presolve.py:215-219` disables every presolve check on any `validate()` entry, and
 `presolve_check="strict"` then raises from `MIPSolver` / `ZoneMIPSolver`. The Shiny upload
 (`upload.py:77,104`) shows `_probability_diagnostics` next to `validate()`.
 
@@ -189,9 +197,17 @@ chance terms; if `_chance_terms` is non-empty, the zone solver's `solve` emits t
   to add for `prob`.
 - **Fix while here (round 1, M3):** `write_puvspr` drops an all-zero `prob` column
   (`writers.py:76-77`) while the reader defaults a missing one to 1.0 (`cache.py:333`), so
-  presence 0 round-trips as presence 1. Drop the column only when it is all 1.
-- **`_OVERRIDABLE_FIELDS`** (`problem.py:405`), `_KNOWN_SPEC_COLS` and the Shiny feature table
-  (`feature_table.py`) gain `ptarget1d`.
+  presence 0 round-trips as presence 1. It now **always writes `prob` when the column is
+  present** (final review, I-7: under the Z = 4 rule an all-1 column is not a no-op; dropping it
+  would turn the 2D term off on reload, or change the implicit mode, and Marxan 3 itself turns
+  2D on from a `prob` header).
+- **`_OVERRIDABLE_FIELDS`** (`problem.py:405`) and `_KNOWN_SPEC_COLS` gain `ptarget1d`. The
+  Shiny feature table (`feature_table.py`) shows `ptarget` only, read-only today, and its float
+  validator rejects negatives: both `ptarget` and `ptarget1d` become editable with a validator
+  accepting −1 or (0, 1].
+- **`write_spec`:** `ptarget2d` takes `ptarget`'s column position; a NaN `ptarget1d` (from
+  concatenating feature tables) counts as −1.
+- **`read_pu`** does not cast `prob`; `_loss_probability_vector` casts to float.
 
 ### 3.3 The 1D probability source
 
@@ -224,24 +240,40 @@ One function scores a feature from `(E, V, nonzero, target, ptarget, zero_var_ru
   under `PROBZEROVAR = 1`: penalty 0 and shortfall 0 ("met").
 - otherwise `Z = (target − E)/√V`, `P = norm.sf(Z)`, penalty and shortfall as in §1.
 
-`compute_zscore_per_feature`, `compute_zscore_penalty` and `evaluate_solution_chance` are
-rebuilt on it. **All three current zero-variance skips go** (round 1, I3):
+The core is `score_feature(E, V, nonzero, target, ptarget, zero_var_rule) -> FeatureChance`
+(a frozen dataclass `z, p, shortfall, penalty`; `zero_var_rule` is `"marxan"` or `"met"`).
+Public signatures (final review, I-5): `compute_zscore_per_feature(mean, variance, targets)` is
+unchanged (V ≤ 0 → 4); `compute_zscore_penalty(zscore_per_feature, prob_targets, weight=1.0, *,
+zero_variance=frozenset(), zero_var_rule="marxan")` takes the ids of zero-variance features, so
+a real Z = 4 is told apart from the zero-variance one; `evaluate_solution_chance(problem,
+selected, term="2d") -> tuple[dict[int, float], float]` (shortfalls, weighted penalty) for one
+term. `compute_zscore_penalty`, `evaluate_solution_chance` and the second copy of the E/V loop,
+`utils.py:_compute_probmode3_zscore_penalty` (≈501), are all rebuilt on `score_feature`. **All three current zero-variance skips go** (round 1, I3):
 `probability.py:126` (`compute_zscore_penalty`), `probability.py:205` (zeroes
 `prob_shortfalls`, which feeds mvbest `Prob_Gap` and the target-met table) and `cache.py:632-634`
-(`var <= 0: continue`). `evaluate_solution_chance` reports per term (`1d`, `2d`): E, V, Z, P,
-shortfall, and the penalty total; the mvbest / target-met columns gain 1D equivalents
-(`Prob1D_Gap` etc.), named in the plan.
+(`var <= 0: continue`).
 
-`PROBZEROVAR` is a new `input.dat` parameter (0 default, 1 opt-out), read by `load_project`,
-written by `save_project`, documented in the manual, and shown in the Shiny probability panel.
+**`Solution` and reports (final review, I-3).** `Solution.prob_shortfalls` /
+`prob_penalty` stay the **2D** term (None unless 2D is active, as today for non-mode-3). New
+`prob1d_shortfalls: dict[int, float] | None` and `prob1d_penalty: float | None`, None unless 1D
+is active. `terms["probability"]` in `compute_objective_terms` is the sum of the active terms.
+`write_mvbest` (`writers.py:219,239`) writes `Prob_Gap` when 2D is active and `Prob1D_Gap` when
+1D is active; `target_met.py` shows a probability column per active term.
+
+`PROBZEROVAR` is a new `input.dat` parameter (0 default, 1 opt-out). `read_input_dat` /
+`write_input_dat` are generic, so its I/O needs no code; `validate()` reports values other than
+0 / 1; the manual documents it and the Shiny panel shows it.
 
 ### 3.5 Solvers
 
 - **`ProblemCache`** stays stateless with respect to the selection (today
   `compute_delta_objective(idx, selected, held, total_cost, blm)`, `cache.py:710`, takes the
   caller's state). It gains, per chance term, immutable per-cell contribution arrays (E and V
-  terms and the per-cell "variance term > 0" flag, CSR-aligned with `held_csr`), and drops its
-  internal dense mode-3 delta term (`cache.py:834-850`). Its only callers are SA
+  terms and the per-cell "variance term > 0" flag), in two layouts: PU-major (CSR, aligned with
+  `held_csr`) for the delta and feature-major (CSC) for the recompute. It exposes
+  `cache.chance_terms` (the active terms, §3.1) and builds a term's arrays only when that term is
+  active. It **removes** the dense `expected_matrix` / `var_matrix` (wasted memory at
+  10 000 × 50) and its internal dense mode-3 delta term (`cache.py:834-850`). Its only callers are SA
   (`simulated_annealing.py:206,273`) and II (`iterative_improvement.py:213,295`).
 - **`ChanceState` sidecar** (round 2, I-2), in the `ClumpState` / `SepState` pattern
   (`from_selection`, `delta_penalty`, `apply_flip`, `penalty_total`): per chance term,
@@ -267,11 +299,15 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
   `BV += eps·(|V_old| + |ΔV|)`, `BE += eps·(|E_old| + |ΔE|)` per update (eps = machine epsilon).
   The feature is **recomputed from its cells over the selection *after* the previewed flip** (`idx` toggled
   to `adding`, on a scratch copy; CSC column of the contribution arrays) when `V ≤ 0` while
-  `nonzero > 0`, or `BV > τ·V`, or `BE > τ·√V`, with V the post-update value (τ = 1e-12;
+  `nonzero > 0`, or `BV > τ·V`, or `BE > max(τ·√V, 64·eps·|E|)`, with V the post-update value (τ = 1e-12;
   round 4 measured errors of 1–3.8 when the pre-flip selection was used); after a recompute both
   bounds reset to `4·eps·|value|`, and `from_selection` counts as a recompute; when `nonzero` reaches 0,
   E and V snap to the exact sums of the remaining zero-variance cells (V = 0). The E bound
-  matters because Z amplifies E error by 1/√V. Measured (round 3): every adversarial case
+  matters because Z amplifies E error by 1/√V. The `64·eps·|E|` floor (final review, I-1) stops
+  the E trigger firing on every touch when |E|/√V > ~1100 (coefficient of variation below ~9e-4,
+  the usual 1D layout of mostly p = 0 with a few risky PUs: without it, 1 % risky PUs recomputed
+  on 5000 of 5000 touches; with it, 82). The Z error is then bounded by `64·eps·|E|/√V`.
+  Measured (round 3): every adversarial case
   ≤ 7.4e-14 for τ from 1e-12 to 1e-9, the 1e8 chain included; at 2000 × 20 and 10 000 × 50,
   0–101 recomputes in 4000–6000 flips. No periodic full resync is needed (its jumps were
   ≤ 2e-15), so SA's tracked objective needs no correction term. The rules run inside
@@ -304,7 +340,12 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
 - **`MarxanBinarySolver`** writes the project with `save_project` (`marxan_binary.py:54`), so the
   spec file now carries `ptarget1d` / `ptarget2d`, and pu.dat `prob` already round-trips. A
   Marxan 3 binary then switches its own 1D / 2D terms on from the files (§1), whatever
-  pymarxan's PROBMODE says; its diagnostic says so. (Marxan v4's handling not verified.)
+  pymarxan's PROBMODE says; its diagnostic says so. When 1D is active and its source is
+  `prob.dat` only, the solver writes the loss probabilities into the pu.dat `prob` column of its
+  temporary project, so the binary sees them. (Marxan v4's handling not verified.)
+- **`supports_probmode3`** is overridden nowhere (`base.py:129`), so greedy, Zonation and the
+  zone solvers return True while ignoring the terms; intended ("has a fallback"), docstring says
+  so.
 - **Shiny probability panel** (round 1, C3; round 2, I-5; required, not optional): the mode
   radio offers 0 ("none"), 1–5 and is initialised from `_probmode(problem)` on load. Shiny cannot
   tell a user's radio change from `ui.update_radio_buttons`, so the mode effect writes
@@ -324,8 +365,10 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
    with no chance term. A project with `prob.dat` that ran as mode 1 and now selects 3–5 **loses
    the PROBMODE 1 cost premium** (§3.1).
 3. `write_spec` writes `ptarget2d` instead of `ptarget`.
-4. `write_puvspr` keeps an all-zero `prob` column (it used to drop it, and reloading turned
-   presence 0 into presence 1); listed under `Fixed`.
+4. `write_puvspr` always writes a `prob` column that is present (it used to drop an all-zero
+   one, and reloading turned presence 0 into presence 1); listed under `Fixed`.
+5. `rank_importance` (`analysis/rank_importance.py:84`, via `compute_objective_terms`) changes
+   with the implicit mode; one CHANGELOG line.
 
 Measured blast radius (rounds 1–4), each test rewritten with a written reason:
 - Z = 4 rule: `test_probability_dispatch.py::test_probmode_3_with_no_probability_data_returns_zero`
@@ -335,6 +378,11 @@ Measured blast radius (rounds 1–4), each test rewritten with a written reason:
   `PROBZEROVAR 1`).
 - §3.2 I/O: `test_io_probability.py::test_puvspr_no_prob_when_all_zero` (asserts the bug being
   fixed) and `test_writers.py::TestWriteSpec::test_roundtrip` (`ptarget1d` joins its drop list).
+- Dense matrices removed (§3.5): `test_cache_probmode3.py::test_expected_matrix_uses_amount_times_prob`
+  and `::test_var_matrix_is_bernoulli_form` move to the per-cell arrays;
+  `::test_missing_prob_column_is_deterministic` becomes "term off without data";
+  `test_cache.py::test_expected_var_gated_on_probmode` (≈615) is gated on `cache.chance_terms`;
+  `test_plain_solve_does_not_densify` is checked and kept.
 - §3.5 cache change: `test_cache_probmode3.py::TestProbmode3Delta::test_delta_matches_full_under_probmode3`
   moves to `ChanceState` (delta == difference of `penalty_total`), and
   `tests/benchmarks/bench_prob.py::test_probmode3_delta_under_2500us_at_500pu` is re-pointed at
@@ -365,18 +413,21 @@ Measured blast radius (rounds 1–4), each test rewritten with a written reason:
   `PROBZEROVAR` values, ≥ 5000 random flips mixing accepted and rejected moves and the
   temperature-sampling path (catches state committed inside `delta_penalty`), amounts spread
   ≥ 1e6 with removal of the dominant-variance cell, and p = 1e-17 cells sharing a feature with
-  large-variance cells (the error-bounded recompute, §3.5); tolerance 1e-9.
+  large-variance cells (the error-bounded recompute, §3.5), and the sparse-risk layout (1 %
+  risky PUs); tolerance 1e-9.
 - **Reported == tracked** objective after SA and after II (every ITIMPTYPE, incl. the swap pass),
   modes 3–5; II's removal pass keeps a PU the chance term needs.
 - **Mode 5 with `prob.dat`:** held amounts and costs stay raw (catches `_probmode2_active`
   generalised to "mode ≥ 2", or the premium leaking into modes 3–5).
 - **Z uses the raw target:** MISSLEVEL ≠ 1 does not change Z (Marxan's `spec.target`).
-- **Parallel sweep:** a mode-4 problem whose 1D source is prob.dat gives the same objectives
-  under `run_sweep` and `run_sweep_parallel(max_workers=2)`.
+- **Parallel sweep:** a mode-1 problem with prob.dat (RED today: the premium vanishes in the
+  workers) and, once mode 4 exists, a mode-4 problem whose 1D source is prob.dat give the same
+  objectives under `run_sweep` and `run_sweep_parallel(max_workers=2)`.
 - **Diagnostics counts** (warnings recorded, filter "always"; problem built in code with
   implicit mode 4): a 10-run SA solve and a 10-run `RunModePipeline` solve (RUNMODE 1 and 4)
-  each emit each message once, and the RunModePipeline solve emits exactly the expected set
-  (no "greedy ignores chance terms" from its inner heuristic); a 5-point `calibrate_blm` five times; `MultiObjectiveMIP.solve`
+  each emit each `_probability_diagnostics` message once; RUNMODE 4 emits nothing else (no
+  "chance terms ignored" from its inner heuristic), RUNMODE 1 emits exactly one "chance terms
+  ignored"; a 5-point `calibrate_blm` five times; `MultiObjectiveMIP.solve`
   once; `_probmode` and `validate()` never warn, and `validate()` returns no advisory entries
   (so `presolve_check` still runs).
 - **Zero-variance rule** in both terms: all p = 0, nothing selected, q ∈ {0, 1}; default and
@@ -389,14 +440,20 @@ Measured blast radius (rounds 1–4), each test rewritten with a written reason:
 - **Source precedence:** pu.dat vs prob.dat agree (silent) / differ (warn, pu.dat used).
 - **I/O:** `ptarget2d` → `ptarget`; `ptarget` + `ptarget2d` disagree → ValueError; legacy
   `ptarget` round trip writes `ptarget2d`; `ptarget1d` round trip; an in-memory `ptarget` set
-  after loading is honoured; puvspr all-zero `prob` round trip; `PROBZEROVAR` round trip.
+  after loading is honoured; puvspr all-zero and all-one `prob` round trips (column kept); `PROBZEROVAR` round trip.
 - **MIP:** `drop` with modes 4/5 reports the chance penalty; `piecewise` / `socp` raise.
 - **Non-binary decisions** rejected for modes 4/5; **zones** warn.
-- **Shiny:** load a problem whose mode is implicit 4, move the weight slider:
-  `"PROBMODE" not in p.parameters`; the radio initialises to "4"; a mode-0 problem initialises
-  to "0".
+- **Shiny** (final review, I-2: there is no module-session harness; `test_probmode3_ui.py` is
+  source-text smoke tests): the panel's decisions move into pure helpers in
+  `probability_config.py`, `initial_mode_choice(problem) -> str` and `mode_to_write(problem,
+  radio: str) -> int | None` (None = write nothing), unit-tested: an implicit-4 problem
+  initialises to "4" and `mode_to_write(p, "4")` is None (moving the slider therefore writes no
+  PROBMODE); a mode-0 problem initialises to "0"; `mode_to_write(p, "3")` on an implicit-4 problem
+  is 3. A smoke test pins that the mode effect calls `mode_to_write` and the slider effect writes
+  only `PROBABILITYWEIGHTING`.
 - **Bench** (`bench` marker): per-flip cost (delta, plus commit on an accepted flip) of modes
-  3/4/5 ≤ 6× mode 0 (comparative, not wall-clock), at 2000 × 20 and 10 000 × 50.
+  3/4/5 ≤ 6× mode 0 (comparative, not wall-clock), at 2000 × 20 and 10 000 × 50, each with
+  dense risk (p ~ U(0, 0.3)) and sparse risk (1 % of PUs at p = 0.05, the rest p = 0).
 - **Commit == preview:** after `delta_penalty(i)` then `apply_flip(i, adding)`, the state equals
   a fresh `from_selection` of the new selection to 1e-12 relative, and equals the previewed scratch state
   exactly.
@@ -407,4 +464,36 @@ Exact column names of the new 1D report fields; the CSR layout for per-cell cont
 docs to update (manual — including dropping the zero-variance caveat on the "prob = 1 − p"
 workaround at `USER_MANUAL.md:417-419`, README, copilot instructions — replacing "Probability
 1D not yet implemented"); docstrings that cite Marxan v4 or "trivially met"
-(`probability.py:8-16,46-48,123-125`, `utils.py:508-509`, `cache.py:619-622`, `base.py:30-33`).
+(`probability.py:5-6,8-16,46-48,123-125`, `utils.py:508-509` — whose 2D E formula has the wrong
+polarity — `cache.py:619-622`, `base.py:30-33`); the probability panel's tooltip
+(`probability_config.py:77`, says the heuristic optimises mode 3) and its "Probability 1D is not
+yet implemented" text (`:65`).
+
+Module homes: `ChanceState` in a new `solvers/chance_state.py` (`probability.py` stays free of
+solver state); `_probability_diagnostics`, the emitter and its `ContextVar` in
+`solvers/utils.py`. `validate()` reporting an out-of-range pu.dat `prob` even when no mode uses
+it (which then disables presolve) is intended.
+
+## 6. Delivery
+
+The final review proposed an order that keeps the suite green between groups:
+
+- **A — chance-term core, 2D only.** A0 fixes while here (puvspr `prob` always written; parallel
+  sweep passes the whole problem, RED via mode 1). A1 `_chance_terms` / `_active_chance_terms`
+  refactor, mode 3 → `{"2d"}`, no behaviour change. A2 `score_feature` with `zero_var_rule`,
+  default "met" (today's behaviour), new signatures, all three skip sites and
+  `_compute_probmode3_zscore_penalty` routed through it. A3 `ChanceState` (2d): per-cell arrays,
+  dense matrices and the cache's chance term removed, SA / II / swap pass wired, bench re-pointed
+  with the sparse-risk layout. A4 switch the default to Z = 4 and add `PROBZEROVAR` (last: on
+  the old dense delta, float residue would make the delta test flaky; `ChanceState`'s exact
+  count removes that). The behavioural RED of A3 is only the bench (excluded from CI) and the new
+  API; its regression guards are today's mode-3 delta / tracked tests.
+- **B — Probability 1D.** B1 I/O (`ptarget1d` / `ptarget2d`, whitelists). B2
+  `_loss_probability_vector` and the `validate()` checks. B3 explicit modes 4 / 5: evaluator and
+  `Solution` fields, `ChanceState` 1d term, mvbest / target-met columns, MIP drop / raise,
+  non-binary rejection. B4 implicit mode selection, `_probability_diagnostics`, the emitter and
+  `ContextVar`. B5 per-solver messages (greedy, Zonation, zones, binary, `MultiObjectiveMIP`,
+  `RunModePipeline` per RUNMODE). B6 Shiny (pure helpers, radio 0–5, slider fix, `PROBZEROVAR`,
+  `ptarget1d` / `ptarget` editing, upload diagnostics, help). B7 docs, CHANGELOG, final bench.
+
+A → B order is required. Whether A and B ship as one release or two is the user's call.
