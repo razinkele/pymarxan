@@ -1,7 +1,7 @@
-# Marxan Probability 1D (planned v0.46.0) — design
+# Marxan Probability 1D (planned v0.47.0) — design
 
-**Date:** 2026-10-18 · **Status:** design approved in conversation (approach A); written spec
-not yet reviewed. **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
+**Date:** 2026-10-18, source-grounded 2026-10-29 · **Status:** design approved in conversation
+(approach A); written spec under review. **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
 **Follows:** v0.45.0 (PROBMODE 1/2 consistency), whose review established that Marxan C++ has no
 `PROBMODE`, that pymarxan's PROBMODE 1/2 are extensions, and that Marxan v4's `probZUT` has an
 integer-division bug (`1 / 2`) that inverts its probability penalty.
@@ -27,6 +27,28 @@ failing its probability target — including when every `p_i = 0` (no risk) and 
 
 2D is the same with per-cell **presence** probability `q_ij` (puvspr `prob`) and `ptarget2d`.
 1D is therefore exactly 2D with `q_ij = 1 − p_i`.
+
+Source facts checked 2026-10-29 against `marxan3` (`probability.c`, `input.c`, `marxan.c`):
+
+- **Score assembly** (`marxan.c` `computeReserveValue`): E and V are summed over the selected
+  PUs (status 1 or 2) only; `total = cost + connection + penalty + probability1D +
+  probability2D`. No SPF on either probability term.
+- **Delta bug in Marxan 3:** `ChangeProbability1D` and `ChangeProbability2D` read
+  `spec[i].ptarget1d` / `ptarget2d` with `i` = the richness-loop counter, not the species
+  index `isp`, so Marxan 3's SA delta is not the difference of its own score (and it writes
+  `spec[isp].Zscore1D` / `probability1D` even for rejected moves). **pymarxan reproduces the
+  score (`ComputeProbability1D/2D`), not the delta.** The SA test is delta == difference of
+  pymarxan's own full recompute.
+- **`probZUT` is the Ibbetson (CACM Alg. 209) polynomial with `Z_MAX = 5`:** exactly 0 / 1 for
+  |z| ≥ 5, within ~1e-7 of `norm.sf` elsewhere. pymarxan keeps `norm.sf`; parity tests against
+  a transcription use a tolerance of 1e-6 and assert nothing exact at |z| ≥ 5.
+- **Activation:** Marxan 3 turns 1D on when `pu.dat` has a `prob` column (`input.c`
+  `readPlanningUnits`, `fProb1D = 1`) and 2D when the puvspr header ends in `prob`, with no
+  condition on the targets; both can be on at once. pymarxan's "and any `ptarget1d > 0`"
+  condition (§2) is observationally equivalent, since every penalty is 0 when no target is
+  set.
+- **Spec columns:** Marxan 3 accepts `ptarget1d` and `ptarget2d` only (`readSpecies` varlist);
+  bare `ptarget` is pymarxan's own name (Phase 18) for the 2D target.
 
 ## 2. Decisions (user-approved, 2026-10-18)
 
@@ -56,7 +78,32 @@ the existing PROBMODE 3 SA delta covers 1D; `MIPSolver`'s `mip_chance_strategy`
 unchanged (ignores chance constraints, as for mode 3); non-binary decisions rejected for mode 4
 as for mode 3; the evaluator / `build_solution` / `evaluate_solution_chance` report mode 4.
 
-**Existing users:** PROBMODE 3 penalties change for zero-variance features; legacy `ptarget`
+**Zero-variance threshold:** "variance is zero" means `V_j ≤ 1e-12 · max(1, Σ_i a_ij²)`, one
+helper shared by the evaluator, `ProblemCache` and the MIP report, so incremental float residue
+after removals (1e-17 instead of 0) cannot split delta from full recompute. Marxan uses `> 0`;
+the two differ only on residue. The exact-float `z == 4.0` skip in `compute_zscore_penalty` is
+removed: zero variance is decided on V, and Z = 4 then flows through the normal P / penalty
+path (P = `norm.sf(4)` ≈ 3.17e-5).
+
+**Inputs, precisely:** `read_pu` already keeps every `pu.dat` column, so `prob` is in
+`planning_units` today but unused; `write_pu` must round-trip it and `validate()` must check it
+(finite, in [0, 1]) when present. `read_spec` whitelists `ptarget1d` and `ptarget2d`; a file
+with `ptarget` and no `ptarget2d` reads it as `ptarget2d` (the in-memory column is renamed
+`ptarget2d`, and `ptarget` stays readable as an alias in code that reads features). `write_spec`
+emits `ptarget1d` / `ptarget2d` (Marxan 3 names), dropping each when it is all −1, so a legacy
+`ptarget` project is re-written in Marxan-native form.
+
+**Mode selection (`load_project`):** an explicit `PROBMODE` in `input.dat` always wins. With
+none: 4 if `pu.dat` has `prob` and any `ptarget1d > 0`; else 3 if puvspr has `prob` and any
+`ptarget2d > 0`; else today's default (1 with a `prob.dat` table, 0 without). An explicit 1, 2
+or 3 while `pu.dat` `prob` and a positive `ptarget1d` are present warns that the 1D targets are
+ignored. If both 4 and 3 would apply, warn and use 4 (§2). 1D source precedence: `pu.dat`
+`prob`; else `problem.probability`; if both exist and differ, warn and use `pu.dat`.
+
+**Existing users:** PROBMODE 3 penalties change for zero-variance features (`Changed`); the
+zero-variance PROBMODE 3 tests and any golden record with such a feature move, each with a
+written reason. Marxan-native projects with `pu.dat` `prob` and `ptarget1d`, which today warn
+about an unknown column and ignore it, now run Probability 1D (`Changed`). Legacy `ptarget`
 projects keep working.
 
 ## 4. Tests (to be detailed in the spec review)
