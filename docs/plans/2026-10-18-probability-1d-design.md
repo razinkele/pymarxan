@@ -1,4 +1,4 @@
-# Marxan Probability 1D (planned v0.47.0) — design
+# Marxan Probability 1D (planned v0.47.0 + v0.48.0) — design
 
 **Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–4 and a final review (2026-10-29)
 · **Status:** design approved in conversation (approach A); written spec under review.
@@ -496,4 +496,5 @@ The final review proposed an order that keeps the suite green between groups:
   `RunModePipeline` per RUNMODE). B6 Shiny (pure helpers, radio 0–5, slider fix, `PROBZEROVAR`,
   `ptarget1d` / `ptarget` editing, upload diagnostics, help). B7 docs, CHANGELOG, final bench.
 
-A → B order is required. Whether A and B ship as one release or two is the user's call.
+A → B order is required. **Two releases (user, 2026-10-29):** v0.47.0 = A (breaking: the
+mode-3 zero-variance default), v0.48.0 = B (Probability 1D).
