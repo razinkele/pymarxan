@@ -1,6 +1,6 @@
 # Marxan Probability 1D (planned v0.47.0) — design
 
-**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–3 (2026-10-29)
+**Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–4 (2026-10-29)
 · **Status:** design approved in conversation (approach A); written spec under review.
 **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
 **Follows:** v0.45.0 (PROBMODE 1/2 consistency), whose review established that Marxan C++ has no
@@ -115,14 +115,31 @@ list[str]` returns every message below. `_emit_probability_diagnostics(problem)`
 one `UserWarning`. It is called by `load_project` and at the top of every top-level solve, and is
 guarded by a `contextvars.ContextVar` so a solve nested inside another (RunModePipeline's inner
 SA / heuristic solves, RUNMODE 4/5's two per run, II, replacement cost's inner solves) stays
-silent. Call sites (round 3, I-4; `Solver.solve` is abstract, `base.py:113`, so each emits):
+silent. "Top-level" means no enclosing solve in the current `contextvars` context; the var is
+set with a token and reset in `finally`, so an exception cannot leave it set. Limits (round 4,
+checked on 3.13): `asyncio.to_thread` copies the context (nested stays silent);
+`threading.Thread` / `ThreadPoolExecutor` start fresh, so a future solver running inner solves
+on threads must use `copy_context().run`; no solver spawns threads today, and Shiny's run thread
+(`run_panel.py:150`) is itself the top-level solve, whose warnings go to server stderr.
+
+Solver-specific messages (greedy / Zonation ignore chance terms; the Marxan binary switches its
+own terms on; zone solvers ignore them) are not in `_probability_diagnostics(problem)`: each such
+solver emits its own message through the same guarded emitter, so RunModePipeline's inner
+heuristic step stays silent while SA optimises the terms. Call sites (round 3, I-4; `Solver.solve` is abstract, `base.py:113`, so each emits):
 `SimulatedAnnealingSolver`, `IterativeImprovementSolver`, `HeuristicSolver`, `MIPSolver`,
 `ZonationSolver`, `MarxanBinarySolver`, `RunModePipeline`, `ZoneSASolver`, `ZoneIISolver`,
 `ZoneHeuristicSolver`, `ZoneMIPSolver`, and `MultiObjectiveMIP.solve` (`multiobjective.py:557`,
 not a `Solver`; it builds through `mip._build_base` and never reaches `MIPSolver.solve`).
 Sweeps (`calibrate_blm`, `calibrate_spf`, `run_sweep`, `run_sensitivity`,
 `run_sweep_parallel`) and `compute_replacement_cost` / `generate_portfolio_cuts` call a
-top-level solve per point, so they emit once per point. `load_project` then `solve` emitting
+top-level solve per point, so they emit once per point; `run_sweep_parallel` emits in its worker
+processes (stderr), not visible to the caller's warning capture.
+
+**Fix while here (round 4, I-2):** `run_sweep_parallel`'s `_solve_single`
+(`calibration/parallel.py`) rebuilds `ConservationProblem` from five fields, dropping
+`probability`, `connectivity` and the subclass type, so a 1D source read from prob.dat vanishes
+in the workers (implicit mode 4 → 0 or 3; explicit 4 → term off, diagnostic unseen). It passes
+the whole problem instead (pickled), so `run_sweep` and `run_sweep_parallel` agree. `load_project` then `solve` emitting
 the same message twice is intended (load time and solve time are separate moments for a user).
 Counts are only observable with warnings recorded or the filter at "always": Python's default
 filter shows an identical message once per call site.
@@ -202,7 +219,7 @@ One function scores a feature from `(E, V, nonzero, target, ptarget, zero_var_ru
   `V > 0` (a sum of positive floats is positive); the count makes the incremental path agree on
   the **classification** exactly, with no float threshold (round 1, C1: a relative threshold
   misclassifies legitimate small variances). The running **values** are not exact (round 2,
-  I-1): see the resync rules in §3.5.
+  I-1): see the error-bounded recompute in §3.5.
 - zero variance under `PROBZEROVAR = 0` (default, Marxan): `Z = 4`, then the normal path;
   under `PROBZEROVAR = 1`: penalty 0 and shortfall 0 ("met").
 - otherwise `Z = (target − E)/√V`, `P = norm.sf(Z)`, penalty and shortfall as in §1.
@@ -228,16 +245,18 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
   (`simulated_annealing.py:206,273`) and II (`iterative_improvement.py:213,295`).
 - **`ChanceState` sidecar** (round 2, I-2), in the `ClumpState` / `SepState` pattern
   (`from_selection`, `delta_penalty`, `apply_flip`, `penalty_total`): per chance term,
-  per-feature running `E`,
-  `V`, `nonzero`. `delta_penalty(idx)` re-scores only the flipped PU's features and **never
-  mutates** state (the analogue of Marxan bug (a)); `apply_flip(idx)` commits. Built
+  per-feature running `E`, `V`, `nonzero`, the error bounds, and its own copy of the
+  selection (updated by `apply_flip`). One signature throughout, as `ClumpState`:
+  `delta_penalty(cache, idx, adding)` re-scores only the flipped PU's features and **never
+  mutates** state (the analogue of Marxan bug (a)); `apply_flip(cache, idx, adding)` commits.
+  Built
   `from_selection` at SA run start (`simulated_annealing.py:149`) and at the start of each II
   pass (`iterative_improvement.py:188` removal, `:272` addition; the two-step pass alternates
   them, each from a fresh `solution.selected`). The SA temperature-sampling loop
   (`simulated_annealing.py:203-221`) and rejected moves call `delta_penalty` only.
   `_swap_pass_loop` (`iterative_improvement.py:337-362`) flips two PUs in place and calls
-  `compute_full_objective`, which keeps a from-scratch chance term; it also serves the initial
-  objective. Both terms can be active at once (mode 5); their penalties add.
+  `compute_full_objective`, adding a from-scratch chance term (see "Full objective" below).
+  Both terms can be active at once (mode 5); their penalties add.
 - **Error-bounded recompute (rounds 2–3).** Running sums lose precision (round 2: V relative
   error 5.7e-4 at amounts 1–1e6; with p = 1e-17 cells beside a = 1e4, p = 0.5 cells, 171 states
   had `nonzero > 0` but running `V ≤ 0`, so `√V` was NaN and the penalty silently 0). Drift
@@ -246,9 +265,11 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
   diff| 6.8e-6, at 1e8 5.3e-2, and a "one removal cancels > 1 − 1e-8 of V" rule never fired).
   So each feature carries float error bounds since its last recompute:
   `BV += eps·(|V_old| + |ΔV|)`, `BE += eps·(|E_old| + |ΔE|)` per update (eps = machine epsilon).
-  The feature is **recomputed from its cells over the current selection** (CSC column of the
-  contribution arrays) when `V ≤ 0` while `nonzero > 0`, or `BV > τ·V`, or `BE > τ·√V`
-  (τ = 1e-12); after a recompute both bounds reset to `4·eps·|value|`; when `nonzero` reaches 0,
+  The feature is **recomputed from its cells over the selection *after* the previewed flip** (`idx` toggled
+  to `adding`, on a scratch copy; CSC column of the contribution arrays) when `V ≤ 0` while
+  `nonzero > 0`, or `BV > τ·V`, or `BE > τ·√V`, with V the post-update value (τ = 1e-12;
+  round 4 measured errors of 1–3.8 when the pre-flip selection was used); after a recompute both
+  bounds reset to `4·eps·|value|`, and `from_selection` counts as a recompute; when `nonzero` reaches 0,
   E and V snap to the exact sums of the remaining zero-variance cells (V = 0). The E bound
   matters because Z amplifies E error by 1/√V. Measured (round 3): every adversarial case
   ≤ 7.4e-14 for τ from 1e-12 to 1e-9, the 1e8 chain included; at 2000 × 20 and 10 000 × 50,
@@ -257,7 +278,8 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
   `delta_penalty` on a scratch copy of the touched features, so the no-mutation rule holds.
 - **Commit == preview.** `apply_flip(idx, adding)` commits the cached result of the last
   `delta_penalty` when `(idx, adding)` matches, and otherwise computes through the same code
-  path; the committed state equals the previewed state bit for bit. (Recomputing at commit
+  path; the committed state equals the previewed state bit for bit. Every `apply_flip` clears
+  the cached preview, so `delta(i)`, `apply_flip(j)`, `apply_flip(i)` cannot commit a stale one. (Recomputing at commit
   measured 5.6–6.3×, over the bench bound.)
 - **Cost.** Measured on the real layout with the rules above and cached commits (round 3):
   4.9–5.1× mode 0 per flip, against ~300× for today's mode 3. "Per flip" means delta, plus
@@ -265,7 +287,9 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
 - **Full objective (round 3, I-5).** `compute_full_objective` no longer includes the chance
   term either, so the cache's own delta == full contract holds for every mode. SA adds
   `ChanceState.penalty_total()` to its initial objective, as it does for `SepState`
-  (`simulated_annealing.py:151,188-190`); the swap pass adds a from-scratch chance term; the
+  (`simulated_annealing.py:151`, `SepState` at ~176-181); the swap pass adds a from-scratch
+  chance term at both of its `compute_full_objective` calls (`iterative_improvement.py:339`
+  initial, `:362` per candidate; these three are the only callers in src/); the
   evaluator / `build_solution` keep the full chance term. Counting it in both places is the trap
   this avoids.
 - **Reported == tracked:** `Solution.objective` from the evaluator equals SA's and II's tracked
@@ -303,7 +327,7 @@ written by `save_project`, documented in the manual, and shown in the Shiny prob
 4. `write_puvspr` keeps an all-zero `prob` column (it used to drop it, and reloading turned
    presence 0 into presence 1); listed under `Fixed`.
 
-Measured blast radius (rounds 1–2), each test rewritten with a written reason:
+Measured blast radius (rounds 1–4), each test rewritten with a written reason:
 - Z = 4 rule: `test_probability_dispatch.py::test_probmode_3_with_no_probability_data_returns_zero`
   (stays green under §3.1's "term off without data") and
   `test_zscore.py::TestZscorePenalty::test_sentinel_variance_means_deterministic_no_penalty`
@@ -314,7 +338,12 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
 - §3.5 cache change: `test_cache_probmode3.py::TestProbmode3Delta::test_delta_matches_full_under_probmode3`
   moves to `ChanceState` (delta == difference of `penalty_total`), and
   `tests/benchmarks/bench_prob.py::test_probmode3_delta_under_2500us_at_500pu` is re-pointed at
-  `ChanceState` (it would otherwise pass while measuring nothing).
+  `ChanceState` (it would otherwise pass while measuring nothing). Two more stay green but
+  become vacuous, and are rewritten: `TestProbmode3FullObjective::test_full_objective_includes_probability_penalty`
+  (only asserts `obj_3 >= obj_0`) against the evaluator / `ChanceState.penalty_total`, and
+  `bench_prob.py::test_probmode3_full_objective_under_5ms_at_500pu` against
+  `ChanceState.from_selection`. Round 4 ran the full suite with the chance term removed from
+  `compute_full_objective`: only the listed delta test fails.
 - §3.1 implicit rule: no existing test reaches it (patched into every `_probmode` site: 3778
   passed), so every mode-selection test is new.
 - **No golden record uses PROBMODE 3** (stage 1/3/4 JSON checked); none moves.
@@ -336,15 +365,18 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
   `PROBZEROVAR` values, ≥ 5000 random flips mixing accepted and rejected moves and the
   temperature-sampling path (catches state committed inside `delta_penalty`), amounts spread
   ≥ 1e6 with removal of the dominant-variance cell, and p = 1e-17 cells sharing a feature with
-  large-variance cells (the resync rules); tolerance 1e-9.
+  large-variance cells (the error-bounded recompute, §3.5); tolerance 1e-9.
 - **Reported == tracked** objective after SA and after II (every ITIMPTYPE, incl. the swap pass),
   modes 3–5; II's removal pass keeps a PU the chance term needs.
 - **Mode 5 with `prob.dat`:** held amounts and costs stay raw (catches `_probmode2_active`
   generalised to "mode ≥ 2", or the premium leaking into modes 3–5).
 - **Z uses the raw target:** MISSLEVEL ≠ 1 does not change Z (Marxan's `spec.target`).
+- **Parallel sweep:** a mode-4 problem whose 1D source is prob.dat gives the same objectives
+  under `run_sweep` and `run_sweep_parallel(max_workers=2)`.
 - **Diagnostics counts** (warnings recorded, filter "always"; problem built in code with
   implicit mode 4): a 10-run SA solve and a 10-run `RunModePipeline` solve (RUNMODE 1 and 4)
-  each emit each message once; a 5-point `calibrate_blm` five times; `MultiObjectiveMIP.solve`
+  each emit each message once, and the RunModePipeline solve emits exactly the expected set
+  (no "greedy ignores chance terms" from its inner heuristic); a 5-point `calibrate_blm` five times; `MultiObjectiveMIP.solve`
   once; `_probmode` and `validate()` never warn, and `validate()` returns no advisory entries
   (so `presolve_check` still runs).
 - **Zero-variance rule** in both terms: all p = 0, nothing selected, q ∈ {0, 1}; default and
@@ -366,7 +398,7 @@ Measured blast radius (rounds 1–2), each test rewritten with a written reason:
 - **Bench** (`bench` marker): per-flip cost (delta, plus commit on an accepted flip) of modes
   3/4/5 ≤ 6× mode 0 (comparative, not wall-clock), at 2000 × 20 and 10 000 × 50.
 - **Commit == preview:** after `delta_penalty(i)` then `apply_flip(i, adding)`, the state equals
-  a fresh `from_selection` of the new selection to 1e-12, and equals the previewed scratch state
+  a fresh `from_selection` of the new selection to 1e-12 relative, and equals the previewed scratch state
   exactly.
 
 ## 5. Left to the plan
