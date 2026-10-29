@@ -1,7 +1,7 @@
 # Marxan Probability 1D (planned v0.47.0 + v0.48.0) — design
 
 **Date:** 2026-10-18, source-grounded 2026-10-29, revised after spec review rounds 1–4 and a final review (2026-10-29)
-· **Status:** design approved in conversation (approach A); written spec under review.
+· **Status:** spec reviewed (4 loop rounds + final review), ready for planning.
 **Next steps:** spec review loop → prototype-first plan → plan review → SDD.
 **Follows:** v0.45.0 (PROBMODE 1/2 consistency), whose review established that Marxan C++ has no
 `PROBMODE`, that pymarxan's PROBMODE 1/2 are extensions, and that Marxan v4's `probZUT` has an
