@@ -496,3 +496,68 @@ def test_hot_path_penalty_is_the_core_arithmetic(rule: str) -> None:
     ref = score_features(E, V, N, t, pt, rule)[3]
     got = _chance_penalty(E, V, N == 0, t, pt, _ptarget_den(pt), rule == "met")
     np.testing.assert_array_equal(got, ref)
+
+
+def long_column(seed: int, n_pu: int = 2000, n_feat: int = 2) -> ConservationProblem:
+    """Every PU holds every feature: 2000 cells per feature column, where a threaded BLAS
+    matvec splits the recompute's sum across threads."""
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = 10 ** rng.uniform(-1, 3, len(pv))
+    pv["prob"] = rng.uniform(0.05, 0.95, len(pv))
+    return _problem(pv, n_pu, n_feat, rng)
+
+
+@pytest.mark.parametrize(
+    "layout", ["mixed", "wide_amounts", "tiny_beside_big", "duplicated", "long_column"],
+)
+def test_recompute_equals_a_fresh_state_bit_for_bit(layout: str) -> None:
+    """A feature's recompute adds the selected cells as ``from_selection`` does.
+
+    v0.47.0 plan review: the masked BLAS matvec it replaced summed in another order on
+    long columns (threaded MKL past ~800 cells, thread-count dependent), so a recompute
+    only approximated a fresh state there.
+    """
+    problem = {**LAYOUTS, "long_column": long_column}[layout](4)
+    cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    rng = np.random.default_rng(12)
+    for _ in range(30):
+        sel = rng.random(cache.n_pu) < rng.uniform(0.2, 0.9)
+        cs = ChanceState.from_selection(cache, sel)
+        idx = int(rng.integers(cache.n_pu))
+        after = sel.copy()
+        after[idx] = not sel[idx]
+        fresh = ChanceState.from_selection(cache, after).terms["2d"]
+        for j in range(cache.n_feat):
+            ee, vv = cs._column_sums(c, j, idx, bool(after[idx]))
+            assert ee == fresh.E[j] and vv == fresh.V[j]
+
+
+def test_a_nan_in_an_unselected_cell_does_not_poison_the_recompute() -> None:
+    """PU 4's cell has no ``prob`` (a blank field reads as NaN) and is never selected.
+
+    Removing PU 1's large-variance cell triggers a recompute of the feature; the masked
+    matvec it replaced multiplied PU 4's NaN by 0, left E and V NaN and the penalty
+    silently 0 (v0.47.0 plan review).
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1] * 4, "pu": [1, 2, 3, 4],
+                       "amount": [1e4, 2.0, 3.0, 5.0], "prob": [0.5, 0.6, 0.7, np.nan]})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+    )
+    cache = ProblemCache.from_problem(problem)
+    cs = ChanceState.from_selection(cache, np.array([True, True, True, False]))
+    before = cs.n_recompute
+    cs.delta_penalty(cache, 0, False)
+    cs.apply_flip(cache, 0, False)
+    assert cs.n_recompute > before
+    after = np.array([False, True, True, False])
+    expected = evaluate_solution_chance(problem, after)[1]
+    assert np.isfinite(expected) and expected > 1.0
+    assert cs.penalty_total() == pytest.approx(expected, rel=1e-12)

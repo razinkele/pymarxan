@@ -228,12 +228,22 @@ class ChanceState:
     def _column_sums(
         self, c: ChanceCells, j: int, idx: int, adding: bool,
     ) -> tuple[float, float]:
-        """Exact (fresh) ``E``, ``V`` of feature ``j`` over the selection after the flip."""
+        """Exact (fresh) ``E``, ``V`` of feature ``j`` over the selection after the flip.
+
+        Adds the selected cells in column order, as ``from_selection``'s ``bincount``
+        does, so a recompute equals a fresh state bit for bit. Unselected cells never
+        enter the sum (a non-finite one cannot poison it, as ``NaN · 0`` did in a masked
+        matvec), and there is no BLAS call (a threaded ``dgemv`` on the strided slice was
+        ~50× slower past ~800 cells and depended on the thread count).
+        """
         a, b = int(c.c_indptr[j]), int(c.c_indptr[j + 1])
         rows = c.c_rows[a:b]
-        m = self.selected[rows].astype(np.float64)  # fancy index: a copy
+        m = self.selected[rows]  # fancy index: a copy
         k = int(np.searchsorted(rows, idx))
         if k < len(rows) and rows[k] == idx:
-            m[k] = 1.0 if adding else 0.0
-        ee, vv = c.c_ev[:, a:b] @ m
+            m[k] = adding
+        ev = c.c_ev[:, a:b][:, m]
+        zero = np.zeros(ev.shape[1], dtype=np.intp)
+        ee = np.bincount(zero, weights=ev[0], minlength=1)[0]
+        vv = np.bincount(zero, weights=ev[1], minlength=1)[0]
         return float(ee), float(vv)

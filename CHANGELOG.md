@@ -26,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`solvers/chance_state.py`), which keeps per-feature expected amount, variance and an exact
   count of uncertain cells and re-scores only the flipped unit's features, with an
   error-bounded recompute that keeps every delta equal to the full difference (1e-9).
-  Measured per flip (delta, plus commit on an accepted flip), ~5 feature cells per unit:
-  4.5–4.7× mode 0 at 2 000 × 20 and 10 000 × 50 (dense and sparse risk), against 17× and
-  103× before. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
+  Measured per flip on the development machine (Linux; delta, plus commit on an accepted
+  flip), ~5 feature cells per unit: 4.5–4.7× mode 0 at 2 000 × 20 and 10 000 × 50 (dense
+  and sparse risk), against 17× and 103× before. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
   are removed, and `ProblemCache.compute_full_objective` / `compute_delta_objective` no
   longer include the chance term (SA and II add `ChanceState`'s; the evaluator and
   `Solution.objective` are unchanged).
