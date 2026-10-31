@@ -57,6 +57,7 @@ import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE
 from pymarxan.solvers.utils import (
     _active_chance_terms,
     _check_finite_cells,
@@ -189,7 +190,8 @@ class ProblemCache:
     # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
     chance_terms: frozenset[str] = frozenset()
     # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan" or "met".
-    zero_var_rule: str = "met"
+    # ``from_problem`` always passes it; the default is the release default, not the opt-out.
+    zero_var_rule: str = DEFAULT_ZERO_VAR_RULE
     # Per-cell contributions of each ACTIVE chance term (``ChanceCells``), keyed by term;
     # empty when no term is active. Read by ``ChanceState`` (solvers/chance_state.py).
     chance_cells: dict[str, ChanceCells] = field(

@@ -12,7 +12,7 @@ import numbers
 import numpy as np
 import pandas as pd
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import ConservationProblem, _probzerovar_value
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 from pymarxan.solvers._tolerance import target_tol as target_tol
 from pymarxan.solvers.base import Solution
@@ -130,25 +130,13 @@ def _zero_var_rule(problem: ConservationProblem) -> str:
     ``PROBZEROVAR 0`` (the default) → ``"marxan"``: Marxan 3's rule, a feature with no
     selected cell carrying variance gets ``Z = 4`` (``P ≈ 3.17e-5``) and so fails any
     ``ptarget`` above that. ``PROBZEROVAR 1`` → ``"met"``: such a feature counts as met (the
-    pre-v0.47 behaviour). Any other value means ``"marxan"`` here and is reported by
-    ``ConservationProblem.validate()``. Pure; never warns or raises.
+    pre-v0.47 behaviour). Any other value, a bool included, means ``"marxan"`` here and is
+    reported by ``ConservationProblem.validate()``, which shares the parser
+    (``models.problem._probzerovar_value``). Pure; never warns or raises.
     """
     return "met" if _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0)) == 1 else (
         "marxan"
     )
-
-
-def _probzerovar_value(value: object) -> int | None:
-    """``PROBZEROVAR`` as 0 / 1, or None when it is neither (``validate()`` reports it)."""
-    try:
-        number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    if number == 0.0:
-        return 0
-    if number == 1.0:
-        return 1
-    return None
 
 
 def _probmode2_active(problem: ConservationProblem) -> bool:

@@ -9,6 +9,7 @@ Marxan 3's ``ReturnProbabilityAmounts2D`` / ``ComputeProbability2D`` / ``probZUT
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 
@@ -19,11 +20,18 @@ from scipy.stats import norm
 
 from pymarxan.io.readers import load_project
 from pymarxan.io.writers import save_project
+from pymarxan.models import problem as problem_mod
 from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers import utils
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.chance_state import ChanceState
 from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
-from pymarxan.solvers.probability import _term_moments, evaluate_solution_chance, score_features
+from pymarxan.solvers.probability import (
+    DEFAULT_ZERO_VAR_RULE,
+    _term_moments,
+    evaluate_solution_chance,
+    score_features,
+)
 from pymarxan.solvers.utils import _zero_var_rule, build_solution
 
 SF4 = float(norm.sf(4.0))
@@ -319,7 +327,14 @@ def test_rule_from_parameter(value, rule: str) -> None:
     assert _zero_var_rule(problem) == rule
 
 
-@pytest.mark.parametrize("value", [2, -1, 0.5, "yes"])
+@pytest.mark.parametrize("value", [
+    2, -1, 0.5, "yes",
+    # A bool is not 0 / 1 (v0.47.0 plan review #18): write_input_dat saves True as the text
+    # "True", which reads back as a string, so True meant the opt-out in memory and Marxan's
+    # rule after save_project / load_project. Now a bool means Marxan's rule in both, and
+    # validate() reports it before the save.
+    True, False, pytest.param(np.True_, id="np.True_"), pytest.param(np.False_, id="np.False_"),
+])
 def test_validate_reports_bad_probzerovar(value) -> None:
     problem, _ = hand_example(PROBZEROVAR=value)
     errors = problem.validate()
@@ -332,6 +347,19 @@ def test_validate_accepts_probzerovar(value) -> None:
     params = {} if value is None else {"PROBZEROVAR": value}
     problem, _ = hand_example(**params)
     assert not any("PROBZEROVAR" in e for e in problem.validate())
+
+
+def test_validate_and_the_solvers_share_one_parser() -> None:
+    """``validate()`` and ``_zero_var_rule`` read ``PROBZEROVAR`` through one function, in
+    the models layer, so ``validate()`` imports no solver (v0.47.0 plan review task7-7)."""
+    assert utils._probzerovar_value is problem_mod._probzerovar_value
+
+
+def test_problem_cache_defaults_to_the_release_rule() -> None:
+    """A ``ProblemCache`` built without naming the rule gets the release default, not the
+    opt-out (v0.47.0 plan review #21). ``from_problem`` always passes ``_zero_var_rule``."""
+    default = {f.name: f.default for f in dataclasses.fields(ProblemCache)}["zero_var_rule"]
+    assert default == DEFAULT_ZERO_VAR_RULE == "marxan"
 
 
 def test_probzerovar_round_trips_through_input_dat(tmp_path) -> None:

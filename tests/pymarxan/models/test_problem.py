@@ -1,4 +1,10 @@
 
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -324,3 +330,43 @@ def test_build_pu_feature_csr_edge_cases():
     pvf = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [5.0, -3.0]})
     p = ConservationProblem(pu, feats, pvf)
     assert np.array_equal(p.build_pu_feature_csr().toarray(), p.build_pu_feature_matrix())
+
+
+_PROBZEROVAR_PROBE = textwrap.dedent("""\
+    import sys
+
+    import pandas as pd
+
+    from pymarxan.models.problem import ConservationProblem
+
+
+    def problem(value):
+        return ConservationProblem(
+            planning_units=pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]}),
+            features=pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]}),
+            pu_vs_features=pd.DataFrame({"species": [1], "pu": [1], "amount": [1.0]}),
+            parameters={"PROBZEROVAR": value},
+        )
+
+
+    assert problem(1).validate() == []
+    assert any("PROBZEROVAR" in e for e in problem(2).validate())
+    solver_modules = ("pulp", "pymarxan.solvers", "pymarxan.solvers.mip_solver")
+    print(sorted(m for m in solver_modules if m in sys.modules))
+""")
+
+
+def test_validate_parses_probzerovar_without_importing_the_solvers() -> None:
+    """``validate()`` checks ``PROBZEROVAR`` with the models layer's own parser.
+
+    It used to import the parser from ``pymarxan.solvers.utils``, which loads the whole
+    solver package (``mip_solver``, PuLP) whenever the key is present (v0.47.0 plan review,
+    task7-7). Run in a fresh interpreter, so nothing is imported beforehand, with the
+    parent's environment: a conda Python on Windows finds numpy's DLLs through ``PATH``.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _PROBZEROVAR_PROBE], cwd=Path(__file__).parents[3],
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": "src"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"

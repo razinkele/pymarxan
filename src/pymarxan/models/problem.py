@@ -24,6 +24,28 @@ STATUS_LOCKED_IN = 2
 STATUS_LOCKED_OUT = 3
 
 
+def _probzerovar_value(value: object) -> int | None:
+    """``PROBZEROVAR`` as 0 / 1, or None when it is neither (``validate()`` reports it).
+
+    The one parser of the parameter: ``ConservationProblem.validate()`` and the solvers'
+    ``solvers.utils._zero_var_rule`` both use it, so ``validate()`` needs no solver import.
+    A bool (Python's or numpy's) is neither: ``write_input_dat`` saves it as the text
+    ``True`` / ``False``, which reads back as a string, so accepting it made ``True`` mean
+    the opt-out in memory and Marxan's rule after ``save_project`` / ``load_project``.
+    """
+    if isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number == 0.0:
+        return 0
+    if number == 1.0:
+        return 1
+    return None
+
+
 @dataclass
 class ConservationProblem:
     """Central container for a Marxan conservation planning problem.
@@ -303,14 +325,14 @@ class ConservationProblem:
                     )
 
         # --- Parameter validation ---
-        if "PROBZEROVAR" in self.parameters:
-            from pymarxan.solvers.utils import _probzerovar_value
-
-            if _probzerovar_value(self.parameters["PROBZEROVAR"]) is None:
-                errors.append(
-                    "PROBZEROVAR must be 0 (Marxan's zero-variance rule, Z = 4) or 1 "
-                    f"(zero variance counts as met), got {self.parameters['PROBZEROVAR']!r}"
-                )
+        if (
+            "PROBZEROVAR" in self.parameters
+            and _probzerovar_value(self.parameters["PROBZEROVAR"]) is None
+        ):
+            errors.append(
+                "PROBZEROVAR must be 0 (Marxan's zero-variance rule, Z = 4) or 1 "
+                f"(zero variance counts as met), got {self.parameters['PROBZEROVAR']!r}"
+            )
 
         # --- Connectivity validation ---
         if self.connectivity is not None:

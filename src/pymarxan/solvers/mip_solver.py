@@ -293,7 +293,6 @@ class _BaseModel:
     amount_exprs: dict[int, pulp.LpAffineExpression]
     terms: list[TargetTerm]
     implied: list[ImpliedRule]
-    probmode: int
     chance_terms: frozenset[str]  # requested (``_chance_terms``)
     has_target2: bool
     has_sep_active: bool
@@ -325,7 +324,6 @@ class _BuiltModel:
     pu_ids: list[int]
     blm: float
     objective_expr: pulp.LpAffineExpression  # natural units
-    probmode: int
     chance_terms: frozenset[str]  # requested (``_chance_terms``)
     has_target2: bool
     has_sep_active: bool
@@ -722,8 +720,7 @@ class MIPSolver(Solver):
         return _BaseModel(
             model=model, x=x, pu_ids=pu_ids, blm=blm, cost_expr=cost_expr,
             boundary_expr=boundary_expr, conn_expr=conn_expr, prob_expr=prob_expr,
-            amount_exprs=amount_exprs, terms=terms, implied=implied, probmode=probmode,
-            chance_terms=chance_terms,
+            amount_exprs=amount_exprs, terms=terms, implied=implied, chance_terms=chance_terms,
             has_target2=bool(has_target2), has_sep_active=bool(has_sep_active),
             s=s, decisions=self.decisions, upper=self.upper, lower=self.lower,
         )
@@ -772,8 +769,7 @@ class MIPSolver(Solver):
             model += base.cost_expr <= float(cost_budget), "cost_budget"
         return _BuiltModel(
             model=model, x=base.x, pu_ids=base.pu_ids, blm=base.blm, objective_expr=term.expr,
-            probmode=base.probmode, chance_terms=base.chance_terms,
-            has_target2=base.has_target2,
+            chance_terms=base.chance_terms, has_target2=base.has_target2,
             has_sep_active=base.has_sep_active, s=base.s, decisions=base.decisions,
             upper=base.upper, lower=base.lower, lex=lex,
         )
