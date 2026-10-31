@@ -12,28 +12,19 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
 
 def _solve_single(
-    problem_data: dict,
+    problem: ConservationProblem,
     solver: Solver,
     params: dict,
     solver_config: SolverConfig,
     index: int,
 ) -> tuple[int, Solution]:
-    """Solve a single sweep point. Returns (index, best_solution)."""
-    import pandas as pd
+    """Solve a single sweep point. Returns (index, best_solution).
 
-    from pymarxan.models.problem import ConservationProblem
-
-    modified = ConservationProblem(
-        planning_units=pd.DataFrame(problem_data["planning_units"]),
-        features=pd.DataFrame(problem_data["features"]),
-        pu_vs_features=pd.DataFrame(problem_data["pu_vs_features"]),
-        boundary=(
-            pd.DataFrame(problem_data["boundary"])
-            if problem_data["boundary"] is not None
-            else None
-        ),
-        parameters={**problem_data["parameters"], **params},
-    )
+    The whole problem is pickled to the worker and derived with ``copy_with``, exactly
+    as ``run_sweep`` does, so its subclass and every optional table (probability,
+    connectivity, ...) survive the trip.
+    """
+    modified = problem.copy_with(parameters={**problem.parameters, **params})
     sols = solver.solve(modified, solver_config)
     if not sols:
         raise ValueError("Solver returned no solutions (infeasible)")
@@ -57,26 +48,13 @@ def run_sweep_parallel(
     solver_config = config.solver_config or SolverConfig(num_solutions=1)
     param_dicts = config.expand()
 
-    # Serialise problem data for pickling across processes
-    problem_data = {
-        "planning_units": problem.planning_units.to_dict(orient="list"),
-        "features": problem.features.to_dict(orient="list"),
-        "pu_vs_features": problem.pu_vs_features.to_dict(orient="list"),
-        "boundary": (
-            problem.boundary.to_dict(orient="list")
-            if problem.boundary is not None
-            else None
-        ),
-        "parameters": dict(problem.parameters),
-    }
-
     # Submit all jobs; collect successful results and drop infeasible points
     # (mirrors sequential run_sweep, which skips with `if not sols: continue`).
     indexed_results: dict[int, Solution] = {}
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                _solve_single, problem_data, solver, params, solver_config, i
+                _solve_single, problem, solver, params, solver_config, i
             ): i
             for i, params in enumerate(param_dicts)
         }
