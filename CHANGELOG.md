@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run_sweep_parallel` passes the whole problem to its workers. It rebuilt the problem
   from five fields, dropping `probability`, `connectivity` and the subclass type, so e.g.
   a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with `run_sweep`.
+  Errors raised in a worker now reach the caller, as from `run_sweep`; only a point with
+  no solutions is skipped. Every `ValueError` counted as an infeasible point, so e.g. a NaN
+  in prob.dat silently dropped the sweep points that read it.
 - PROBMODE 3 with duplicate `(pu, species)` puvspr rows: simulated annealing and iterative
   improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as Marxan 3 and the
   evaluator do. They put the last row's `prob` on the summed amount, so they optimised a

@@ -225,3 +225,28 @@ def test_parallel_sweep_applies_point_parameters_on_whole_problem(
     result = run_sweep_parallel(small_problem, _StubSolver(), config, max_workers=2)
     assert result.costs == [10.0, 15.0]
     assert small_problem.parameters["BLM"] == 99.0
+
+
+def test_parallel_sweep_raises_what_run_sweep_raises():
+    """A worker's error reaches the caller, as in run_sweep; only a point with no
+    solutions is skipped.
+
+    Every ValueError used to count as an infeasible point. With the whole problem in the
+    workers (v0.47.0), a NaN in prob.dat, which run_sweep reports, silently dropped the
+    sweep points that read it (v0.47.0 plan review).
+    """
+    from pymarxan.calibration.sweep import run_sweep
+    from pymarxan.solvers.heuristic import HeuristicSolver
+
+    base = _mode1_problem()
+    prob = base.probability.copy()
+    prob["probability"] = [0.5, np.nan, 0.9]
+    problem = base.copy_with(probability=prob)
+    config = SweepConfig(
+        param_dicts=[{"PROBABILITYWEIGHTING": 0.0}, {"PROBABILITYWEIGHTING": 2.0}],
+        solver_config=SolverConfig(num_solutions=1, seed=42),
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        run_sweep(problem, HeuristicSolver(), config)
+    with pytest.raises(ValueError, match="non-finite"):
+        run_sweep_parallel(problem, HeuristicSolver(), config, max_workers=2)

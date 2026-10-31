@@ -17,17 +17,19 @@ def _solve_single(
     params: dict,
     solver_config: SolverConfig,
     index: int,
-) -> tuple[int, Solution]:
-    """Solve a single sweep point. Returns (index, best_solution).
+) -> tuple[int, Solution | None]:
+    """Solve a single sweep point. Returns (index, best_solution), or (index, None) when
+    the solver returns no solutions (an infeasible point).
 
     The whole problem is pickled to the worker and derived with ``copy_with``, exactly
     as ``run_sweep`` does, so its subclass and every optional table (probability,
-    connectivity, ...) survive the trip.
+    connectivity, ...) survive the trip. Any error the solve raises reaches the caller,
+    as in ``run_sweep``.
     """
     modified = problem.copy_with(parameters={**problem.parameters, **params})
     sols = solver.solve(modified, solver_config)
     if not sols:
-        raise ValueError("Solver returned no solutions (infeasible)")
+        return (index, None)
     best = min(sols, key=lambda s: s.objective)
     return (index, best)
 
@@ -48,8 +50,9 @@ def run_sweep_parallel(
     solver_config = config.solver_config or SolverConfig(num_solutions=1)
     param_dicts = config.expand()
 
-    # Submit all jobs; collect successful results and drop infeasible points
-    # (mirrors sequential run_sweep, which skips with `if not sols: continue`).
+    # Submit all jobs; collect successful results and drop infeasible points (mirrors
+    # sequential run_sweep, which skips with `if not sols: continue`). Errors propagate
+    # from future.result(), as they do from run_sweep.
     indexed_results: dict[int, Solution] = {}
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -59,12 +62,9 @@ def run_sweep_parallel(
             for i, params in enumerate(param_dicts)
         }
         for future in as_completed(futures):
-            try:
-                idx, sol = future.result()
-            except ValueError:
-                # Infeasible point — drop from results, like sequential sweep
-                continue
-            indexed_results[idx] = sol
+            idx, sol = future.result()
+            if sol is not None:
+                indexed_results[idx] = sol
 
     # Reassemble in original order, keeping only the points that succeeded
     ordered_indices = sorted(indexed_results.keys())
