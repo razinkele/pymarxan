@@ -97,13 +97,17 @@ def _per_flip_seconds(
     return best
 
 
-@pytest.mark.parametrize("risk", ["dense", "sparse"])
-@pytest.mark.parametrize("n_pu, n_feat", [(2000, 20), (10_000, 50)])
-def test_probmode3_per_flip_within_6x_mode0(n_pu: int, n_feat: int, risk: str) -> None:
-    """Per-flip cost of mode 3 (cache + ChanceState) ≤ 6× mode 0 (cache only)."""
-    problem = _make_probmode3_problem(n_pu, n_feat, seed=0, risk=risk)
+def _check_ratio(
+    n_pu: int, n_feat: int, risk: str, cells_per_pu: int = 5, min_cells: int = 0,
+) -> None:
+    """Mode 3's per flip (cache + ChanceState) ≤ ``RATIO_BOUND`` × mode 0's (cache only),
+    printed; first checks that every feature holds more than ``min_cells`` cells."""
+    problem = _make_probmode3_problem(n_pu, n_feat, seed=0, risk=risk,
+                                      cells_per_pu=cells_per_pu)
     cache3 = ProblemCache.from_problem(problem)
     assert cache3.chance_terms == {"2d"}
+    cells = np.diff(cache3.chance_cells["2d"].c_indptr)
+    assert cells.min() > min_cells, f"a feature has only {cells.min()} cells"
     cache0 = ProblemCache.from_problem(problem.copy_with(parameters={"PROBMODE": 0}))
     rng = np.random.default_rng(1)
     sel0 = rng.random(n_pu) < 0.5
@@ -112,10 +116,32 @@ def test_probmode3_per_flip_within_6x_mode0(n_pu: int, n_feat: int, risk: str) -
     t0 = _per_flip_seconds(cache0, False, sel0, idxs, accept)
     t3 = _per_flip_seconds(cache3, True, sel0, idxs, accept)
     ratio = t3 / t0
-    assert ratio <= RATIO_BOUND, (
-        f"PROBMODE 3 per flip {t3 * 1e6:.1f} µs = {ratio:.2f}× mode 0 "
-        f"({t0 * 1e6:.1f} µs) at {n_pu}×{n_feat}, {risk} risk (bound {RATIO_BOUND}×)."
+    measured = (
+        f"PROBMODE 3 per flip {t3 * 1e6:.1f} µs = {ratio:.2f}× mode 0 ({t0 * 1e6:.1f} µs) "
+        f"at {n_pu}×{n_feat}, {risk} risk, {cells.mean():.0f} cells per feature"
     )
+    print(f"\n{measured}")
+    assert ratio <= RATIO_BOUND, f"{measured} (bound {RATIO_BOUND}×)."
+
+
+@pytest.mark.parametrize("risk", ["dense", "sparse"])
+@pytest.mark.parametrize("n_pu, n_feat", [(2000, 20), (10_000, 50)])
+def test_probmode3_per_flip_within_6x_mode0(n_pu: int, n_feat: int, risk: str) -> None:
+    """Per-flip cost of mode 3 (cache + ChanceState) ≤ 6× mode 0 (cache only)."""
+    _check_ratio(n_pu, n_feat, risk)
+
+
+@pytest.mark.parametrize("n_pu, n_feat", [(2000, 20), (10_000, 50)])
+def test_probmode3_per_flip_within_6x_mode0_on_long_columns(n_pu: int, n_feat: int) -> None:
+    """The plan's dense layout, ~30 feature draws per PU: every feature holds over 1000
+    cells (~1550 at 2000 × 20, ~4500 at 10 000 × 50), so recomputes sum long columns.
+
+    v0.47.0 plan review: the cases above hold ~450 and ~950 cells per feature. Past ~800
+    cells the masked BLAS matvec the recompute used ran threaded on MKL, ~50× slower per
+    call, and this layout measured 8–11× mode 0; the recompute now adds the selected
+    cells with ``bincount``.
+    """
+    _check_ratio(n_pu, n_feat, "dense", cells_per_pu=30, min_cells=1000)
 
 
 def test_probmode3_delta_under_2500us_at_500pu():

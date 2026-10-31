@@ -193,6 +193,33 @@ def _probability_vector(
     return p
 
 
+def _check_finite_cells(puvspr: pd.DataFrame) -> None:
+    """``ValueError`` naming the PU ids when a puvspr ``amount`` or ``prob`` is non-finite.
+
+    These are the 2D chance term's cell data (a blank field reads as NaN). Both of its
+    readers check every row, selected or not, so they fail identically, as
+    ``_probability_map`` makes the prob.dat readers do: ``ProblemCache``'s chance cells
+    (SA / iterative improvement) and the evaluator (``probability._term_moments``: every
+    solver's reported objective). A non-finite cell gave NaN moments and a silent chance
+    penalty of 0. Finite values outside [0, 1] are used as given; a missing ``prob``
+    column is not checked.
+    """
+    pids = puvspr["pu"].to_numpy()
+    found: list[str] = []
+    for column in ("prob", "amount"):
+        if column not in puvspr.columns:
+            continue
+        bad = ~np.isfinite(np.asarray(puvspr[column].to_numpy(), dtype=np.float64))
+        if bad.any():
+            found.append(
+                f"{column} for planning unit IDs {sorted({int(u) for u in pids[bad]})}"
+            )
+    if found:
+        raise ValueError(
+            "pu_vs_features has non-finite values (NaN or infinite): " + "; ".join(found)
+        )
+
+
 def _compute_achieved(
     problem: ConservationProblem,
     selected: np.ndarray,

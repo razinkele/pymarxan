@@ -20,7 +20,10 @@ deterministic target (no MISSLEVEL). Marxan's ``probZUT`` is the Ibbetson polyno
 (exact 0 / 1 for |z| ≥ 5, within ~1e-9 of ``norm.sf`` below); pymarxan keeps ``norm.sf``.
 
 **Zero variance** is ``nonzero_j == 0`` — no selected cell whose variance term, as
-computed in float, is > 0 — never a float threshold on ``V``. The rule is
+computed in float, is > 0 — or ``V_j`` not > 0, Marxan 3's own test; never a tolerance
+on ``V``. For ``q`` in [0, 1] the two agree (a sum of terms ≥ 0 is > 0 exactly when one
+term is, and ``ChanceState`` recomputes a running ``V ≤ 0``); the ``V`` test decides
+when a ``q`` outside [0, 1] adds an uncounted negative term. The rule is
 ``zero_var_rule`` (``PROBZEROVAR`` in input.dat): ``"marxan"`` (``PROBZEROVAR 0``, the
 default) gives Marxan 3's ``Z = 4``, so ``P = probZUT(4) ≈ 3.17e-5`` fails any
 ``ptarget`` above that — nothing selected, all ``q`` in {0, 1}; ``"met"``
@@ -88,10 +91,12 @@ def _check_rule(zero_var_rule: str) -> None:
 def _chance_z(
     E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
 ) -> np.ndarray:
-    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (no selected cell with variance).
+    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (zero variance).
 
-    No ``np.errstate`` here (it costs more than the arithmetic on the hot path): the
-    caller guarantees ``V > 0`` wherever ``zero`` is False, or owns the float state.
+    Both callers, :func:`score_features` and :func:`_chance_penalty`, fold Marxan's own
+    test into ``zero`` (``| ~(V > 0)``, also True for a NaN ``V``), so the square root
+    only sees ``V > 0`` where ``zero`` is False. No ``np.errstate`` here (it costs more
+    than the arithmetic on the hot path).
     """
     z = (target - E) / np.sqrt(np.where(zero, 1.0, V))
     return np.where(zero, _MARXAN_ZERO_VARIANCE_SENTINEL, z)
@@ -124,8 +129,10 @@ def _chance_penalty(
     E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
     ptarget: np.ndarray, ptarget_den: np.ndarray, met: bool,
 ) -> np.ndarray:
-    """Unweighted penalties only (``ChanceState``'s hot path): the same operations, in
-    the same order, as the ``penalty`` of :func:`_chance_z` + :func:`_chance_from_z`."""
+    """Unweighted penalties only (``ChanceState``'s hot path): ``zero`` widened by
+    Marxan's ``V > 0`` test, then the same operations, in the same order, as the
+    ``penalty`` of :func:`score_features` (:func:`_chance_z` + :func:`_chance_from_z`)."""
+    zero = zero | ~(V > 0)
     p = ndtr(-_chance_z(E, V, zero, target))
     penalty = np.where(ptarget > p, ptarget - p, 0.0) / ptarget_den
     if met:
@@ -144,14 +151,15 @@ def score_features(
     """Vectorised :func:`score_feature`: arrays ``(z, p, shortfall, penalty)``.
 
     The evaluator and ``ChanceState`` use this arithmetic; it is the same as
-    :func:`score_feature`, element for element.
+    :func:`score_feature`, element for element. Zero variance is ``nonzero == 0`` or
+    ``V`` not > 0 (Marxan 3's test; a NaN ``V`` too).
     """
     _check_rule(zero_var_rule)
     E = np.asarray(E, dtype=np.float64)
     V = np.asarray(V, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
     ptarget = np.asarray(ptarget, dtype=np.float64)
-    zero = np.asarray(nonzero) == 0
+    zero = (np.asarray(nonzero) == 0) | ~(V > 0)
     with np.errstate(divide="ignore", invalid="ignore"):
         z = _chance_z(E, V, zero, target)
     p, shortfall, penalty = _chance_from_z(
@@ -176,7 +184,9 @@ def score_feature(
         Expected amount and variance of the feature over the selected cells.
     nonzero
         Number of selected cells whose variance term, as computed in float, is > 0.
-        **Zero variance is ``nonzero == 0``** (exact; no float threshold on ``V``).
+        **Zero variance is ``nonzero == 0``, or ``V`` not > 0** (Marxan 3's test, which
+        decides when a ``q`` outside [0, 1] makes ``V ≤ 0`` beside counted cells); no
+        tolerance on ``V``.
     target
         Deterministic target (the resolved target, without MISSLEVEL).
     ptarget
@@ -288,9 +298,17 @@ def _term_moments(
     term: str,
     feat_ids: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-feature ``(E, V, nonzero)`` of one chance term over the selected PUs."""
+    """Per-feature ``(E, V, nonzero)`` of one chance term over the selected PUs.
+
+    A non-finite ``amount`` or ``prob`` in any puvspr row, selected or not, raises
+    ``ValueError`` naming the PU ids, as building the cache's chance cells does.
+    """
+    from pymarxan.solvers.utils import _check_finite_cells
+
     if term not in _TERMS:
         raise ValueError(f"unknown chance term {term!r}; release A knows {_TERMS}")
+    puvspr = problem.pu_vs_features
+    _check_finite_cells(puvspr)
     col = {int(f): j for j, f in enumerate(feat_ids)}
     n = len(feat_ids)
     E = np.zeros(n)
@@ -298,7 +316,6 @@ def _term_moments(
     N = np.zeros(n, dtype=np.int64)
     pu_ids = problem.planning_units["id"].values
     selected_pu_ids = {int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]}
-    puvspr = problem.pu_vs_features
     pv_pu = puvspr["pu"].values
     pv_sp = puvspr["species"].values
     pv_am = puvspr["amount"].values

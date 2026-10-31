@@ -22,8 +22,9 @@ its cells (the CSC column) over the selection *after* the previewed flip when
 the coefficient of variation is tiny (mostly-certain cells beside a few risky ones). After
 a recompute both bounds reset to ``4·eps·|value|``; ``from_selection`` counts as one. When
 ``nonzero`` reaches 0, ``E`` and ``V`` snap to the exact sums of the remaining
-zero-variance cells (``V = 0``). Zero variance itself is the exact count, never a float
-test on ``V``.
+zero-variance cells (``V = 0``). Zero variance itself is the exact count, never a
+tolerance on ``V``; the scorer also applies Marxan's ``V > 0`` test, which after the
+recompute only decides when a ``q`` outside [0, 1] leaves ``V ≤ 0`` beside counted cells.
 """
 from __future__ import annotations
 

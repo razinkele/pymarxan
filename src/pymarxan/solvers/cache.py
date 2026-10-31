@@ -59,6 +59,7 @@ from scipy.sparse import coo_matrix, csr_matrix
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.utils import (
     _active_chance_terms,
+    _check_finite_cells,
     _probability_vector,
     _probmode,
     _zero_var_rule,
@@ -939,9 +940,13 @@ def _build_chance_cells_2d(
     its puvspr rows' ``a·q`` and ``a²·q(1 − q)``: Marxan 3 keeps one sparse-matrix entry
     per row (``input.c`` ``readSparseMatrix``) and adds them one by one
     (``ReturnProbabilityAmounts2D``), as the evaluator (``_term_moments``) does. A cell's
-    variance is > 0 exactly when one of its rows' is (every term is ≥ 0). Rows with an
-    unknown id are skipped; a cell no row names keeps ``q = 1`` (certain).
+    variance is > 0 exactly when one of its rows' is (for q in [0, 1] every term is ≥ 0).
+    A non-finite ``amount`` or ``prob`` in any row raises ``ValueError`` naming the PU ids
+    (``_check_finite_cells``, as the evaluator does). Rows with an unknown id are skipped;
+    a cell no row names keeps ``q = 1`` (certain).
     """
+    pv = problem.pu_vs_features
+    _check_finite_cells(pv)
     csr = pu_feat_csr
     n_feat = csr.shape[1]
     indptr = np.asarray(csr.indptr, dtype=np.int64)
@@ -950,7 +955,6 @@ def _build_chance_cells_2d(
     cell_row = np.repeat(np.arange(csr.shape[0], dtype=np.int64), np.diff(indptr))
     cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
 
-    pv = problem.pu_vs_features
     e = amt.copy()
     v = np.zeros(len(amt), dtype=np.float64)
     if len(pv) and len(amt):

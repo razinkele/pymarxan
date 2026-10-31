@@ -11,15 +11,18 @@ layouts where only E or only V cancels, which pin each recompute trigger on its 
 from __future__ import annotations
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.special import ndtr
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.chance_state import ChanceState
 from pymarxan.solvers.probability import evaluate_solution_chance, score_features
+from pymarxan.solvers.utils import build_solution
 
 TOL = 1e-9
 
@@ -637,6 +640,31 @@ def test_hot_path_penalty_is_the_core_arithmetic(rule: str) -> None:
     np.testing.assert_array_equal(got, ref)
 
 
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_hot_path_penalty_tests_the_variance_as_marxan_does(rule: str) -> None:
+    """Counted as uncertain (``zero`` False) yet ``V`` ≤ 0 or NaN: Marxan's ``Z = 4``.
+
+    Marxan 3 tests ``V > 0`` (``ComputeProbability2D``: else ``Z = 4``); a puvspr ``prob``
+    outside [0, 1] beside a valid uncertain cell gives such a feature, and a recompute
+    cannot help, since V is negative. The hot path took √V there (NaN, a RuntimeWarning)
+    and scored 0 (v0.47.0 plan review). The last feature (V = 1) is the normal path.
+    """
+    from pymarxan.solvers.probability import _chance_penalty, _ptarget_den
+
+    E = np.array([13.0, 13.0, 13.0, 1.0])
+    V = np.array([-23.0, 0.0, np.nan, 1.0])
+    t = np.full(4, 8.0)
+    pt = np.full(4, 0.9)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        got = _chance_penalty(E, V, np.zeros(4, dtype=bool), t, pt, _ptarget_den(pt),
+                              rule == "met")
+    sf4 = float(ndtr(-4.0))
+    expected = 0.0 if rule == "met" else (0.9 - sf4) / 0.9
+    np.testing.assert_array_equal(got[:3], [expected] * 3)
+    np.testing.assert_array_equal(got, score_features(E, V, np.ones(4), t, pt, rule)[3])
+
+
 def long_column(seed: int, n_pu: int = 2000, n_feat: int = 2) -> ConservationProblem:
     """Every PU holds every feature: 2000 cells per feature column, where a threaded BLAS
     matvec splits the recompute's sum across threads."""
@@ -674,12 +702,14 @@ def test_recompute_equals_a_fresh_state_bit_for_bit(layout: str) -> None:
             assert ee == fresh.E[j] and vv == fresh.V[j]
 
 
-def test_a_nan_in_an_unselected_cell_does_not_poison_the_recompute() -> None:
+def test_a_nan_in_an_unselected_cell_raises_at_cache_build() -> None:
     """PU 4's cell has no ``prob`` (a blank field reads as NaN) and is never selected.
 
-    Removing PU 1's large-variance cell triggers a recompute of the feature; the masked
-    matvec it replaced multiplied PU 4's NaN by 0, left E and V NaN and the penalty
-    silently 0 (v0.47.0 plan review).
+    Building the chance cells raises ``ValueError`` naming PU 4, and so does the
+    evaluator for a selection without PU 4. v0.47.0 plan review: removing PU 1's
+    large-variance cell recomputed the feature with a masked matvec that multiplied
+    PU 4's NaN by 0, which left E and V NaN and the penalty silently 0. The recompute now
+    adds only the selected cells (``test_recompute_equals_a_fresh_state_bit_for_bit``).
     """
     pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
     feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
@@ -690,13 +720,44 @@ def test_a_nan_in_an_unselected_cell_does_not_poison_the_recompute() -> None:
         planning_units=pu, features=feat, pu_vs_features=pv,
         parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
     )
-    cache = ProblemCache.from_problem(problem)
-    cs = ChanceState.from_selection(cache, np.array([True, True, True, False]))
-    before = cs.n_recompute
-    cs.delta_penalty(cache, 0, False)
-    cs.apply_flip(cache, 0, False)
-    assert cs.n_recompute > before
-    after = np.array([False, True, True, False])
-    expected = evaluate_solution_chance(problem, after)[1]
-    assert np.isfinite(expected) and expected > 1.0
-    assert cs.penalty_total() == pytest.approx(expected, rel=1e-12)
+    with pytest.raises(ValueError, match=r"non-finite .* prob for planning unit IDs \[4\]"):
+        ProblemCache.from_problem(problem)
+    with pytest.raises(ValueError, match=r"non-finite .* prob for planning unit IDs \[4\]"):
+        evaluate_solution_chance(problem, np.array([True, True, True, False]))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+@pytest.mark.parametrize("column", ["prob", "amount"])
+def test_a_non_finite_cell_raises_in_the_cache_and_the_evaluator(
+    column: str, bad: float,
+) -> None:
+    """A non-finite puvspr ``prob`` or ``amount`` raises where the 2D cells are built and
+    in the evaluator, naming every such PU, selected (2) or not (3).
+
+    As ``_probability_map`` does for prob.dat: with only one site, the value would still
+    reach the other path silently, as NaN moments and a chance penalty of 0. Without an
+    active chance term (PROBMODE 0, or no ``prob`` column) nothing reads the cells, and
+    nothing raises.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0] * 3, "status": [0] * 3})
+    feat = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [2.0, 1.0],
+                         "spf": [1.0, 1.0], "ptarget": [0.9, 0.5]})
+    pv = pd.DataFrame({"species": [1, 1, 2, 2], "pu": [1, 2, 2, 3],
+                       "amount": [2.0, 3.0, 1.0, 4.0], "prob": [0.5, 0.6, 0.7, 0.8]})
+    pv.loc[[1, 3], column] = bad
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    sel = np.array([True, True, False])
+    match = rf"non-finite .* {column} for planning unit IDs \[2, 3\]"
+    with pytest.raises(ValueError, match=match):
+        ProblemCache.from_problem(problem)
+    with pytest.raises(ValueError, match=match):
+        evaluate_solution_chance(problem, sel)
+    with pytest.raises(ValueError, match=match):
+        build_solution(problem, sel, 0.0)
+    inactive = [problem.copy_with(parameters={"PROBMODE": 0})]
+    if column == "amount":
+        inactive.append(problem.copy_with(pu_vs_features=pv.drop(columns=["prob"])))
+    for off in inactive:
+        assert ProblemCache.from_problem(off).chance_cells == {}
+        build_solution(off, sel, 0.0)

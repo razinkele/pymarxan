@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different chance term from the one they reported (and a certain last row hid the cell's
   variance), and could return a plan worse than the reported optimum. This predates
   v0.47.0: the dense chance matrices used the same rule.
+- PROBMODE 3: a non-finite puvspr `amount` or `prob` (a blank field reads as NaN) raises
+  `ValueError` naming the planning unit IDs, both where simulated annealing and iterative
+  improvement build their chance cells and in the evaluator (every solver's reported
+  objective), as a non-finite prob.dat value does. It gave the feature NaN moments and a
+  chance penalty of 0, silently. A feature with an uncertain selected cell whose variance
+  still sums to ≤ 0 (a `prob` outside [0, 1] beside it) now gets Marxan 3's Z = 4, as
+  `ComputeProbability2D` tests V > 0; its penalty was a silent 0 too. Finite `prob` values
+  outside [0, 1] are still used as given.
 
 ## [0.46.0] — 2026-10-23
 

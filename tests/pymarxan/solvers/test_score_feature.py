@@ -2,8 +2,8 @@
 
 One function scores a feature from ``(E, V, nonzero, target, ptarget, zero_var_rule)``.
 Zero variance is ``nonzero == 0`` (the number of selected cells whose variance term is
-> 0), never a float threshold on V. ``zero_var_rule`` is ``"marxan"`` (Marxan 3:
-Z = 4, then the normal path) or ``"met"`` (penalty and shortfall 0).
+> 0) or V not > 0 (Marxan 3's own test), never a tolerance on V. ``zero_var_rule`` is
+``"marxan"`` (Marxan 3: Z = 4, then the normal path) or ``"met"`` (penalty and shortfall 0).
 """
 from __future__ import annotations
 
@@ -74,6 +74,19 @@ class TestScoreFeature:
         assert fc.z == 0.0
         assert fc.p == pytest.approx(0.5)
         assert fc.penalty == pytest.approx((0.95 - 0.5) / 0.95)
+
+    @pytest.mark.parametrize("V", [-23.0, 0.0, float("nan")])
+    def test_no_positive_variance_is_zero_variance(self, V: float) -> None:
+        """nonzero 1 but V not > 0 (a selected ``prob`` outside [0, 1] beside a valid
+        uncertain cell gives V < 0): Marxan 3 tests V > 0, so Z = 4. The count alone
+        gave Z = NaN (or −inf at V = 0) and no penalty (v0.47.0 plan review)."""
+        fc = score_feature(13.0, V, 1, 8.0, 0.9, "marxan")
+        assert fc.z == 4.0
+        assert fc.p == pytest.approx(SF4, abs=1e-18)
+        assert fc.shortfall == pytest.approx(0.9 - SF4)
+        assert fc.penalty == pytest.approx((0.9 - SF4) / 0.9)
+        met = score_feature(13.0, V, 1, 8.0, 0.9, "met")
+        assert (met.p, met.shortfall, met.penalty) == (1.0, 0.0, 0.0)
 
     @pytest.mark.parametrize("rule", ["marxan", "met"])
     @pytest.mark.parametrize("ptarget", [-1.0, 0.0])

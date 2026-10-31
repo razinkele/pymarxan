@@ -10,6 +10,7 @@ Marxan 3's ``ReturnProbabilityAmounts2D`` / ``ComputeProbability2D`` / ``probZUT
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -252,6 +253,59 @@ def test_the_documented_safe_vs_risky_inversion() -> None:
     assert build_solution(q, safe, 0.0).objective == pytest.approx(2.0)
     sol = IterativeImprovementSolver(itimptype=3).improve(q, build_solution(q, risky, 0.0))
     assert sol.selected.tolist() == [False, True]
+
+
+def _out_of_range_problem(q: float, **params) -> ConservationProblem:
+    """PU 1: a = 10 with presence ``q``; PU 2: a = 2, q = 0.5 (a valid uncertain cell).
+    One feature, target 8, ptarget 0.9; weighting 10."""
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [8.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [10.0, 2.0],
+                       "prob": [q, 0.5]})
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, **params},
+    )
+
+
+@pytest.mark.parametrize("q", [1.2, -0.1])
+def test_a_prob_outside_0_1_beside_an_uncertain_cell_follows_marxan3(q: float) -> None:
+    """Marxan 3 tests the variance itself: ``ComputeProbability2D`` takes Z = 4 unless V > 0.
+
+    The q = 1.2 (−0.1) cell's variance term is negative, so it is not counted: the feature
+    has nonzero 1 from the q = 0.5 cell but V = −23 (−10). The count alone gave Z = NaN and
+    a silent penalty of 0, in the evaluator and in ``ChanceState``, where adding the valid
+    cell to the invalid one dropped the penalty from about the full weighting to 0
+    (v0.47.0 plan review). Such a ``prob`` is used as given; ``validate()`` reporting it is
+    release B. Under ``PROBZEROVAR 1`` the feature counts as met, as before v0.47.
+    """
+    problem = _out_of_range_problem(q)
+    both = np.array([True, True])
+    _, V, N = _term_moments(problem, both, "2d", problem.features["id"].values)
+    assert N[0] == 1 and V[0] < 0
+    _, total_mx = marxan3_probability2d(problem, both)
+    z4 = 10.0 * (0.9 - SF4) / 0.9
+    assert total_mx == pytest.approx(z4, abs=10 * 1e-6 / 0.9)
+    shortfalls, total = evaluate_solution_chance(problem, both)
+    assert total == pytest.approx(total_mx, abs=10 * 1e-6 / 0.9)
+    assert total == pytest.approx(z4, abs=1e-12)
+    assert shortfalls[1] == pytest.approx(0.9 - SF4, abs=1e-15)
+    assert build_solution(problem, both, 0.0).prob_penalty == pytest.approx(total, abs=1e-12)
+    cache = ProblemCache.from_problem(problem)
+    assert ChanceState.from_selection(cache, both).penalty_total() == pytest.approx(
+        total, abs=1e-12,
+    )
+    cs = ChanceState.from_selection(cache, np.array([True, False]))  # nonzero 0: Z = 4
+    assert cs.penalty_total() == pytest.approx(z4, abs=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the hot path took √V of V < 0
+        assert cs.delta_penalty(cache, 1, True) == pytest.approx(0.0, abs=1e-12)
+        cs.apply_flip(cache, 1, True)
+    assert cs.penalty_total() == pytest.approx(total, abs=1e-12)
+    met = _out_of_range_problem(q, PROBZEROVAR=1)
+    assert evaluate_solution_chance(met, both) == ({1: 0.0}, 0.0)
+    assert ChanceState.from_selection(ProblemCache.from_problem(met), both).penalty_total() == 0.0
 
 
 # ------------------------------------------------------------------ parameter handling
