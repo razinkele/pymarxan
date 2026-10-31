@@ -5,7 +5,8 @@ chance penalty across a flip (tolerance 1e-9), never mutates, and ``apply_flip``
 exactly the previewed state. The adversarial layouts are the ones the spec review used
 to break running sums: p forced to 0 / 1, features whose variance empties and refills,
 amounts spread over 1e6 with the dominant-variance cell removed, p = 1e-17 cells beside
-large-variance cells, and the sparse-risk layout (1 % risky PUs).
+large-variance cells, and the sparse-risk layout (1 % risky PUs). The plan review added
+layouts where only E or only V cancels, which pin each recompute trigger on its own.
 """
 from __future__ import annotations
 
@@ -354,6 +355,89 @@ def test_removing_the_dominant_variance_cells_largest_first() -> None:
     assert cs.penalty_total() == pytest.approx(full, abs=TOL)
 
 
+def cancelling(seed: int, *, big_a: float, big_q: float, n_certain: int = 0,
+               certain_a: float = 0.0) -> ConservationProblem:
+    """One feature: ``n_certain`` certain cells of amount ``certain_a``, one big cell
+    (``big_a``, ``big_q``), then 60 cells with a ~ U(0.5, 2), q ~ U(0.3, 0.7), on PUs 1..n.
+
+    The target is the certain amount plus the first 30 small cells' E and half their
+    standard deviation, so the penalty is unsaturated once the big cell has left.
+    """
+    rng = np.random.default_rng(seed)
+    n_small = 60
+    a_small = rng.uniform(0.5, 2.0, n_small)
+    q_small = rng.uniform(0.3, 0.7, n_small)
+    amount = np.r_[np.full(n_certain, certain_a), big_a, a_small]
+    prob = np.r_[np.ones(n_certain), big_q, q_small]
+    ids = np.arange(1, len(amount) + 1)
+    pu = pd.DataFrame({"id": ids, "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": 1, "pu": ids, "amount": amount, "prob": prob})
+    half = slice(0, n_small // 2)
+    e_small = (a_small * q_small)[half].sum()
+    sd = np.sqrt((a_small ** 2 * q_small * (1 - q_small))[half].sum())
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "spf": 1.0, "ptarget": [0.6],
+                         "target": [n_certain * certain_a + e_small + 0.5 * sd]})
+    return ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                               parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 1.0})
+
+
+def _row_reference(problem: ConservationProblem, cache: ProblemCache, sel: np.ndarray) -> float:
+    """From-scratch chance penalty of a one-feature problem straight from its puvspr rows
+    (each row's ``a·q`` and ``a²·q(1 − q)``): no cache cells, no running sums."""
+    pv = problem.pu_vs_features
+    x = sel[[cache.pu_id_to_idx[int(u)] for u in pv.pu]]
+    a, q = pv.amount.to_numpy()[x], pv.prob.to_numpy()[x]
+    v = a * a * q * (1.0 - q)
+    feat = problem.features
+    pen = score_features(
+        np.array([np.sum(a * q)]), np.array([np.sum(v)]),
+        np.array([np.count_nonzero(v > 0)], dtype=np.int64),
+        feat.target.to_numpy(), feat.ptarget.to_numpy(), cache.zero_var_rule,
+    )[3]
+    return float(problem.parameters["PROBABILITYWEIGHTING"]) * float(np.sum(pen))
+
+
+@pytest.mark.parametrize(
+    ("big_a", "big_q", "n_certain", "certain_a"),
+    [pytest.param(1e9, 1.0, 0, 0.0, id="E_cancels"),
+     pytest.param(1e5, 0.5, 10, 1e4, id="V_cancels")],
+)
+def test_each_recompute_trigger_repairs_its_own_cancellation(
+    big_a: float, big_q: float, n_certain: int, certain_a: float,
+) -> None:
+    """Only one running sum cancels, so only its trigger can repair it.
+
+    E cancels: an a = 1e9, q = 1 cell leaves beside the 60 uncertain cells and V does not
+    move, so only ``BE > max(τ·√V, 64·eps·|E|)`` fires. V cancels: an a = 1e5, q = 0.5
+    cell leaves while ten certain a = 1e4 cells hold E, so the 64·eps·|E| floor keeps the
+    E trigger quiet and only ``BV > τ·V`` fires. v0.47.0 plan review: in every other
+    layout E and V cancel together, so deleting either trigger left the suite green;
+    without its trigger, each layout's delta missed the full difference by 2.4e-8 to 3e-8.
+    """
+    for seed in range(5):
+        problem = cancelling(seed, big_a=big_a, big_q=big_q, n_certain=n_certain,
+                             certain_a=certain_a)
+        cache = _cache(problem, "met")
+        rng = np.random.default_rng(seed)
+        big = n_certain  # PU index of the big cell
+        small = np.arange(big + 1, cache.n_pu)
+        sel = np.zeros(cache.n_pu, dtype=bool)
+        sel[: big + 1] = True  # the certain cells and the big one
+        sel[small[: len(small) // 2]] = True
+        cs = ChanceState.from_selection(cache, sel)
+        full = _row_reference(problem, cache, sel)
+        # small flips, the big cell leaves, then small flips on the cancelled sum
+        for idx in map(int, [*rng.choice(small, 20), big, *rng.choice(small, 20)]):
+            add = not sel[idx]
+            d = cs.delta_penalty(cache, idx, add)
+            s2 = sel.copy()
+            s2[idx] = add
+            f2 = _row_reference(problem, cache, s2)
+            assert abs(d - (f2 - full)) <= TOL, (seed, idx)
+            cs.apply_flip(cache, idx, add)
+            sel, full = s2, f2
+
+
 @pytest.mark.parametrize("rule", ["marxan", "met"])
 def test_delta_never_mutates(rule: str) -> None:
     problem = tiny_beside_big(3)
@@ -399,14 +483,23 @@ def test_commit_equals_preview_and_fresh_state(rule: str) -> None:
 
 
 def test_stale_preview_is_never_committed() -> None:
-    """delta(i), apply_flip(j), apply_flip(i) commits i against the post-j state."""
+    """delta(i), apply_flip(j), apply_flip(i) commits i against the post-j state.
+
+    i and j share a feature through cells with e > 0 and v > 0, so j's flip changes the
+    state i's flip must commit there. v0.47.0 plan review: the old pair (1, 3) shared
+    features only through j's q = 0 cells, so a stale commit gave the right state and the
+    test passed with ``apply_flip``'s preview clearing removed.
+    """
     problem = mixed(4)
     cache = ProblemCache.from_problem(problem)
     dense = _dense_cells(cache)
+    E, V, _ = dense
     sel = np.zeros(cache.n_pu, dtype=bool)
     sel[::2] = True
+    i, j = 1, 5
+    assert not sel[i] and not sel[j]
+    assert np.any((E[i] > 0) & (V[i] > 0) & (E[j] > 0) & (V[j] > 0))
     cs = ChanceState.from_selection(cache, sel)
-    i, j = 1, 3
     cs.delta_penalty(cache, i, True)
     cs.apply_flip(cache, j, True)
     cs.apply_flip(cache, i, True)
@@ -463,7 +556,12 @@ def test_no_active_term_is_inert() -> None:
 
 
 def test_variance_snaps_to_zero_when_nonzero_reaches_zero() -> None:
-    """Removing a feature's last uncertain cell leaves V exactly 0 and E the exact sum."""
+    """Removing every feature's last uncertain cell leaves N and V exactly 0.
+
+    Later removals still subtract certain cells from a snapped feature's E, so E is a
+    running sum again and is held to spec §4's 1e-12 of a fresh state; the snap's own E
+    is pinned by ``test_snap_replaces_a_drifted_running_e_with_the_fresh_sum``.
+    """
     problem = few_risky(2)
     cache = ProblemCache.from_problem(problem)
     c = cache.chance_cells["2d"]
@@ -478,7 +576,48 @@ def test_variance_snaps_to_zero_when_nonzero_reaches_zero() -> None:
     assert (t.N == 0).all()
     assert (t.V == 0.0).all()
     fresh = ChanceState.from_selection(cache, sel).terms["2d"]
-    np.testing.assert_allclose(t.E, fresh.E, rtol=1e-15)
+    np.testing.assert_allclose(t.E, fresh.E, rtol=1e-12)
+
+
+def test_snap_replaces_a_drifted_running_e_with_the_fresh_sum() -> None:
+    """When nonzero reaches 0, E becomes the sum ``from_selection`` forms, not the running E.
+
+    Adding and removing an a = 1e9, q = 1 cell rounds the running E onto that cell's grid
+    (ulp ~1.2e-7). The a = 1e8, q = 0.5 cell's √V keeps the E trigger quiet (τ·√V = 5e-5),
+    so nothing repairs the drift until that last uncertain cell leaves and the snap does.
+    A recompute adds the cells as ``from_selection`` does, so E is compared bit for bit.
+    v0.47.0 plan review: at few_risky's amounts the running E passed the old rtol = 1e-15,
+    so a snap keeping it went unnoticed.
+    """
+    m = 10  # certain cells, then the toggled cell and the risky one
+    rng = np.random.default_rng(1)
+    a = np.r_[rng.uniform(0.5, 2.0, m), 1e9, 1e8]
+    q = np.r_[np.ones(m + 1), 0.5]
+    ids = np.arange(1, m + 3)
+    pu = pd.DataFrame({"id": ids, "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": 1, "pu": ids, "amount": a, "prob": q})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [0.5 * a[:m].sum()],
+                         "spf": 1.0, "ptarget": [0.9]})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    cache = ProblemCache.from_problem(problem)
+    big, risky = m, m + 1
+    sel = np.ones(m + 2, dtype=bool)
+    sel[big] = False
+    cs = ChanceState.from_selection(cache, sel)
+    t = cs.terms["2d"]
+    for add in (True, False):
+        cs.delta_penalty(cache, big, add)
+        cs.apply_flip(cache, big, add)
+    sel[risky] = False
+    fresh = ChanceState.from_selection(cache, sel).terms["2d"]
+    # a snap keeping the running E would leave it off the fresh sum by > 100 × 1e-12
+    kept = t.E[0] - a[risky] * q[risky]
+    assert abs(kept - fresh.E[0]) > 1e-10 * fresh.E[0]
+    cs.delta_penalty(cache, risky, False)
+    cs.apply_flip(cache, risky, False)
+    assert t.N[0] == 0 and t.V[0] == 0.0
+    assert t.E[0] == fresh.E[0]
 
 
 @pytest.mark.parametrize("rule", ["marxan", "met"])
