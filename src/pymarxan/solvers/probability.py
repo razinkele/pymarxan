@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 from scipy.special import ndtr
@@ -85,25 +85,49 @@ def _check_rule(zero_var_rule: str) -> None:
 def _chance_z(
     E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
 ) -> np.ndarray:
-    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (no selected cell with variance)."""
-    with np.errstate(divide="ignore", invalid="ignore"):
-        z = (target - E) / np.sqrt(np.where(zero, 1.0, V))
+    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (no selected cell with variance).
+
+    No ``np.errstate`` here (it costs more than the arithmetic on the hot path): the
+    caller guarantees ``V > 0`` wherever ``zero`` is False, or owns the float state.
+    """
+    z = (target - E) / np.sqrt(np.where(zero, 1.0, V))
     return np.where(zero, _MARXAN_ZERO_VARIANCE_SENTINEL, z)
 
 
+def _ptarget_den(ptarget: np.ndarray) -> np.ndarray:
+    """Penalty denominator: ``ptarget`` where enabled (> 0), else 1 (its gap is 0)."""
+    return np.where(ptarget > 0, ptarget, 1.0)
+
+
 def _chance_from_z(
-    z: np.ndarray, zero: np.ndarray, ptarget: np.ndarray, zero_var_rule: str,
+    z: np.ndarray, zero: np.ndarray, ptarget: np.ndarray, ptarget_den: np.ndarray,
+    met: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(p, shortfall, penalty)`` from Z: the one copy of the probability arithmetic."""
+    """``(p, shortfall, penalty)`` from Z: the one copy of the probability arithmetic.
+
+    ``p ≥ 0``, so ``ptarget > p`` is False for a disabled feature (``ptarget ≤ 0``).
+    """
     p = ndtr(-z)  # = norm.sf(z), Marxan's probZUT up to ~1e-9
-    enabled = ptarget > 0
-    gap = np.where(enabled & (ptarget > p), ptarget - p, 0.0)
-    penalty = gap / np.where(enabled, ptarget, 1.0)
-    if zero_var_rule == "met":
+    gap = np.where(ptarget > p, ptarget - p, 0.0)
+    penalty = gap / ptarget_den
+    if met:
         p = np.where(zero, 1.0, p)
         gap = np.where(zero, 0.0, gap)
         penalty = np.where(zero, 0.0, penalty)
     return p, gap, penalty
+
+
+def _chance_penalty(
+    E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
+    ptarget: np.ndarray, ptarget_den: np.ndarray, met: bool,
+) -> np.ndarray:
+    """Unweighted penalties only (``ChanceState``'s hot path): the same operations, in
+    the same order, as the ``penalty`` of :func:`_chance_z` + :func:`_chance_from_z`."""
+    p = ndtr(-_chance_z(E, V, zero, target))
+    penalty = np.where(ptarget > p, ptarget - p, 0.0) / ptarget_den
+    if met:
+        penalty = np.where(zero, 0.0, penalty)
+    return cast(np.ndarray, penalty)
 
 
 def score_features(
@@ -116,8 +140,8 @@ def score_features(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Vectorised :func:`score_feature`: arrays ``(z, p, shortfall, penalty)``.
 
-    The solvers' incremental path (``ChanceState``) and the evaluator use this; it is
-    the same arithmetic as :func:`score_feature`, element for element.
+    The evaluator and ``ChanceState`` use this arithmetic; it is the same as
+    :func:`score_feature`, element for element.
     """
     _check_rule(zero_var_rule)
     E = np.asarray(E, dtype=np.float64)
@@ -125,8 +149,11 @@ def score_features(
     target = np.asarray(target, dtype=np.float64)
     ptarget = np.asarray(ptarget, dtype=np.float64)
     zero = np.asarray(nonzero) == 0
-    z = _chance_z(E, V, zero, target)
-    p, shortfall, penalty = _chance_from_z(z, zero, ptarget, zero_var_rule)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = _chance_z(E, V, zero, target)
+    p, shortfall, penalty = _chance_from_z(
+        z, zero, ptarget, _ptarget_den(ptarget), zero_var_rule == "met",
+    )
     return z, p, shortfall, penalty
 
 
@@ -248,7 +275,7 @@ def compute_zscore_penalty(
     z = np.array([zscore_per_feature[f] for f in fids], dtype=np.float64)
     pt = np.array([prob_targets.get(f, -1.0) for f in fids], dtype=np.float64)
     zero = np.array([f in zero_variance for f in fids], dtype=bool)
-    _, _, penalty = _chance_from_z(z, zero, pt, zero_var_rule)
+    _, _, penalty = _chance_from_z(z, zero, pt, _ptarget_den(pt), zero_var_rule == "met")
     return float(weight * float(np.sum(penalty)))
 
 

@@ -51,6 +51,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from functools import cached_property
+from typing import cast
 
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
@@ -64,6 +65,51 @@ from pymarxan.solvers.utils import (
     _zero_var_rule,
     compute_cost_threshold_penalty,
 )
+
+
+@dataclass(frozen=True)
+class ChanceCells:
+    """Immutable per-cell contributions of one chance term (spec §3.5).
+
+    PU-major (CSR) arrays share ``held_csr``'s ``indptr`` / ``indices``, so row ``i``'s
+    cells are ``indptr[i]:indptr[i + 1]``. ``ev[0]`` (= ``e``) is each cell's
+    expected-amount term, ``ev[1]`` (= ``v``) its variance term — stacked so one fancy
+    index serves both on the hot path — ``abs_ev`` their absolute values (the error
+    bounds' increments), and ``pos`` is 1 where ``v > 0`` as computed in float, else 0.
+    The feature-major (CSC) copy — ``c_indptr`` / ``c_rows`` / ``c_ev`` (rows ``c_e`` /
+    ``c_v``), rows ascending within a feature — serves ``ChanceState``'s per-feature
+    recompute. For the 2D term (puvspr ``prob`` = ``q``, the probability of presence): ``e = a·q``,
+    ``v = a²·q·(1 − q)``.
+    """
+
+    indptr: np.ndarray
+    indices: np.ndarray
+    ev: np.ndarray
+    abs_ev: np.ndarray
+    pos: np.ndarray
+    c_indptr: np.ndarray
+    c_rows: np.ndarray
+    c_ev: np.ndarray
+
+    @property
+    def c_e(self) -> np.ndarray:
+        """Per-cell expected-amount terms (CSC order)."""
+        return cast(np.ndarray, self.c_ev[0])
+
+    @property
+    def c_v(self) -> np.ndarray:
+        """Per-cell variance terms (CSC order)."""
+        return cast(np.ndarray, self.c_ev[1])
+
+    @property
+    def e(self) -> np.ndarray:
+        """Per-cell expected-amount terms (CSR order)."""
+        return cast(np.ndarray, self.ev[0])
+
+    @property
+    def v(self) -> np.ndarray:
+        """Per-cell variance terms (CSR order)."""
+        return cast(np.ndarray, self.ev[1])
 
 
 @dataclass(frozen=True)
@@ -142,6 +188,11 @@ class ProblemCache:
     chance_terms: frozenset[str] = frozenset()
     # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan" or "met".
     zero_var_rule: str = "met"
+    # Per-cell contributions of each ACTIVE chance term (``ChanceCells``), keyed by term;
+    # empty when no term is active. Read by ``ChanceState`` (solvers/chance_state.py).
+    chance_cells: dict[str, ChanceCells] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
     # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
     # when there is no `prob` column or when prob == 1.
     expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
@@ -362,6 +413,12 @@ class ProblemCache:
             expected_matrix = np.zeros((0, 0))
             var_matrix = np.zeros((0, 0))
 
+        chance_cells: dict[str, ChanceCells] = {}
+        if "2d" in chance_terms:
+            chance_cells["2d"] = _build_chance_cells_2d(
+                problem, pu_id_to_idx, feat_id_to_col, pu_feat_csr,
+            )
+
         # Per-feature probability target; default -1 (disabled sentinel) for
         # legacy specs without a ptarget column (read_spec already fills this).
         if "ptarget" in feat_df.columns:
@@ -557,6 +614,7 @@ class ProblemCache:
             prob_weight=prob_weight,
             chance_terms=chance_terms,
             zero_var_rule=zero_var_rule,
+            chance_cells=chance_cells,
             expected_matrix=expected_matrix,
             var_matrix=var_matrix,
             feat_ptarget=feat_ptarget,
@@ -956,6 +1014,57 @@ class ProblemCache:
         # Correct.
         
         return total
+
+
+def _build_chance_cells_2d(
+    problem: ConservationProblem,
+    pu_id_to_idx: dict[int, int],
+    feat_id_to_col: dict[int, int],
+    pu_feat_csr: csr_matrix,
+) -> ChanceCells:
+    """``ChanceCells`` of the 2D term from the puvspr ``prob`` column (presence ``q``).
+
+    Each CSR cell (duplicate ``(pu, species)`` rows already summed by
+    ``build_pu_feature_csr``) takes the ``prob`` of the last puvspr row naming it; rows
+    with an unknown id are skipped; a cell no row names keeps ``q = 1`` (certain).
+    """
+    csr = pu_feat_csr
+    n_feat = csr.shape[1]
+    indptr = np.asarray(csr.indptr, dtype=np.int64)
+    indices = np.asarray(csr.indices, dtype=np.int64)
+    amt = np.asarray(csr.data, dtype=np.float64)
+    cell_row = np.repeat(np.arange(csr.shape[0], dtype=np.int64), np.diff(indptr))
+    cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
+
+    pv = problem.pu_vs_features
+    q = np.ones(len(amt), dtype=np.float64)
+    if len(pv) and len(amt):
+        rows = np.fromiter((pu_id_to_idx.get(int(u), -1) for u in pv["pu"].values),
+                           np.int64, len(pv))
+        cols = np.fromiter((feat_id_to_col.get(int(f), -1) for f in pv["species"].values),
+                           np.int64, len(pv))
+        vals = np.asarray(pv["prob"].values, dtype=np.float64)
+        ok = (rows >= 0) & (cols >= 0)
+        keys = rows[ok] * n_feat + cols[ok]
+        vals = vals[ok]
+        # Last row wins: keep each key's last occurrence.
+        last = len(keys) - 1 - np.unique(keys[::-1], return_index=True)[1]
+        keys, vals = keys[last], vals[last]
+        pos = np.searchsorted(cell_key, keys)
+        hit = (pos < len(cell_key)) & (cell_key[np.minimum(pos, len(cell_key) - 1)] == keys)
+        q[pos[hit]] = vals[hit]
+
+    e = amt * q
+    v = (amt ** 2) * q * (1.0 - q)
+    ev = np.vstack([e, v])
+    flag = (v > 0).astype(np.int64)
+    order = np.lexsort((cell_row, indices))  # feature-major, rows ascending
+    c_indptr = np.zeros(n_feat + 1, dtype=np.int64)
+    np.cumsum(np.bincount(indices, minlength=n_feat), out=c_indptr[1:])
+    return ChanceCells(
+        indptr=indptr, indices=indices, ev=ev, abs_ev=np.abs(ev), pos=flag,
+        c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev[:, order],
+    )
 
 
 def _build_probability(

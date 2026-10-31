@@ -44,6 +44,7 @@ INTERNAL_OR_COUNT = {
     "pymarxan/calibration/sensitivity.py",
     "pymarxan/calibration/sweep.py",
     "pymarxan/solvers/base.py",
+    "pymarxan/solvers/chance_state.py",
     "pymarxan/solvers/clumping.py",
     "pymarxan/solvers/separation.py",
     "pymarxan/solvers/space_state.py",
