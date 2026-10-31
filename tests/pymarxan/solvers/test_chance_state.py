@@ -709,7 +709,9 @@ def test_a_nan_in_an_unselected_cell_raises_at_cache_build() -> None:
     evaluator for a selection without PU 4. v0.47.0 plan review: removing PU 1's
     large-variance cell recomputed the feature with a masked matvec that multiplied
     PU 4's NaN by 0, which left E and V NaN and the penalty silently 0. The recompute now
-    adds only the selected cells (``test_recompute_equals_a_fresh_state_bit_for_bit``).
+    adds only the selected cells; a non-finite cell that still gets past this check (an
+    overflowing a²) pins that, in
+    ``test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute``.
     """
     pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
     feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
@@ -724,6 +726,48 @@ def test_a_nan_in_an_unselected_cell_raises_at_cache_build() -> None:
         ProblemCache.from_problem(problem)
     with pytest.raises(ValueError, match=r"non-finite .* prob for planning unit IDs \[4\]"):
         evaluate_solution_chance(problem, np.array([True, True, True, False]))
+
+
+def test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute() -> None:
+    """PU 4 is never selected. Its amount (1e200) and prob (0.5) are finite, so they pass
+    the finiteness check, but its variance term a²·q(1 − q) overflows to inf.
+
+    Removing PU 1's large-variance cell recomputes the feature, which must add only the
+    selected cells, as ``from_selection`` and the evaluator do. A recompute over the whole
+    column against a 0/1 mask multiplies PU 4's inf by 0 (v0.47.0 plan review): V turns
+    NaN, the feature pays Marxan's Z = 4 (≈ 9.9996) instead of 6.2311, and no later flip
+    recovers it. PU 2 then leaves and comes back: the state must still match.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1] * 4, "pu": [1, 2, 3, 4],
+                       "amount": [1e4, 2.0, 3.0, 1e200], "prob": [0.5, 0.6, 0.7, 0.5]})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+    )
+    with np.errstate(over="ignore"):  # PU 4's a² overflows: the point of the test
+        cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    assert np.isinf(c.v[c.indptr[3]])
+    sel = np.array([True, True, True, False])
+    cs = ChanceState.from_selection(cache, sel)
+    before = cs.n_recompute
+    prev = evaluate_solution_chance(problem, sel)[1]
+    for step, (idx, adding) in enumerate([(0, False), (1, False), (1, True)]):
+        d = cs.delta_penalty(cache, idx, adding)
+        cs.apply_flip(cache, idx, adding)
+        sel[idx] = adding
+        if step == 0:
+            assert cs.n_recompute > before  # PU 1 left: the feature was recomputed
+        expected = evaluate_solution_chance(problem, sel)[1]
+        assert np.isfinite(expected) and expected > 1.0
+        fresh = ChanceState.from_selection(cache, sel).penalty_total()
+        assert cs.penalty_total() == pytest.approx(fresh, rel=1e-12)
+        assert cs.penalty_total() == pytest.approx(expected, rel=1e-12)
+        assert d == pytest.approx(expected - prev, abs=TOL)
+        prev = expected
 
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf])
