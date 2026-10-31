@@ -124,6 +124,15 @@ def _active_chance_terms(problem: ConservationProblem) -> frozenset[str]:
     return terms
 
 
+def _zero_var_rule(problem: ConservationProblem) -> str:
+    """The zero-variance rule for the chance terms (spec §3.4): ``"met"`` in this release.
+
+    ``"met"``: a feature with no selected cell carrying variance has no chance penalty.
+    Pure; never warns.
+    """
+    return "met"
+
+
 def _probmode2_active(problem: ConservationProblem) -> bool:
     """True iff PROBMODE 2 applies: a probability table and ``PROBMODE == 2``."""
     return problem.probability is not None and _probmode(problem) == 2
@@ -531,89 +540,21 @@ def _compute_probmode3_zscore_penalty(
     problem: ConservationProblem,
     selected: np.ndarray,
 ) -> float:
-    """PROBMODE 3: Marxan-faithful Z-score chance-constraint penalty.
+    """PROBMODE 3: the weighted Z-score chance penalty of the 2D term.
 
-    Computes E[T_j] and Var[T_j] from the per-cell ``prob`` column on
-    ``pu_vs_features`` (Marxan PROB2D wire format):
+    Per feature, over the selected PUs, with the per-cell presence probability ``q`` from
+    the ``prob`` column on ``pu_vs_features`` (Marxan PROB2D wire format)::
 
-        E[T_j]   = Σ_i x_i · amount_ij · (1 − p_ij)
-        Var[T_j] = Σ_i x_i · amount_ij² · p_ij · (1 − p_ij)
+        E[T_j]   = Σ_i x_i · amount_ij · q_ij
+        Var[T_j] = Σ_i x_i · amount_ij² · q_ij · (1 − q_ij)
 
-    Then routes to ``compute_zscore_per_feature`` and
-    ``compute_zscore_penalty`` which implement the Marxan sign convention
-    ``Z = (T − E)/sqrt(V)`` and ptarget-normalised shortfall.
+    scored by ``probability.score_features`` (one copy of the arithmetic, shared with
+    ``evaluate_solution_chance``, which this delegates to).
     """
     # Lazy import: keep solvers.utils free of scipy unless mode 3 is used.
-    from pymarxan.solvers.probability import (
-        compute_zscore_penalty,
-        compute_zscore_per_feature,
-    )
+    from pymarxan.solvers.probability import evaluate_solution_chance
 
-    prob_weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
-    if prob_weight == 0.0:
-        return 0.0
-
-    # Build per-feature expected and variance from selected PUs.
-    pu_ids = problem.planning_units["id"].values
-    selected_pu_ids = {int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]}
-    if not selected_pu_ids:
-        # Empty reserve: E=0, Var=0 -> sentinel Z; penalty zero anyway
-        # for features whose ptarget≤0, otherwise norm.sf(4) ≈ 0 < ptarget
-        # which produces a maximal shortfall. That's the right behaviour
-        # for an empty reserve under chance constraints.
-        pass
-
-    puvspr = problem.pu_vs_features
-    has_prob = "prob" in puvspr.columns
-
-    achieved_mean: dict[int, float] = {}
-    achieved_variance: dict[int, float] = {}
-    if len(puvspr) > 0:
-        pv_pu = puvspr["pu"].values
-        pv_sp = puvspr["species"].values
-        pv_am = puvspr["amount"].values
-        pv_pr = puvspr["prob"].values if has_prob else None
-        for k in range(len(pv_pu)):
-            pid = int(pv_pu[k])
-            if pid not in selected_pu_ids:
-                continue
-            fid = int(pv_sp[k])
-            amount = float(pv_am[k])
-            # PROB2D presence convention: p = P(present); default 1.0
-            # (deterministic) when no `prob` column. E[T] += amount * p,
-            # matching Marxan ComputeP_AllPUsSelected_2D.
-            p = float(pv_pr[k]) if pv_pr is not None else 1.0
-            achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amount * p
-            achieved_variance[fid] = (
-                achieved_variance.get(fid, 0.0) + (amount ** 2) * p * (1.0 - p)
-            )
-
-    # Feature-side data
-    feat_ids = problem.features["id"].astype(int).values
-    feat_target = problem.features["target"].astype(float).values
-    if "ptarget" in problem.features.columns:
-        feat_ptarget = problem.features["ptarget"].astype(float).values
-    else:
-        # Legacy spec without ptarget -> all disabled
-        return 0.0
-
-    # Skip work entirely if every feature is disabled
-    if not any(pt > 0 for pt in feat_ptarget):
-        return 0.0
-
-    targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
-    prob_targets = {
-        int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))
-    }
-
-    # Features absent from achieved_* (no selected PU contributed) get
-    # E=0, Var=0 -> Marxan sentinel Z=4 -> P≈0 -> max shortfall.
-    for fid in targets:
-        achieved_mean.setdefault(fid, 0.0)
-        achieved_variance.setdefault(fid, 0.0)
-
-    z_per_feat = compute_zscore_per_feature(achieved_mean, achieved_variance, targets)
-    return compute_zscore_penalty(z_per_feat, prob_targets, weight=prob_weight)
+    return evaluate_solution_chance(problem, selected, "2d")[1]
 
 
 def compute_objective_terms(

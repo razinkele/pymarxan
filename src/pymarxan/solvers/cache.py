@@ -61,6 +61,7 @@ from pymarxan.solvers.utils import (
     _chance_terms,
     _probability_vector,
     _probmode,
+    _zero_var_rule,
     compute_cost_threshold_penalty,
 )
 
@@ -139,6 +140,8 @@ class ProblemCache:
     # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
     # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
     chance_terms: frozenset[str] = frozenset()
+    # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan" or "met".
+    zero_var_rule: str = "met"
     # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
     # when there is no `prob` column or when prob == 1.
     expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
@@ -322,6 +325,7 @@ class ProblemCache:
         probmode = _probmode(problem)
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
         chance_terms = _active_chance_terms(problem)
+        zero_var_rule = _zero_var_rule(problem)
 
         # Per-cell probability of PRESENCE — read once into a dense matrix.
         # Marxan's PROB2D `prob` is the probability the feature is present at
@@ -552,6 +556,7 @@ class ProblemCache:
             probmode=probmode,
             prob_weight=prob_weight,
             chance_terms=chance_terms,
+            zero_var_rule=zero_var_rule,
             expected_matrix=expected_matrix,
             var_matrix=var_matrix,
             feat_ptarget=feat_ptarget,
@@ -619,38 +624,29 @@ class ProblemCache:
         held[cols] += sign * csr.data[s:e]
 
     def _compute_zscore_penalty(
-        self, held_expected: np.ndarray, held_variance: np.ndarray,
+        self,
+        held_expected: np.ndarray,
+        held_variance: np.ndarray,
+        held_nonzero: np.ndarray,
     ) -> float:
         """Marxan-faithful Z-score chance-constraint penalty.
 
         Active only when the 2D chance term is (``"2d" in self.chance_terms``); returns 0
-        otherwise (the
-        caller's hot path can skip this branch entirely via the probmode
-        check).  Features with ptarget ≤ 0 are skipped.  Features with
-        zero variance contribute 0 (Marxan's "degenerate → P=1").
+        otherwise. Scored by ``probability.score_features``: zero variance is
+        ``held_nonzero == 0`` (no selected cell with a variance term > 0) and follows
+        ``self.zero_var_rule``; features with ptarget ≤ 0 are disabled.
         """
         if "2d" not in self.chance_terms or self.n_feat == 0:
             return 0.0
-        from scipy.stats import norm  # local import keeps cold path cheap
-        total = 0.0
-        for j in range(self.n_feat):
-            ptarget = float(self.feat_ptarget[j])
-            if ptarget <= 0:
-                continue
-            var = float(held_variance[j])
-            if var <= 0:
-                # Degenerate / no uncertainty — deterministic path handles miss
-                continue
-            mean = float(held_expected[j])
-            target = float(self.feat_targets[j])
-            z = (target - mean) / np.sqrt(var)
-            prob_met = float(norm.sf(z))
-            shortfall = max(0.0, (ptarget - prob_met) / ptarget)
-            # Marxan's ComputeProbability2D weights the probability shortfall
-            # only by PROBABILITYWEIGHTING — NOT by SPF (unlike the
-            # representation penalty). See score_change.cpp:611.
-            total += shortfall
-        return self.prob_weight * total
+        from pymarxan.solvers.probability import score_features  # keeps cold path cheap
+
+        # Marxan's ComputeProbability2D weights the probability shortfall only by
+        # PROBABILITYWEIGHTING — NOT by SPF (unlike the representation penalty).
+        penalty = score_features(
+            held_expected, held_variance, held_nonzero, self.feat_targets,
+            self.feat_ptarget, self.zero_var_rule,
+        )[3]
+        return self.prob_weight * float(np.sum(penalty))
 
     def compute_full_objective(
         self,
@@ -707,7 +703,8 @@ class ProblemCache:
         if "2d" in self.chance_terms:
             held_expected = self.expected_matrix[selected].sum(axis=0)
             held_variance = self.var_matrix[selected].sum(axis=0)
-            obj += self._compute_zscore_penalty(held_expected, held_variance)
+            held_nonzero = (self.var_matrix[selected] > 0).sum(axis=0)
+            obj += self._compute_zscore_penalty(held_expected, held_variance, held_nonzero)
 
         # Connectivity term (no-op when conn_mode == 0)
         if self.conn_mode:
@@ -846,11 +843,13 @@ class ProblemCache:
             held_var_after = held_var_before + sign * self.var_matrix[idx]
             # Underflow guard — held_var must be non-negative
             np.clip(held_var_after, 0.0, None, out=held_var_after)
+            nz_before = (self.var_matrix[selected] > 0).sum(axis=0)
+            nz_after = nz_before + int(sign) * (self.var_matrix[idx] > 0)
             prob_before = self._compute_zscore_penalty(
-                held_exp_before, held_var_before,
+                held_exp_before, held_var_before, nz_before,
             )
             prob_after = self._compute_zscore_penalty(
-                held_exp_after, held_var_after,
+                held_exp_after, held_var_after, nz_after,
             )
             delta += prob_after - prob_before
 

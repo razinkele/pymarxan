@@ -179,18 +179,18 @@ class TestZscorePenalty:
         assert p == pytest.approx(expected, abs=1e-9)
 
     def test_sentinel_variance_means_deterministic_no_penalty(self):
-        """Z=4 (Marxan zero-variance sentinel) -> no chance-constraint
-        penalty. The deterministic-target shortfall path handles any
-        deterministic miss; the probability penalty is vacuously
-        satisfied (P=1) when there's no uncertainty.
+        """A zero-variance feature has no chance penalty under the "met" rule.
 
-        Matches Marxan's intent (probability.cpp comment: "degenerate
-        case → P=1") even though norm.sf(4) ≈ 3e-5 would give a
-        non-trivial penalty if we passed it through naïvely.
+        Rewritten (v0.47.0, A2): the zero-variance feature is now named in
+        ``zero_variance`` instead of being inferred from ``Z == 4``, so a real
+        Z of 4 is told apart from Marxan's zero-variance 4 (spec §3.4, final
+        review I-5); ``zero_var_rule="met"`` keeps this release's default.
         """
         p = compute_zscore_penalty(
             zscore_per_feature={1: 4.0},
             prob_targets={1: 0.95},
             weight=1.0,
+            zero_variance=frozenset({1}),
+            zero_var_rule="met",
         )
         assert p == 0.0
