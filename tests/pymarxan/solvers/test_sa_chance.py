@@ -8,6 +8,7 @@ evaluator's, via ``build_solution``) must equal what the solvers tracked.
 from __future__ import annotations
 
 import itertools
+import math
 
 import numpy as np
 import pandas as pd
@@ -48,11 +49,18 @@ def _random_problem(seed: int, n_pu: int = 14, n_feat: int = 3) -> ConservationP
     )
 
 
-def _keeps_needed_pu_problem() -> ConservationProblem:
+def _keeps_needed_pu_problem(*, costly_spare: bool = False) -> ConservationProblem:
     """4 PUs x 1 feature, each PU alone meets the deterministic target (amount 10, target 10)
     but the chance target needs all four (q = 0.6, ptarget 0.9): k = 4 PUs cost 4 with no
-    chance penalty; k = 3 cost 3 + 50·(0.9 − P3)/0.9 ≈ 7.06 (SPF 100 rules out k = 0)."""
+    chance penalty; k = 3 cost 3 + 50·(0.9 − P3)/0.9 ≈ 7.05; k = 1 costs
+    1 + 50·(0.9 − P1)/0.9 ≈ 39.49 (SPF 100 rules out k = 0).
+
+    ``costly_spare`` adds PU 5: cost 100, no features. All five selected cost 104.
+    """
     pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    if costly_spare:
+        spare = pd.DataFrame({"id": [5], "cost": [100.0], "status": [0]})
+        pu = pd.concat([pu, spare], ignore_index=True)
     feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [10.0], "spf": [100.0],
                          "ptarget": [0.9]})
     pv = pd.DataFrame({"species": [1] * 4, "pu": [1, 2, 3, 4], "amount": [10.0] * 4,
@@ -61,6 +69,14 @@ def _keeps_needed_pu_problem() -> ConservationProblem:
         planning_units=pu, features=feat, pu_vs_features=pv,
         parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 50.0, "BLM": 0.0},
     )
+
+
+def _two_of_four_problem() -> ConservationProblem:
+    """``_keeps_needed_pu_problem`` with ptarget 0.6, which two PUs meet (P2 ≈ 0.614):
+    k = 2, 3, 4 PUs cost 2, 3, 4 with no chance penalty; k = 1 costs
+    1 + 50·(0.6 − P1)/0.6 ≈ 33.74 (P1 ≈ 0.207)."""
+    problem = _keeps_needed_pu_problem()
+    return problem.copy_with(features=problem.features.assign(ptarget=0.6))
 
 
 def _duplicate_rows_problem() -> ConservationProblem:
@@ -110,6 +126,24 @@ class TestSimulatedAnnealing:
             assert sol.selected.all()
             assert sol.objective == pytest.approx(4.0)
 
+    def test_initial_temperature_samples_the_chance_delta(self) -> None:
+        """SA's starting temperature is sampled from deltas that include the chance term.
+
+        PROP 1 starts SA from all four PUs of ``_keeps_needed_pu_problem``, so every sampled
+        move removes one of four identical PUs (this pins removals only): Δ = 7.05 − 4 ≈ 3.05
+        for every sample, whatever the seed, and T0 = −Δ / ln 0.5 ≈ 4.40. Blind to the term,
+        every sampled Δ is −1 (no worsening move) and T0 falls back to 1.0.
+        """
+        base = _keeps_needed_pu_problem()
+        problem = base.copy_with(
+            parameters={**base.parameters, "PROP": 1.0, "NUMITNS": 1000, "NUMTEMP": 10},
+        )
+        delta = _obj(problem, np.array([True, True, True, False])) - _obj(
+            problem, np.ones(4, dtype=bool),
+        )
+        (sol,) = SimulatedAnnealingSolver().solve(problem, SolverConfig(num_solutions=1, seed=1))
+        assert sol.metadata["initial_temp"] == pytest.approx(-delta / math.log(0.5), abs=1e-4)
+
     def test_duplicate_rows_tracked_as_reported(self) -> None:
         """Duplicate (pu, species) rows: what SA tracks is what it reports, for every
         selection, so SA finds the reported optimum (PU 1 alone, ≈ 2.667)."""
@@ -153,12 +187,47 @@ def _single_moves_do_not_improve(problem, sol, *, removals: bool, additions: boo
 class TestIterativeImprovement:
     @pytest.mark.parametrize("itimptype", [1, 2])
     def test_removal_pass_keeps_a_pu_the_chance_term_needs(self, itimptype: int) -> None:
-        problem = _keeps_needed_pu_problem()
+        """II starts from all five PUs (objective 104): it drops the spare PU 5 and keeps
+        PUs 1-4, which only the chance term needs (objective 4).
+
+        A removal pass blind to the term strips to PU 4 alone (≈ 39.49), still better than
+        the start, so ITIMPTYPE 1's loop would keep that. Under ITIMPTYPE 2 the addition pass
+        would refill PUs 1-3, so the removal pass is also checked on its own.
+        """
+        problem = _keeps_needed_pu_problem(costly_spare=True)
+        keep = [True, True, True, True, False]
+        start = build_solution(problem, np.ones(5, dtype=bool), 0.0)
+        cache = ProblemCache.from_problem(problem)
+        passed = IterativeImprovementSolver()._removal_pass(problem, cache, 0.0, start, set())
+        assert passed.selected.tolist() == keep
         (sol,) = IterativeImprovementSolver(itimptype=itimptype).solve(
             problem, SolverConfig(num_solutions=1, seed=1),
         )
-        assert sol.selected.all()
+        assert sol.selected.tolist() == keep
         assert sol.objective == pytest.approx(4.0)
+
+    def test_removal_pass_commits_each_removal(self) -> None:
+        """From all four PUs of ``_two_of_four_problem`` (objective 4) the removal pass drops
+        PUs 1 and 2 and stops at two (objective 2). Each removal must reach the chance
+        state: scored against the start's E / V, PU 3 looks free to drop as well, and the
+        pass ends at PU 4 alone (≈ 33.74)."""
+        problem = _two_of_four_problem()
+        start = build_solution(problem, np.ones(4, dtype=bool), 0.0)
+        cache = ProblemCache.from_problem(problem)
+        sol = IterativeImprovementSolver()._removal_pass(problem, cache, 0.0, start, set())
+        assert sol.selected.tolist() == [False, False, True, True]
+        assert sol.objective == pytest.approx(2.0)
+
+    def test_addition_pass_commits_each_addition(self) -> None:
+        """From PU 1 alone of ``_two_of_four_problem`` (≈ 33.74) the addition pass adds PU 2
+        and stops at two (objective 2). Each addition must reach the chance state: scored
+        against PU 1's E / V, PUs 3 and 4 look worth adding too (objective 4)."""
+        problem = _two_of_four_problem()
+        start = build_solution(problem, np.array([True, False, False, False]), 0.0)
+        cache = ProblemCache.from_problem(problem)
+        sol = IterativeImprovementSolver()._addition_pass(problem, cache, 0.0, start, set())
+        assert sol.selected.tolist() == [True, True, False, False]
+        assert sol.objective == pytest.approx(2.0)
 
     @pytest.mark.parametrize("seed", range(4))
     @pytest.mark.parametrize("itimptype", [1, 2])
@@ -194,7 +263,9 @@ class TestIterativeImprovement:
 
         PU 1 (cost 1, q = 0.5) vs PU 2 (cost 2, q = 1.0); amount 10, target 5, ptarget 0.9,
         weight 50. Holding PU 1: P = sf((5 − 5)/5) = 0.5 → penalty 50·0.4/0.9 ≈ 22.2;
-        holding PU 2: zero variance, "met" in this release → 0, objective 2.
+        holding PU 2: zero variance; under PROBZEROVAR 1 (set below) it counts as met → 0,
+        objective 2. The default Z = 4 rule reverses the choice
+        (test_probzerovar.py::test_the_documented_safe_vs_risky_inversion).
         """
         pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 2.0], "status": [0, 0]})
         feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [5.0], "spf": [1.0],
