@@ -194,6 +194,15 @@ class SimulatedAnnealingSolver(Solver):
                 )
                 current_obj += space_state.penalty_total()
 
+            # Chance terms (PROBMODE 3): ChanceState holds the incremental per-feature
+            # E / V; the cache's full objective and delta exclude the term, so its
+            # initial value is added here (as for SepState).
+            chance_state = None
+            if cache.chance_terms:
+                from pymarxan.solvers.chance_state import ChanceState
+                chance_state = ChanceState.from_selection(cache, selected)
+                current_obj += chance_state.penalty_total()
+
             # Determine initial temperature
             if start_temp_param is not None:
                 initial_temp = max(float(start_temp_param), 0.001)
@@ -217,6 +226,10 @@ class SimulatedAnnealingSolver(Solver):
                     if space_state is not None:
                         delta += space_state.delta_penalty(
                             idx, adding=not selected[idx],
+                        )
+                    if chance_state is not None:
+                        delta += chance_state.delta_penalty(
+                            cache, idx, adding=not selected[idx],
                         )
                     if delta > 0:
                         deltas.append(delta)
@@ -279,6 +292,8 @@ class SimulatedAnnealingSolver(Solver):
                     delta += sep_state.delta_penalty(cache, idx, adding)
                 if space_state is not None:
                     delta += space_state.delta_penalty(idx, adding)
+                if chance_state is not None:
+                    delta += chance_state.delta_penalty(cache, idx, adding)
 
                 # Acceptance criterion
                 if delta <= 0 or (
@@ -296,6 +311,8 @@ class SimulatedAnnealingSolver(Solver):
                         sep_state.apply_flip(cache, idx, adding)
                     if space_state is not None:
                         space_state.apply_flip(idx, adding)
+                    if chance_state is not None:
+                        chance_state.apply_flip(cache, idx, adding)
 
                     # Track best
                     if current_obj < best_obj:

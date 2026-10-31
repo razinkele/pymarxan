@@ -59,7 +59,6 @@ from scipy.sparse import coo_matrix, csr_matrix
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.utils import (
     _active_chance_terms,
-    _chance_terms,
     _probability_vector,
     _probmode,
     _zero_var_rule,
@@ -131,8 +130,8 @@ class ProblemCache:
     pu_feat_csr : scipy.sparse.csr_matrix
         (n_pu, n_feat) float64 — amount of each feature in each PU (the source of truth).
         ``pu_feat_matrix`` is a lazily-densified ``cached_property`` view over it, built
-        only when clumping / separation / probmode-3 / analysis touch it; a plain problem
-        never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
+        only when clumping / separation / analysis touch it; a plain problem (and a
+        PROBMODE 3 one) never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
     feat_targets : np.ndarray
         (n_feat,) float64 — target for each feature.
     feat_spf : np.ndarray
@@ -179,8 +178,10 @@ class ProblemCache:
     cost_thresh: float
     thresh_pen1: float
     thresh_pen2: float
-    # PROBMODE 3 (Z-score chance constraints) — populated for all problems
-    # but only used when probmode == 3. See solvers/probability.py for the math.
+    # Chance terms (PROBMODE 3, Z-score chance constraints). The cache holds only the
+    # immutable per-cell contributions (``chance_cells``); the running per-feature state and
+    # the penalty live in the ``ChanceState`` sidecar (solvers/chance_state.py), so neither
+    # ``compute_full_objective`` nor ``compute_delta_objective`` includes the chance term.
     probmode: int = 0
     prob_weight: float = 1.0
     # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
@@ -193,11 +194,6 @@ class ProblemCache:
     chance_cells: dict[str, ChanceCells] = field(
         default_factory=dict, compare=False, repr=False,
     )
-    # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
-    # when there is no `prob` column or when prob == 1.
-    expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    # var_matrix[i, j] = amount_ij² · p_ij · (1 − p_ij); all-zero when no `prob`.
-    var_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     # feat_ptarget[j] = per-feature probability target; ≤0 means disabled.
     feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # Phase 19 clumping (TARGET2 / CLUMPTYPE / type-4 species). All-zero /
@@ -266,11 +262,11 @@ class ProblemCache:
     @cached_property
     def pu_feat_matrix(self) -> np.ndarray:
         """Dense (n_pu, n_feat) view — densified on first access (clumping / separation /
-        probmode-3 / analysis). A plain problem never triggers this."""
+        analysis). A plain problem never triggers this."""
         if self.n_pu * self.n_feat > 20_000_000:  # ~160 MB float64 — the sparse win is lost
             warnings.warn(
                 "Densifying a large ProblemCache feature matrix "
-                f"({self.n_pu}x{self.n_feat}); clumping/separation/probmode-3 at raster "
+                f"({self.n_pu}x{self.n_feat}); clumping/separation at raster "
                 "scale is not yet sparse.",
                 stacklevel=2,
             )
@@ -372,47 +368,16 @@ class ProblemCache:
         thresh_pen2 = float(params.get("THRESHPEN2", 0.0))
 
         # PROBMODE: default 1 with a probability table (the MIP's and greedy's rule), else 0.
-        # Mode 3 state below is zero-cost when probmode != 3.
+        # Chance-term state below is zero-cost unless a chance term is active.
         probmode = _probmode(problem)
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
         chance_terms = _active_chance_terms(problem)
         zero_var_rule = _zero_var_rule(problem)
 
-        # Per-cell probability of PRESENCE — read once into a dense matrix.
-        # Marxan's PROB2D `prob` is the probability the feature is present at
-        # the cell (clumping.cpp / probability.cpp ComputeP_AllPUsSelected_2D:
-        # `ExpectedAmount2D += amount * SM.prob`). Cells without an explicit
-        # prob default to 1.0 (certain presence == deterministic), so a
-        # problem with no `prob` column reduces to the plain amount sum.
-        # NB: this is the *opposite* polarity to PROBMODE 2 (per-PU `prob`,
-        # Marxan 1D), where `prob` is the probability of loss and the held
-        # amount is `amount * (1 - prob)`.
-        # expected/var are read ONLY under probmode == 3 — build them (densely) only then;
-        # a plain problem pays zero memory for these two (n_pu, n_feat) matrices.
-        if "2d" in _chance_terms(problem):
-            dense = np.asarray(pu_feat_csr.toarray())
-            prob_matrix = np.ones_like(dense)
-            if (
-                problem.pu_vs_features is not None
-                and "prob" in problem.pu_vs_features.columns
-            ):
-                pv_pu = problem.pu_vs_features["pu"].values
-                pv_sp = problem.pu_vs_features["species"].values
-                pv_pr = problem.pu_vs_features["prob"].values
-                for k in range(len(pv_pu)):
-                    pi = pu_id_to_idx.get(int(pv_pu[k]))
-                    fj = feat_id_to_col.get(int(pv_sp[k]))
-                    if pi is not None and fj is not None:
-                        prob_matrix[pi, fj] = float(pv_pr[k])
-            # Marxan PROB2D math (probability.cpp ComputeP_AllPUsSelected_2D):
-            #   E[T_j contribution from i]   = amount_ij * p_ij          (presence)
-            #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
-            expected_matrix = dense * prob_matrix
-            var_matrix = (dense ** 2) * prob_matrix * (1.0 - prob_matrix)
-        else:
-            expected_matrix = np.zeros((0, 0))
-            var_matrix = np.zeros((0, 0))
-
+        # Per-cell contributions of the active chance terms. Marxan's PROB2D `prob` is the
+        # probability the feature is PRESENT at the cell (probability.c
+        # ComputeProbability2D: E += amount·prob, V += amount²·prob·(1 − prob)) — the
+        # opposite polarity to PROBMODE 2 (per-PU loss probability, held a·(1 − p)).
         chance_cells: dict[str, ChanceCells] = {}
         if "2d" in chance_terms:
             chance_cells["2d"] = _build_chance_cells_2d(
@@ -615,8 +580,6 @@ class ProblemCache:
             chance_terms=chance_terms,
             zero_var_rule=zero_var_rule,
             chance_cells=chance_cells,
-            expected_matrix=expected_matrix,
-            var_matrix=var_matrix,
             feat_ptarget=feat_ptarget,
             feat_target2=feat_target2,
             feat_clumptype=feat_clumptype,
@@ -681,31 +644,6 @@ class ProblemCache:
         cols = csr.indices[s:e]
         held[cols] += sign * csr.data[s:e]
 
-    def _compute_zscore_penalty(
-        self,
-        held_expected: np.ndarray,
-        held_variance: np.ndarray,
-        held_nonzero: np.ndarray,
-    ) -> float:
-        """Marxan-faithful Z-score chance-constraint penalty.
-
-        Active only when the 2D chance term is (``"2d" in self.chance_terms``); returns 0
-        otherwise. Scored by ``probability.score_features``: zero variance is
-        ``held_nonzero == 0`` (no selected cell with a variance term > 0) and follows
-        ``self.zero_var_rule``; features with ptarget ≤ 0 are disabled.
-        """
-        if "2d" not in self.chance_terms or self.n_feat == 0:
-            return 0.0
-        from pymarxan.solvers.probability import score_features  # keeps cold path cheap
-
-        # Marxan's ComputeProbability2D weights the probability shortfall only by
-        # PROBABILITYWEIGHTING — NOT by SPF (unlike the representation penalty).
-        penalty = score_features(
-            held_expected, held_variance, held_nonzero, self.feat_targets,
-            self.feat_ptarget, self.zero_var_rule,
-        )[3]
-        return self.prob_weight * float(np.sum(penalty))
-
     def compute_full_objective(
         self,
         selected: np.ndarray,
@@ -716,6 +654,9 @@ class ProblemCache:
 
         objective = cost + BLM * boundary + penalty [+ cost_threshold_penalty]
         [+ connectivity]
+
+        The chance terms (PROBMODE 3) are not included: callers add
+        ``ChanceState.penalty_total()`` (SA, II) — as for clumping / separation.
 
         Parameters
         ----------
@@ -756,13 +697,6 @@ class ProblemCache:
             obj += compute_cost_threshold_penalty(
                 total_cost, self.cost_thresh, self.thresh_pen1, self.thresh_pen2
             )
-
-        # PROBMODE 3 chance-constraint penalty (additive; no-op unless the 2D term is active)
-        if "2d" in self.chance_terms:
-            held_expected = self.expected_matrix[selected].sum(axis=0)
-            held_variance = self.var_matrix[selected].sum(axis=0)
-            held_nonzero = (self.var_matrix[selected] > 0).sum(axis=0)
-            obj += self._compute_zscore_penalty(held_expected, held_variance, held_nonzero)
 
         # Connectivity term (no-op when conn_mode == 0)
         if self.conn_mode:
@@ -887,29 +821,6 @@ class ProblemCache:
                 self.thresh_pen2,
             )
             delta += new_ct_penalty - old_ct_penalty
-
-        # --- PROBMODE 3 chance-constraint delta ---
-        # Recompute the Z-score penalty before and after the flip from the
-        # full selection mask. This is O(n_feat) per flip — heavier than
-        # the deterministic delta but cheap relative to the SA outer loop.
-        # The future optimisation (sparse per-PU feature index) lands in a
-        # later patch if benchmarks demand it.
-        if "2d" in self.chance_terms:
-            held_exp_before = self.expected_matrix[selected].sum(axis=0)
-            held_var_before = self.var_matrix[selected].sum(axis=0)
-            held_exp_after = held_exp_before + sign * self.expected_matrix[idx]
-            held_var_after = held_var_before + sign * self.var_matrix[idx]
-            # Underflow guard — held_var must be non-negative
-            np.clip(held_var_after, 0.0, None, out=held_var_after)
-            nz_before = (self.var_matrix[selected] > 0).sum(axis=0)
-            nz_after = nz_before + int(sign) * (self.var_matrix[idx] > 0)
-            prob_before = self._compute_zscore_penalty(
-                held_exp_before, held_var_before, nz_before,
-            )
-            prob_after = self._compute_zscore_penalty(
-                held_exp_after, held_var_after, nz_after,
-            )
-            delta += prob_after - prob_before
 
         # --- Connectivity delta (one integer comparison when off) ---
         # O(degree), against the pre-flip selection; s = sign (+1 add, -1 remove).

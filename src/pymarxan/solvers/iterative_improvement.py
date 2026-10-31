@@ -20,9 +20,23 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig, require_binary
 from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.chance_state import ChanceState
 from pymarxan.solvers.utils import build_solution
 
 _VALID_ITIMPTYPES = frozenset(range(4))
+
+
+def _chance_state(cache: ProblemCache, selected: np.ndarray) -> ChanceState | None:
+    """A fresh ``ChanceState`` when a chance term is active, else None."""
+    if not cache.chance_terms:
+        return None
+    return ChanceState.from_selection(cache, selected)
+
+
+def _chance_from_scratch(cache: ProblemCache, selected: np.ndarray) -> float:
+    """The chance penalty of ``selected`` from scratch (0 without an active term)."""
+    state = _chance_state(cache, selected)
+    return 0.0 if state is None else state.penalty_total()
 
 
 class IterativeImprovementSolver(Solver):
@@ -202,6 +216,8 @@ class IterativeImprovementSolver(Solver):
         if cache.separation_active:
             from pymarxan.solvers.separation import SepState
             sep_state = SepState.from_selection(cache, selected)
+        # Chance terms (PROBMODE 3): incremental E / V per pass, fresh from the selection.
+        chance_state = _chance_state(cache, selected)
 
         improved = True
         while improved:
@@ -217,6 +233,8 @@ class IterativeImprovementSolver(Solver):
                     delta += clump_state.delta_penalty(cache, i, adding=False)
                 if sep_state is not None:
                     delta += sep_state.delta_penalty(cache, i, adding=False)
+                if chance_state is not None:
+                    delta += chance_state.delta_penalty(cache, i, adding=False)
                 if delta < 0:
                     # Removing this PU improves the objective
                     selected[i] = False
@@ -226,6 +244,8 @@ class IterativeImprovementSolver(Solver):
                         clump_state.apply_flip(cache, i, adding=False)
                     if sep_state is not None:
                         sep_state.apply_flip(cache, i, adding=False)
+                    if chance_state is not None:
+                        chance_state.apply_flip(cache, i, adding=False)
                     improved = True
 
         return build_solution(
@@ -284,6 +304,8 @@ class IterativeImprovementSolver(Solver):
         if cache.separation_active:
             from pymarxan.solvers.separation import SepState
             sep_state = SepState.from_selection(cache, selected)
+        # Chance terms (PROBMODE 3): incremental E / V per pass, fresh from the selection.
+        chance_state = _chance_state(cache, selected)
 
         improved = True
         while improved:
@@ -299,6 +321,8 @@ class IterativeImprovementSolver(Solver):
                     delta += clump_state.delta_penalty(cache, i, adding=True)
                 if sep_state is not None:
                     delta += sep_state.delta_penalty(cache, i, adding=True)
+                if chance_state is not None:
+                    delta += chance_state.delta_penalty(cache, i, adding=True)
                 if delta < 0:
                     # Adding this PU improves the objective
                     selected[i] = True
@@ -308,6 +332,8 @@ class IterativeImprovementSolver(Solver):
                         clump_state.apply_flip(cache, i, adding=True)
                     if sep_state is not None:
                         sep_state.apply_flip(cache, i, adding=True)
+                    if chance_state is not None:
+                        chance_state.apply_flip(cache, i, adding=True)
                     improved = True
 
         return build_solution(
@@ -330,13 +356,15 @@ class IterativeImprovementSolver(Solver):
         """Try pairwise swaps until no improvement found.
 
         Uses compute_full_objective from cache (two PUs change at once,
-        so delta computation is not directly applicable).
+        so delta computation is not directly applicable), plus a from-scratch
+        chance term (the cache's full objective excludes it).
         """
 
         selected = solution.selected.copy()
         held = cache.compute_held(selected)
         total_cost = float(np.sum(cache.costs[selected]))
         current_obj = cache.compute_full_objective(selected, held, blm)
+        current_obj += _chance_from_scratch(cache, selected)
 
         improved = True
         while improved:
@@ -360,6 +388,7 @@ class IterativeImprovementSolver(Solver):
                     cache.apply_flip_to_held(new_held, a, 1.0)
                     new_cost = total_cost - cache.costs[r] + cache.costs[a]
                     new_obj = cache.compute_full_objective(selected, new_held, blm)
+                    new_obj += _chance_from_scratch(cache, selected)
 
                     if new_obj < current_obj:
                         held = new_held

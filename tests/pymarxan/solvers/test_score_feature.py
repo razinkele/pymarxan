@@ -192,19 +192,23 @@ class TestRoutedThroughScoreFeature:
         assert sol.prob_penalty == pytest.approx(marxan, abs=1e-15)
 
     def test_cache_honours_the_rule(self) -> None:
+        """The solvers' chance term (``ChanceState`` over the cache, v0.47.0) follows the
+        cache's rule; the cache's own full objective excludes the term."""
         from pymarxan.solvers.cache import ProblemCache
+        from pymarxan.solvers.chance_state import ChanceState
 
         problem = _two_feature_problem()
         cache = ProblemCache.from_problem(problem)
         marxan = dataclasses.replace(cache, zero_var_rule="marxan")
         sel = np.array([True, True])
-        held = cache.compute_held(sel)
         diff = (
-            marxan.compute_full_objective(sel, held, 0.0)
-            - cache.compute_full_objective(sel, held, 0.0)
+            ChanceState.from_selection(marxan, sel).penalty_total()
+            - ChanceState.from_selection(cache, sel).penalty_total()
         )
         assert diff == pytest.approx(3.0 * (0.8 - SF4) / 0.8, abs=1e-12)
         _, pen = evaluate_solution_chance(problem, sel)
-        assert cache.compute_full_objective(sel, held, 0.0) == pytest.approx(
-            2.0 + pen, abs=1e-12,
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            pen, abs=1e-12,
         )
+        held = cache.compute_held(sel)
+        assert cache.compute_full_objective(sel, held, 0.0) == pytest.approx(2.0, abs=1e-12)

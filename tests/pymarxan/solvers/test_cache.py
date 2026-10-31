@@ -610,9 +610,13 @@ def test_delta_matches_dense_penalty(n_pu, n_feat):
         assert abs(got - expected) <= 1e-9 * (1.0 + abs(expected))
 
 
-def test_expected_var_gated_on_probmode():
+def test_chance_arrays_gated_on_chance_terms():
+    """Rewritten (v0.47.0): the dense expected / variance matrices are gone; the per-cell
+    chance arrays are built only for active chance terms (``cache.chance_terms``)."""
     cache = ProblemCache.from_problem(_random_problem())  # probmode 0
-    assert cache.expected_matrix.size == 0 and cache.var_matrix.size == 0
+    assert cache.chance_terms == frozenset()
+    assert cache.chance_cells == {}
+    assert not hasattr(cache, "expected_matrix") and not hasattr(cache, "var_matrix")
 
 
 def test_plain_solve_does_not_densify():
