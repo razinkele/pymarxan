@@ -328,7 +328,8 @@ def _term_moments(
             continue
         amt = float(pv_am[k])
         # PROB2D presence convention: q = P(present); default 1.0 (certain presence)
-        # when there is no `prob` column. Marxan 3 ComputeProbability2D:
+        # when there is no `prob` column (only on a direct call: evaluate_solution_chance
+        # scores a term without its data as off first). Marxan 3 ComputeProbability2D:
         # E += amount·q, V += amount²·q·(1 − q).
         q = float(pv_pr[k]) if pv_pr is not None else 1.0
         v = amt * amt * q * (1.0 - q)
@@ -349,6 +350,13 @@ def evaluate_solution_chance(
     strategy's post-hoc report): computes the per-feature E / V / nonzero over the
     selected PUs and scores them with :func:`score_features`.
 
+    The gate is the term's data, not ``PROBMODE``. A term without its data (``"2d"``: no
+    ``prob`` column on ``pu_vs_features``) is off, as in every solver (spec §3.1): each
+    feature's shortfall is 0 and the penalty is 0 under either ``PROBZEROVAR`` rule, and
+    no cell is read (so a non-finite ``amount`` does not raise here). With its data the
+    term is scored whatever the mode, so a caller can score a problem as if the term
+    were requested.
+
     Returns
     -------
     (shortfalls, penalty)
@@ -368,7 +376,10 @@ def evaluate_solution_chance(
     feat_target = problem.features["target"].astype(float).values
     feat_ptarget = problem.features["ptarget"].astype(float).values
 
-    if not any(pt > 0 for pt in feat_ptarget):
+    # Off without its data (spec §3.1), as ``utils._active_chance_terms`` makes it in the
+    # solvers, or with no ptarget > 0. The 2D term's data is the puvspr ``prob`` column.
+    no_data = term == "2d" and "prob" not in problem.pu_vs_features.columns
+    if no_data or not any(pt > 0 for pt in feat_ptarget):
         return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
 
     E, V, N = _term_moments(problem, selected, term, feat_ids)

@@ -8,6 +8,7 @@ Zero variance is ``nonzero == 0`` (the number of selected cells whose variance t
 from __future__ import annotations
 
 import dataclasses
+import itertools
 
 import numpy as np
 import pandas as pd
@@ -186,6 +187,33 @@ class TestEvaluateSolutionChance:
         assert shortfalls[1] == pytest.approx(f1.shortfall, abs=1e-15)
         assert shortfalls[2] == 0.0  # zero variance under PROBZEROVAR 1 (met)
         assert penalty == pytest.approx(3.0 * f1.penalty, abs=1e-15)
+
+    @pytest.mark.parametrize("probzerovar", [0, 1])
+    @pytest.mark.parametrize("probmode", [3, 0])
+    def test_term_without_its_data_is_off(self, probmode: int, probzerovar: int) -> None:
+        """No puvspr ``prob`` column: the 2D term has no data, so it is off (spec §3.1), as
+        in every solver: zero shortfalls and penalty, whatever the selection, the mode or
+        the PROBZEROVAR rule.
+
+        v0.47.0 plan review: the evaluator read the missing column as q = 1, so every
+        feature had zero variance and, under the Z = 4 default, a direct call charged
+        ≈ 6.0 (≈ the weighting per feature) that no selection could remove, while
+        ``build_solution`` and the solvers score the term 0.
+        """
+        p = _two_feature_problem(PROBMODE=probmode, PROBZEROVAR=probzerovar)
+        p = p.copy_with(pu_vs_features=p.pu_vs_features.drop(columns=["prob"]))
+        for sel in itertools.product([False, True], repeat=2):
+            assert evaluate_solution_chance(p, np.array(sel)) == ({1: 0.0, 2: 0.0}, 0.0)
+
+    def test_the_gate_is_the_data_not_the_mode(self) -> None:
+        """With its data the term is scored whatever PROBMODE says, so a caller can score a
+        mode-0 problem as if the term were requested. Gating on the active terms (the
+        mode and the data, as the solvers do) would score it 0."""
+        sel = np.array([True, True])
+        mode_0 = evaluate_solution_chance(_two_feature_problem(PROBMODE=0), sel)
+        mode_3 = evaluate_solution_chance(_two_feature_problem(), sel)
+        assert mode_0 == mode_3
+        assert mode_3[1] > 0.0
 
 
 class TestRoutedThroughScoreFeature:
