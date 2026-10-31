@@ -98,6 +98,32 @@ def _probmode(problem: ConservationProblem) -> int:
     return int(problem.parameters.get("PROBMODE", default))
 
 
+def _chance_terms(problem: ConservationProblem) -> frozenset[str]:
+    """Chance terms **requested** by ``PROBMODE`` (spec §3.1): 3 → ``{"2d"}``, else none.
+
+    ``"2d"`` is the Z-score chance term from the puvspr ``prob`` column (Marxan
+    Probability 2D). Requested terms gate what depends on the mode alone: non-binary
+    rejection, the MIP chance-strategy gate and metadata, the Shiny MIP notice. Pure; never
+    warns.
+    """
+    if _probmode(problem) == 3:
+        return frozenset({"2d"})
+    return frozenset()
+
+
+def _active_chance_terms(problem: ConservationProblem) -> frozenset[str]:
+    """Requested chance terms whose data exists (spec §3.1 "term without data").
+
+    ``"2d"`` needs a ``prob`` column on ``pu_vs_features``; without one the term is off
+    (penalty 0). Active terms gate the evaluator, ``ProblemCache``, the ``Solution``
+    fields and the reports. Pure; never warns.
+    """
+    terms = _chance_terms(problem)
+    if "2d" in terms and "prob" not in problem.pu_vs_features.columns:
+        terms = terms - {"2d"}
+    return terms
+
+
 def _probmode2_active(problem: ConservationProblem) -> bool:
     """True iff PROBMODE 2 applies: a probability table and ``PROBMODE == 2``."""
     return problem.probability is not None and _probmode(problem) == 2
@@ -457,14 +483,17 @@ def compute_probability_penalty(
     prob_mode = _probmode(problem)
     if prob_mode == 1:
         return _compute_probmode1_risk_premium(problem, selected)
-    if prob_mode == 3:
+    # Two gates: a *requested* chance term rejects proportion decisions whether or not its
+    # data exists; only an *active* one (requested, with data) adds a penalty.
+    if _chance_terms(problem):
         if _is_fractional(selected):
             raise ValueError(
                 "PROBMODE 3 (Z-score chance constraints) is only defined for binary "
                 "selections; this selection holds proportion decisions. Solve with "
                 "decisions='binary' or convert with binarize_solution()."
             )
-        return _compute_probmode3_zscore_penalty(problem, selected)
+        if "2d" in _active_chance_terms(problem):
+            return _compute_probmode3_zscore_penalty(problem, selected)
     return 0.0
 
 
@@ -713,7 +742,7 @@ def build_solution(
     # via compute_probability_penalty.
     prob_shortfalls: dict[int, float] | None = None
     prob_penalty_val: float | None = None
-    if _probmode(problem) == 3:
+    if "2d" in _active_chance_terms(problem):
         from pymarxan.solvers.probability import evaluate_solution_chance
         prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
             problem, selected,

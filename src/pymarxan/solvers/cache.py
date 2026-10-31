@@ -57,6 +57,8 @@ from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.utils import (
+    _active_chance_terms,
+    _chance_terms,
     _probability_vector,
     _probmode,
     compute_cost_threshold_penalty,
@@ -134,6 +136,9 @@ class ProblemCache:
     # but only used when probmode == 3. See solvers/probability.py for the math.
     probmode: int = 0
     prob_weight: float = 1.0
+    # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
+    # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
+    chance_terms: frozenset[str] = frozenset()
     # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
     # when there is no `prob` column or when prob == 1.
     expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
@@ -316,6 +321,7 @@ class ProblemCache:
         # Mode 3 state below is zero-cost when probmode != 3.
         probmode = _probmode(problem)
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
+        chance_terms = _active_chance_terms(problem)
 
         # Per-cell probability of PRESENCE — read once into a dense matrix.
         # Marxan's PROB2D `prob` is the probability the feature is present at
@@ -328,7 +334,7 @@ class ProblemCache:
         # amount is `amount * (1 - prob)`.
         # expected/var are read ONLY under probmode == 3 — build them (densely) only then;
         # a plain problem pays zero memory for these two (n_pu, n_feat) matrices.
-        if probmode == 3:
+        if "2d" in _chance_terms(problem):
             dense = np.asarray(pu_feat_csr.toarray())
             prob_matrix = np.ones_like(dense)
             if (
@@ -545,6 +551,7 @@ class ProblemCache:
             thresh_pen2=thresh_pen2,
             probmode=probmode,
             prob_weight=prob_weight,
+            chance_terms=chance_terms,
             expected_matrix=expected_matrix,
             var_matrix=var_matrix,
             feat_ptarget=feat_ptarget,
@@ -616,12 +623,13 @@ class ProblemCache:
     ) -> float:
         """Marxan-faithful Z-score chance-constraint penalty.
 
-        Active only when ``self.probmode == 3``; returns 0 otherwise (the
+        Active only when the 2D chance term is (``"2d" in self.chance_terms``); returns 0
+        otherwise (the
         caller's hot path can skip this branch entirely via the probmode
         check).  Features with ptarget ≤ 0 are skipped.  Features with
         zero variance contribute 0 (Marxan's "degenerate → P=1").
         """
-        if self.probmode != 3 or self.n_feat == 0:
+        if "2d" not in self.chance_terms or self.n_feat == 0:
             return 0.0
         from scipy.stats import norm  # local import keeps cold path cheap
         total = 0.0
@@ -695,8 +703,8 @@ class ProblemCache:
                 total_cost, self.cost_thresh, self.thresh_pen1, self.thresh_pen2
             )
 
-        # PROBMODE 3 chance-constraint penalty (additive; no-op when probmode!=3)
-        if self.probmode == 3:
+        # PROBMODE 3 chance-constraint penalty (additive; no-op unless the 2D term is active)
+        if "2d" in self.chance_terms:
             held_expected = self.expected_matrix[selected].sum(axis=0)
             held_variance = self.var_matrix[selected].sum(axis=0)
             obj += self._compute_zscore_penalty(held_expected, held_variance)
@@ -831,7 +839,7 @@ class ProblemCache:
         # the deterministic delta but cheap relative to the SA outer loop.
         # The future optimisation (sparse per-PU feature index) lands in a
         # later patch if benchmarks demand it.
-        if self.probmode == 3:
+        if "2d" in self.chance_terms:
             held_exp_before = self.expected_matrix[selected].sum(axis=0)
             held_var_before = self.var_matrix[selected].sum(axis=0)
             held_exp_after = held_exp_before + sign * self.expected_matrix[idx]

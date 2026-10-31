@@ -58,6 +58,7 @@ from pymarxan.solvers.presolve import (
     _validate_presolve_flag,
 )
 from pymarxan.solvers.utils import (
+    _chance_terms,
     _nonbinary_conflicts,
     _probability_map,
     _probmode,
@@ -73,7 +74,7 @@ def _reject_nonbinary(
     if decisions == "binary":
         return
     causes: list[str] = []
-    if _probmode(problem) == 3:
+    if _chance_terms(problem):
         causes.append("PROBMODE 3 (Z-score chance constraints)")
     causes += _nonbinary_conflicts(problem)
     if config.metadata and config.metadata.get("forbidden_selections"):
@@ -293,6 +294,7 @@ class _BaseModel:
     terms: list[TargetTerm]
     implied: list[ImpliedRule]
     probmode: int
+    chance_terms: frozenset[str]  # requested (``_chance_terms``)
     has_target2: bool
     has_sep_active: bool
     s: dict[int, pulp.LpVariable]  # semicontinuous on/off binaries; empty otherwise
@@ -324,6 +326,7 @@ class _BuiltModel:
     blm: float
     objective_expr: pulp.LpAffineExpression  # natural units
     probmode: int
+    chance_terms: frozenset[str]  # requested (``_chance_terms``)
     has_target2: bool
     has_sep_active: bool
     s: dict[int, pulp.LpVariable]
@@ -476,7 +479,8 @@ class MIPSolver(Solver):
 
         # PROBMODE 3 gating — see class docstring for rationale.
         probmode = _probmode(problem)
-        if probmode == 3:
+        chance_terms = _chance_terms(problem)
+        if chance_terms:
             if self.mip_chance_strategy == "piecewise":
                 raise NotImplementedError(
                     "mip_chance_strategy='piecewise' (piecewise-linear "
@@ -719,6 +723,7 @@ class MIPSolver(Solver):
             model=model, x=x, pu_ids=pu_ids, blm=blm, cost_expr=cost_expr,
             boundary_expr=boundary_expr, conn_expr=conn_expr, prob_expr=prob_expr,
             amount_exprs=amount_exprs, terms=terms, implied=implied, probmode=probmode,
+            chance_terms=chance_terms,
             has_target2=bool(has_target2), has_sep_active=bool(has_sep_active),
             s=s, decisions=self.decisions, upper=self.upper, lower=self.lower,
         )
@@ -767,18 +772,19 @@ class MIPSolver(Solver):
             model += base.cost_expr <= float(cost_budget), "cost_budget"
         return _BuiltModel(
             model=model, x=base.x, pu_ids=base.pu_ids, blm=base.blm, objective_expr=term.expr,
-            probmode=base.probmode, has_target2=base.has_target2,
+            probmode=base.probmode, chance_terms=base.chance_terms,
+            has_target2=base.has_target2,
             has_sep_active=base.has_sep_active, s=base.s, decisions=base.decisions,
             upper=base.upper, lower=base.lower, lex=lex,
         )
 
     def _strategy_metadata(
-        self, probmode: int, has_target2: bool, has_sep_active: bool,
+        self, chance_terms: frozenset[str], has_target2: bool, has_sep_active: bool,
     ) -> dict[str, str]:
         """The ``mip_*_strategy`` keys for the gaps this problem has (shared with
         ``MultiObjectiveMIP``)."""
         meta: dict[str, str] = {}
-        if probmode == 3:
+        if chance_terms:
             meta["mip_chance_strategy"] = self.mip_chance_strategy
         if has_target2:
             meta["mip_clump_strategy"] = self.mip_clump_strategy
@@ -818,7 +824,7 @@ class MIPSolver(Solver):
         built = self._build(problem, config)
         _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         model, x, pu_ids = built.model, built.x, built.pu_ids
-        probmode, has_target2 = built.probmode, built.has_target2
+        has_target2 = built.has_target2
         has_sep_active, blm = built.has_sep_active, built.blm
 
         solver, resolved_backend = _mip_solver_for(problem, self.mip_backend, config.verbose)
@@ -860,6 +866,8 @@ class MIPSolver(Solver):
             "mip_objective_value": obj_value,
             "shortfall": self.shortfall,
         }
-        meta.update(self._strategy_metadata(probmode, has_target2, has_sep_active))
+        meta.update(
+            self._strategy_metadata(built.chance_terms, has_target2, has_sep_active)
+        )
         sol = build_solution(problem, selected, blm, metadata=meta)
         return [copy.deepcopy(sol) for _ in range(config.num_solutions)]
