@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (PROBMODE 3):** a feature with zero variance over the selection — nothing
+  holding it selected, or every selected cell with puvspr `prob` 0 or 1 — now follows
+  Marxan 3's rule (`probability.c` `ComputeProbability2D`): Z = 4, so its probability of
+  meeting the target is `norm.sf(4) ≈ 3.17e-5` and it pays
+  `PROBABILITYWEIGHTING × (ptarget − 3.17e-5) / ptarget` (≈ the full weighting) for any
+  `ptarget` above that. pymarxan used to treat it as met. This inverts a preference: a
+  plan holding a feature only in certain (`prob = 1`) cells now scores worse than one using
+  a slightly risky cell (target 10, ptarget 0.9, weighting 10, plans costing 1: safe
+  10.9996, risky 1.0). The new input.dat parameter **`PROBZEROVAR 1`** restores the old
+  result (`0`, the default, is Marxan's rule; `validate()` reports other values). Results
+  change for PROBMODE 3 projects whose selections leave a feature with zero variance. With
+  PROBMODE 3 and no puvspr `prob` column the chance term is off (penalty 0), as before.
+- PROBMODE 3 simulated annealing and iterative improvement are much faster: the chance term
+  moved out of `ProblemCache` into a new incremental sidecar, `ChanceState`
+  (`solvers/chance_state.py`), which keeps per-feature expected amount, variance and an exact
+  count of uncertain cells and re-scores only the flipped unit's features, with an
+  error-bounded recompute that keeps every delta equal to the full difference (1e-9).
+  Measured per flip (delta, plus commit on an accepted flip), ~5 feature cells per unit:
+  4.5–4.7× mode 0 at 2 000 × 20 and 10 000 × 50 (dense and sparse risk), against 17× and
+  103× before. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
+  are removed, and `ProblemCache.compute_full_objective` / `compute_delta_objective` no
+  longer include the chance term (SA and II add `ChanceState`'s; the evaluator and
+  `Solution.objective` are unchanged).
+- `compute_zscore_penalty` gains keyword-only `zero_variance` (the ids of zero-variance
+  features, so a real Z of 4 is no longer mistaken for one) and `zero_var_rule`
+  (`"marxan"` / `"met"`); `evaluate_solution_chance` gains `term="2d"`. New
+  `score_feature` / `score_features` / `FeatureChance` in `solvers/probability.py` are
+  the one copy of the Z / P / penalty arithmetic every path uses.
+- PROBMODE 3 without a puvspr `prob` column leaves `Solution.prob_shortfalls` /
+  `prob_penalty` as None (they were all-zero), since the chance term is off.
+
+### Fixed
+
+- `write_puvspr` always writes a `prob` column that is present. It dropped an all-zero
+  one, and reloading turned presence 0 into presence 1 (a missing column reads as 1).
+- `run_sweep_parallel` passes the whole problem to its workers. It rebuilt the problem
+  from five fields, dropping `probability`, `connectivity` and the subclass type, so e.g.
+  a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with `run_sweep`.
+
 ## [0.46.0] — 2026-10-23
 
 ### Changed

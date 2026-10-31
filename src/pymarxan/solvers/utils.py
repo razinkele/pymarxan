@@ -125,12 +125,30 @@ def _active_chance_terms(problem: ConservationProblem) -> frozenset[str]:
 
 
 def _zero_var_rule(problem: ConservationProblem) -> str:
-    """The zero-variance rule for the chance terms (spec §3.4): ``"met"`` in this release.
+    """The chance terms' zero-variance rule from ``PROBZEROVAR`` (spec §3.4).
 
-    ``"met"``: a feature with no selected cell carrying variance has no chance penalty.
-    Pure; never warns.
+    ``PROBZEROVAR 0`` (the default) → ``"marxan"``: Marxan 3's rule, a feature with no
+    selected cell carrying variance gets ``Z = 4`` (``P ≈ 3.17e-5``) and so fails any
+    ``ptarget`` above that. ``PROBZEROVAR 1`` → ``"met"``: such a feature counts as met (the
+    pre-v0.47 behaviour). Any other value means ``"marxan"`` here and is reported by
+    ``ConservationProblem.validate()``. Pure; never warns or raises.
     """
-    return "met"
+    return "met" if _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0)) == 1 else (
+        "marxan"
+    )
+
+
+def _probzerovar_value(value: object) -> int | None:
+    """``PROBZEROVAR`` as 0 / 1, or None when it is neither (``validate()`` reports it)."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number == 0.0:
+        return 0
+    if number == 1.0:
+        return 1
+    return None
 
 
 def _probmode2_active(problem: ConservationProblem) -> bool:

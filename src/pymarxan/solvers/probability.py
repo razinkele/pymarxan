@@ -1,35 +1,38 @@
-"""Marxan-faithful Z-score chance-constraint math (PROBMODE 3).
+"""Marxan-faithful Z-score chance-constraint math (PROBMODE 3, Marxan's Probability 2D).
 
 This is the pure-functional layer: no problem objects, no solver state.
-Inputs are plain dicts keyed by feature id; outputs are scalars or dicts.
-Solver integration lives in ``cache.py`` (SA / iterative improvement),
-``heuristic.py`` (inline), and ``mip_solver.py`` (post-hoc evaluation).
+Solver integration lives in ``chance_state.py`` (``ChanceState``: SA / iterative
+improvement, incremental per-feature E / V), ``utils.py`` (the evaluator, via
+:func:`evaluate_solution_chance`) and ``mip_solver.py`` (post-hoc report).
 
-The formulation mirrors Marxan v4's ``computation.hpp::computeProbMeasures``:
+The reference is Marxan 3 (``marxan3`` branch, ``probability.c``
+``ComputeProbability2D`` / ``probZUT``) — not Marxan v4, whose ``probZUT`` has an
+integer-division bug that inverts the penalty. Per feature ``j``, over the selected PUs:
 
-    Z_j = (T_j − E[T_j]) / sqrt(Var[T_j])    # positive = shortfall
-    P_j = probZUT(Z_j) = 1 − Φ(Z_j)          # scipy.stats.norm.sf
+    E_j = Σ amount_ij · q_ij,   V_j = Σ amount_ij² · q_ij · (1 − q_ij)
+    Z_j = (T_j − E_j) / sqrt(V_j)            # positive = shortfall
+    P_j = probZUT(Z_j) = 1 − Φ(Z_j)          # scipy.special.ndtr(−Z) = norm.sf(Z)
 
-When Var[T_j] == 0 the routine returns Marxan's sentinel ``rZ = 4``
-(``probZUT(4) ≈ 3e-5``), which short-circuits the upper-tail probability
-to "trivially met". The deterministic-target shortfall is handled
-elsewhere via the regular penalty path.
+``q`` is the per-cell probability of **presence** (puvspr ``prob``; Marxan's PROB2D),
+the opposite polarity to PROBMODE 2 / Marxan 1D, where the per-PU ``prob`` is a loss
+probability and the held amount is ``amount · (1 − prob)``. ``T_j`` is the resolved
+deterministic target (no MISSLEVEL). Marxan's ``probZUT`` is the Ibbetson polynomial
+(exact 0 / 1 for |z| ≥ 5, within ~1e-9 of ``norm.sf`` below); pymarxan keeps ``norm.sf``.
 
-Penalty per feature is normalised by ptarget (matching Marxan):
+**Zero variance** is ``nonzero_j == 0`` — no selected cell whose variance term, as
+computed in float, is > 0 — never a float threshold on ``V``. The rule is
+``zero_var_rule`` (``PROBZEROVAR`` in input.dat): ``"marxan"`` (``PROBZEROVAR 0``, the
+default) gives Marxan 3's ``Z = 4``, so ``P = probZUT(4) ≈ 3.17e-5`` fails any
+``ptarget`` above that — nothing selected, all ``q`` in {0, 1}; ``"met"``
+(``PROBZEROVAR 1``) counts such a feature as met (pymarxan before v0.47).
 
-    penalty_j = max(0, (ptarget_j − P_j) / ptarget_j)
+Penalty per feature is the Marxan step function normalised by ptarget:
 
-Marxan's ``ComputeProbability2D`` scales the probability shortfall only by
-``PROBABILITYWEIGHTING`` — **not** by SPF (the SPF weighting applies to the
-*representation* penalty, a separate objective term; see
-``score_change.cpp:611``). Features with ``ptarget_j ≤ 0`` are disabled
-(Marxan's sentinel) and contribute 0 regardless of Z.
+    penalty_j = [ptarget_j > P_j] · (ptarget_j − P_j) / ptarget_j
 
-Expected amount uses the PROB2D *presence* convention
-(``ComputeP_AllPUsSelected_2D``: ``ExpectedAmount2D += amount * prob``), i.e.
-``E[T_j] = Σ amount_ij · p_ij`` — the opposite polarity to PROBMODE 2 / Marxan
-1D, where the per-PU ``prob`` is a loss probability and held amount is
-``amount · (1 − prob)``.
+Marxan's ``ComputeProbability2D`` scales the summed penalties only by
+``PROBABILITYWEIGHTING`` — **not** by SPF (SPF weights the separate representation
+penalty). Features with ``ptarget_j ≤ 0`` are disabled (Marxan's −1) and contribute 0.
 
 References
 ----------
@@ -52,8 +55,8 @@ _MARXAN_ZERO_VARIANCE_SENTINEL = 4.0
 
 ZeroVarRule = Literal["marxan", "met"]
 _ZERO_VAR_RULES = ("marxan", "met")
-# The rule used when a caller names none. "met" keeps the pre-v0.47 behaviour.
-DEFAULT_ZERO_VAR_RULE: ZeroVarRule = "met"
+# The rule used when a caller names none: Marxan 3's (PROBZEROVAR 0).
+DEFAULT_ZERO_VAR_RULE: ZeroVarRule = "marxan"
 
 _TERMS = ("2d",)
 

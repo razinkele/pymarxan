@@ -135,7 +135,7 @@ class TestComputeZscorePenaltyZeroVariance:
             compute_zscore_penalty({1: 1.0}, {1: 0.5}, 1.0, frozenset())  # type: ignore[misc]
 
 
-def _two_feature_problem() -> ConservationProblem:
+def _two_feature_problem(**params) -> ConservationProblem:
     """Feature 1 uncertain (q = 0.7), feature 2 certain (q = 1: zero variance)."""
     pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
     feat = pd.DataFrame({
@@ -148,7 +148,7 @@ def _two_feature_problem() -> ConservationProblem:
     })
     return ConservationProblem(
         planning_units=pu, features=feat, pu_vs_features=pv,
-        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 3.0},
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 3.0, **params},
     )
 
 
@@ -165,29 +165,33 @@ class TestEvaluateSolutionChance:
 
     def test_matches_score_feature(self) -> None:
         sel = np.array([True, True])
-        shortfalls, penalty = evaluate_solution_chance(_two_feature_problem(), sel)
+        shortfalls, penalty = evaluate_solution_chance(
+            _two_feature_problem(PROBZEROVAR=1), sel,
+        )
         e, v = 8.0 * 0.7, 2 * 16.0 * 0.7 * 0.3
         f1 = score_feature(e, v, 2, 5.0, 0.9, "met")
         assert shortfalls[1] == pytest.approx(f1.shortfall, abs=1e-15)
-        assert shortfalls[2] == 0.0  # zero variance under today's rule
+        assert shortfalls[2] == 0.0  # zero variance under PROBZEROVAR 1 (met)
         assert penalty == pytest.approx(3.0 * f1.penalty, abs=1e-15)
 
 
 class TestRoutedThroughScoreFeature:
     """The evaluator and the cache both score through the core and its rule."""
 
-    def test_evaluator_honours_the_rule(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import pymarxan.solvers.utils as utils
+    def test_evaluator_honours_the_rule(self) -> None:
+        """Default (PROBZEROVAR 0) is Marxan's Z = 4; PROBZEROVAR 1 is "met".
+
+        Updated (v0.47.0, A4): the A2 version monkeypatched the rule to "marxan" over a
+        "met" default; the rule now comes from PROBZEROVAR.
+        """
+        from pymarxan.solvers.utils import build_solution
 
         sel = np.array([True, True])
-        _, met = evaluate_solution_chance(_two_feature_problem(), sel)
-        monkeypatch.setattr(utils, "_zero_var_rule", lambda problem: "marxan")
+        _, met = evaluate_solution_chance(_two_feature_problem(PROBZEROVAR=1), sel)
         shortfalls, marxan = evaluate_solution_chance(_two_feature_problem(), sel)
         assert shortfalls[2] == pytest.approx(0.8 - SF4)
         assert marxan - met == pytest.approx(3.0 * (0.8 - SF4) / 0.8, abs=1e-12)
         # build_solution's objective goes through the same evaluator
-        from pymarxan.solvers.utils import build_solution
-
         sol = build_solution(_two_feature_problem(), sel, 0.0)
         assert sol.prob_penalty == pytest.approx(marxan, abs=1e-15)
 
@@ -197,8 +201,9 @@ class TestRoutedThroughScoreFeature:
         from pymarxan.solvers.cache import ProblemCache
         from pymarxan.solvers.chance_state import ChanceState
 
-        problem = _two_feature_problem()
+        problem = _two_feature_problem(PROBZEROVAR=1)
         cache = ProblemCache.from_problem(problem)
+        assert cache.zero_var_rule == "met"
         marxan = dataclasses.replace(cache, zero_var_rule="marxan")
         sel = np.array([True, True])
         diff = (

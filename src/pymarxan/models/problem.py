@@ -302,6 +302,16 @@ class ConservationProblem:
                         "probability values must be in range [0, 1]"
                     )
 
+        # --- Parameter validation ---
+        if "PROBZEROVAR" in self.parameters:
+            from pymarxan.solvers.utils import _probzerovar_value
+
+            if _probzerovar_value(self.parameters["PROBZEROVAR"]) is None:
+                errors.append(
+                    "PROBZEROVAR must be 0 (Marxan's zero-variance rule, Z = 4) or 1 "
+                    f"(zero variance counts as met), got {self.parameters['PROBZEROVAR']!r}"
+                )
+
         # --- Connectivity validation ---
         if self.connectivity is not None:
             conn_required = {"id1", "id2", "value"}
