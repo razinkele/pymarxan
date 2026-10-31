@@ -139,6 +139,25 @@ class TestHandExampleAgainstMarxan3:
         )
         assert build_solution(problem, sel, 0.0).prob_penalty == pytest.approx(total, abs=1e-12)
 
+    def test_duplicate_rows_follow_marxan3(self) -> None:
+        """Marxan 3 keeps one sparse-matrix entry per puvspr row (``input.c``
+        ``readSparseMatrix``) and adds them up one by one: a cell named twice is two rows,
+        not the summed amount with the last row's q. Adds f4 at PU 2 again with q = 1 (after
+        its q = 0.2 row) and f1 at PU 1 again with the same q."""
+        problem, sel = hand_example()
+        extra = pd.DataFrame({"species": [4, 1], "pu": [2, 1], "amount": [1.0, 4.0],
+                              "prob": [1.0, 0.8]})
+        problem = problem.copy_with(
+            pu_vs_features=pd.concat([problem.pu_vs_features, extra], ignore_index=True),
+        )
+        _, total_mx = marxan3_probability2d(problem, sel)
+        _, total = evaluate_solution_chance(problem, sel)
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+
     def test_zero_variance_features_pay_marxans_penalty(self) -> None:
         problem, sel = hand_example()
         shortfalls, _ = evaluate_solution_chance(problem, sel)

@@ -119,9 +119,28 @@ def sparse_risk(seed: int, n_pu: int = 400, n_feat: int = 5) -> ConservationProb
     return _problem(pv, n_pu, n_feat, rng, target_frac=(0.3, 0.5))
 
 
+def duplicated(seed: int, n_pu: int = 60, n_feat: int = 4) -> ConservationProblem:
+    """Rows drawn with replacement: many cells are named by 2-3 puvspr rows with different
+    q, some ending on a q = 0 or q = 1 row (Marxan 3 adds the rows up one by one)."""
+    rng = np.random.default_rng(seed)
+    ids = rng.permutation(np.arange(1, n_pu + 1) * 5)
+    k = n_pu * 3
+    pv = pd.DataFrame({
+        "species": rng.integers(1, n_feat + 1, k), "pu": rng.choice(ids, k),
+        "amount": rng.uniform(0.1, 3, k),
+    })
+    q = rng.uniform(0, 1, k)
+    r = rng.random(k)
+    q[r < 0.2] = 0.0
+    q[(r >= 0.2) & (r < 0.35)] = 1.0
+    pv["prob"] = q
+    assert pv.duplicated(["species", "pu"]).sum() > k // 10
+    return _problem(pv, n_pu, n_feat, rng, pu_ids=ids)
+
+
 LAYOUTS = {
     "mixed": mixed, "few_risky": few_risky, "wide_amounts": wide_amounts,
-    "tiny_beside_big": tiny_beside_big, "sparse_risk": sparse_risk,
+    "tiny_beside_big": tiny_beside_big, "sparse_risk": sparse_risk, "duplicated": duplicated,
 }
 
 
@@ -186,7 +205,15 @@ class TestChanceCells:
             np.testing.assert_array_equal(c.c_v[a:b], V[rows, j])
         assert c.c_indptr[-1] == len(c.e)
 
-    def test_duplicate_rows_sum_amounts_and_last_prob_wins(self) -> None:
+    def test_duplicate_rows_add_up_row_by_row(self) -> None:
+        """A cell named by several puvspr rows adds each row's a·q and a²·q(1 − q).
+
+        Marxan 3 keeps one sparse-matrix entry per row (``input.c`` ``readSparseMatrix``)
+        and ``ReturnProbabilityAmounts2D`` adds them one by one, as the evaluator
+        (``_term_moments``) does. Rewritten after the v0.47.0 plan review: the cells put
+        the last row's q on the summed amount (E 2.0, V 6.0 for PU 1 here), so SA / II
+        optimised a different chance term from the one they reported.
+        """
         pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
         feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0],
                              "ptarget": [0.5]})
@@ -196,8 +223,35 @@ class TestChanceCells:
                                       parameters={"PROBMODE": 3})
         cache = ProblemCache.from_problem(problem)
         c = cache.chance_cells["2d"]
-        assert c.e.tolist() == [5.0 * 0.4, 4.0 * 0.5]
-        assert c.v.tolist() == [25.0 * 0.4 * 0.6, 16.0 * 0.5 * 0.5]
+        np.testing.assert_allclose(c.e, [2.0 * 0.1 + 3.0 * 0.4, 4.0 * 0.5], rtol=1e-15)
+        np.testing.assert_allclose(
+            c.v, [4.0 * 0.1 * 0.9 + 9.0 * 0.4 * 0.6, 16.0 * 0.5 * 0.5], rtol=1e-15,
+        )
+        assert c.pos.tolist() == [1, 1]
+
+    def test_a_certain_last_row_keeps_the_cell_uncertain(self) -> None:
+        """Rows (a = 5, q = 0.5) then (a = 1, q = 1) in one cell: V = 6.25, not 0.
+
+        With the last row's q on the summed amount the cell read as zero variance, which
+        under Marxan's rule (Z = 4) charges about the full weighting for a met feature.
+        """
+        pu = pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]})
+        feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [2.0], "spf": [1.0],
+                             "ptarget": [0.5]})
+        pv = pd.DataFrame({"species": [1, 1], "pu": [1, 1], "amount": [5.0, 1.0],
+                           "prob": [0.5, 1.0]})
+        problem = ConservationProblem(
+            planning_units=pu, features=feat, pu_vs_features=pv,
+            parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+        )
+        cache = ProblemCache.from_problem(problem)
+        c = cache.chance_cells["2d"]
+        assert c.e.tolist() == [5.0 * 0.5 + 1.0]
+        assert c.v.tolist() == [25.0 * 0.5 * 0.5]
+        sel = np.array([True])
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            evaluate_solution_chance(problem, sel)[1], abs=1e-12,
+        )
 
     def test_built_only_for_active_terms(self) -> None:
         problem = mixed(3)

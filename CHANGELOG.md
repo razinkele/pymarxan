@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `run_sweep_parallel` passes the whole problem to its workers. It rebuilt the problem
   from five fields, dropping `probability`, `connectivity` and the subclass type, so e.g.
   a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with `run_sweep`.
+- PROBMODE 3 with duplicate `(pu, species)` puvspr rows: simulated annealing and iterative
+  improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as Marxan 3 and the
+  evaluator do. They put the last row's `prob` on the summed amount, so they optimised a
+  different chance term from the one they reported (and a certain last row hid the cell's
+  variance), and could return a plan worse than the reported optimum. This predates
+  v0.47.0: the dense chance matrices used the same rule.
 
 ## [0.46.0] — 2026-10-23
 

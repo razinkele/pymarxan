@@ -935,9 +935,12 @@ def _build_chance_cells_2d(
 ) -> ChanceCells:
     """``ChanceCells`` of the 2D term from the puvspr ``prob`` column (presence ``q``).
 
-    Each CSR cell (duplicate ``(pu, species)`` rows already summed by
-    ``build_pu_feature_csr``) takes the ``prob`` of the last puvspr row naming it; rows
-    with an unknown id are skipped; a cell no row names keeps ``q = 1`` (certain).
+    One cell per ``(pu, species)`` (the CSR of ``build_pu_feature_csr``), holding the sum of
+    its puvspr rows' ``a·q`` and ``a²·q(1 − q)``: Marxan 3 keeps one sparse-matrix entry
+    per row (``input.c`` ``readSparseMatrix``) and adds them one by one
+    (``ReturnProbabilityAmounts2D``), as the evaluator (``_term_moments``) does. A cell's
+    variance is > 0 exactly when one of its rows' is (every term is ≥ 0). Rows with an
+    unknown id are skipped; a cell no row names keeps ``q = 1`` (certain).
     """
     csr = pu_feat_csr
     n_feat = csr.shape[1]
@@ -948,25 +951,25 @@ def _build_chance_cells_2d(
     cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
 
     pv = problem.pu_vs_features
-    q = np.ones(len(amt), dtype=np.float64)
+    e = amt.copy()
+    v = np.zeros(len(amt), dtype=np.float64)
     if len(pv) and len(amt):
         rows = np.fromiter((pu_id_to_idx.get(int(u), -1) for u in pv["pu"].values),
                            np.int64, len(pv))
         cols = np.fromiter((feat_id_to_col.get(int(f), -1) for f in pv["species"].values),
                            np.int64, len(pv))
-        vals = np.asarray(pv["prob"].values, dtype=np.float64)
+        a = np.asarray(pv["amount"].values, dtype=np.float64)
+        q = np.asarray(pv["prob"].values, dtype=np.float64)
         ok = (rows >= 0) & (cols >= 0)
         keys = rows[ok] * n_feat + cols[ok]
-        vals = vals[ok]
-        # Last row wins: keep each key's last occurrence.
-        last = len(keys) - 1 - np.unique(keys[::-1], return_index=True)[1]
-        keys, vals = keys[last], vals[last]
+        a, q = a[ok], q[ok]
         pos = np.searchsorted(cell_key, keys)
         hit = (pos < len(cell_key)) & (cell_key[np.minimum(pos, len(cell_key) - 1)] == keys)
-        q[pos[hit]] = vals[hit]
+        pos, a, q = pos[hit], a[hit], q[hit]
+        e[pos] = 0.0  # named cells are the sums of their rows
+        np.add.at(e, pos, a * q)
+        np.add.at(v, pos, a * a * q * (1.0 - q))  # operand order as in _term_moments
 
-    e = amt * q
-    v = (amt ** 2) * q * (1.0 - q)
     ev = np.vstack([e, v])
     flag = (v > 0).astype(np.int64)
     order = np.lexsort((cell_row, indices))  # feature-major, rows ascending

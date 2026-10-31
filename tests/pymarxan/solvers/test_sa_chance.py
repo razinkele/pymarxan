@@ -16,6 +16,7 @@ import pytest
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.chance_state import ChanceState
 from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
 from pymarxan.solvers.utils import build_solution
@@ -62,6 +63,27 @@ def _keeps_needed_pu_problem() -> ConservationProblem:
     )
 
 
+def _duplicate_rows_problem() -> ConservationProblem:
+    """PU 1 (cost 1) lists the feature twice, (a = 3, q = 1) and (a = 2, q = 0.5); PU 2
+    (cost 3) once, (a = 5, q = 0.95). Target 4, ptarget 0.6, weighting 10.
+
+    Row by row (Marxan 3 and the evaluator) PU 1 alone has E = 4, V = 1, P = 0.5, objective
+    1 + 10·(0.6 − 0.5)/0.6 ≈ 2.667: the optimum. PU 2 alone costs 3.0 (P ≈ 0.75 ≥ 0.6). With
+    the rows merged (summed amount, last q) PU 1 read as E = 2.5, V = 6.25 (≈ 6.43), so SA
+    returned PU 2.
+    """
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 3.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [4.0], "spf": [10.0],
+                         "ptarget": [0.6]})
+    pv = pd.DataFrame({"species": [1, 1, 1], "pu": [1, 1, 2], "amount": [3.0, 2.0, 5.0],
+                       "prob": [1.0, 0.5, 0.95]})
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, "BLM": 0.0,
+                    "NUMITNS": 2000, "NUMTEMP": 20},
+    )
+
+
 def _obj(problem: ConservationProblem, sel: np.ndarray) -> float:
     return build_solution(problem, sel, float(problem.parameters.get("BLM", 0.0))).objective
 
@@ -87,6 +109,21 @@ class TestSimulatedAnnealing:
         for sol in sols:
             assert sol.selected.all()
             assert sol.objective == pytest.approx(4.0)
+
+    def test_duplicate_rows_tracked_as_reported(self) -> None:
+        """Duplicate (pu, species) rows: what SA tracks is what it reports, for every
+        selection, so SA finds the reported optimum (PU 1 alone, ≈ 2.667)."""
+        problem = _duplicate_rows_problem()
+        cache = ProblemCache.from_problem(problem)
+        for sel in itertools.product([False, True], repeat=2):
+            x = np.array(sel)
+            tracked = cache.compute_full_objective(x, cache.compute_held(x), blm=0.0)
+            tracked += ChanceState.from_selection(cache, x).penalty_total()
+            assert tracked == pytest.approx(_obj(problem, x), abs=1e-12)
+        sols = SimulatedAnnealingSolver().solve(problem, SolverConfig(num_solutions=3, seed=7))
+        for sol in sols:
+            assert sol.selected.tolist() == [True, False]
+            assert sol.objective == pytest.approx(1.0 + 10.0 * (0.6 - 0.5) / 0.6)
 
     def test_term_off_without_data_matches_mode_0(self) -> None:
         """Mode 3 with no puvspr `prob`: the term is off (silently, in this release) and SA
