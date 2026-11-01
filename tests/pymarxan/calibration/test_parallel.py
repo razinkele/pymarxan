@@ -1,6 +1,10 @@
 """Tests for parallel sweep execution."""
 from __future__ import annotations
 
+import os
+import time
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -224,6 +228,7 @@ def test_parallel_sweep_applies_point_parameters_on_whole_problem(
     config = SweepConfig(param_dicts=[{"BLM": 0.0}, {"BLM": 5.0}])
     result = run_sweep_parallel(small_problem, _StubSolver(), config, max_workers=2)
     assert result.costs == [10.0, 15.0]
+    assert result.boundaries == [5.0, 5.0]
     assert small_problem.parameters["BLM"] == 99.0
 
 
@@ -250,3 +255,91 @@ def test_parallel_sweep_raises_what_run_sweep_raises():
         run_sweep(problem, HeuristicSolver(), config)
     with pytest.raises(ValueError, match="non-finite"):
         run_sweep_parallel(problem, HeuristicSolver(), config, max_workers=2)
+
+
+# --- v0.47.0 review: the sweep runs in workers and fails fast, in sweep order -------
+
+
+class _PidSolver(_StubSolver):
+    """Records the process each point ran in."""
+
+    def solve(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        sols = super().solve(problem, config)
+        sols[0].metadata = {"pid": os.getpid()}
+        return sols
+
+
+def test_parallel_sweep_runs_points_in_worker_processes(
+    small_problem: ConservationProblem,
+):
+    """The points are solved in worker processes, so the pickling tests above test
+    pickling: a sequential fallback or a thread pool would pass them all."""
+    config = SweepConfig(param_dicts=[{"BLM": 0.0}, {"BLM": 1.0}])
+    result = run_sweep_parallel(small_problem, _PidSolver(), config, max_workers=2)
+    assert len(result.solutions) == 2
+    assert all(s.metadata["pid"] != os.getpid() for s in result.solutions)
+
+
+class _FailFirstSolver(_StubSolver):
+    """Point BLM=0 raises at once; every other point leaves a marker file in
+    MARKER_DIR, then takes a second."""
+
+    def solve(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        blm = problem.parameters["BLM"]
+        if blm == 0.0:
+            raise ValueError("bad sweep point")
+        (Path(problem.parameters["MARKER_DIR"]) / f"{blm:g}").touch()
+        time.sleep(1.0)
+        return super().solve(problem, config)
+
+
+def test_parallel_sweep_cancels_queued_points_after_an_error(
+    small_problem: ConservationProblem, tmp_path: Path,
+):
+    """After a worker's error the points still queued are cancelled, not solved and
+    thrown away. The points already running, or already handed to a worker, still
+    finish, so a few markers appear, never all 19."""
+    config = SweepConfig(
+        param_dicts=[{"BLM": float(b), "MARKER_DIR": str(tmp_path)} for b in range(20)],
+    )
+    with pytest.raises(ValueError, match="bad sweep point"):
+        run_sweep_parallel(small_problem, _FailFirstSolver(), config, max_workers=2)
+    assert len(list(tmp_path.iterdir())) < 19
+
+
+class _TwoErrorsSolver(_StubSolver):
+    """Point BLM=1 (index 1) raises TypeError at once; point BLM=0 (index 0) waits until
+    index 1 has failed, then raises ValueError; other points succeed. No timing: the
+    marker file orders the two errors."""
+
+    def solve(
+        self, problem: ConservationProblem, config: SolverConfig | None = None
+    ) -> list[Solution]:
+        blm = problem.parameters["BLM"]
+        marker = Path(problem.parameters["MARKER_DIR"]) / "index1_failed"
+        if blm == 1.0:
+            marker.touch()
+            raise TypeError("index 1 failed")
+        if blm == 0.0:
+            deadline = time.monotonic() + 60.0
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.5)
+            raise ValueError("index 0 failed")
+        return super().solve(problem, config)
+
+
+def test_parallel_sweep_raises_the_lowest_index_error(
+    small_problem: ConservationProblem, tmp_path: Path,
+):
+    """When several points fail, the caller gets the lowest-index point's error, as from
+    run_sweep, not the error that happened to finish first."""
+    config = SweepConfig(
+        param_dicts=[{"BLM": b, "MARKER_DIR": str(tmp_path)} for b in (0.0, 1.0, 5.0)],
+    )
+    with pytest.raises(ValueError, match="index 0"):
+        run_sweep_parallel(small_problem, _TwoErrorsSolver(), config, max_workers=2)
