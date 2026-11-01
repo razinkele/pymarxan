@@ -1,0 +1,22 @@
+digraph app {
+  graph [rankdir=TB, fontname="DejaVu Sans", fontsize=20, labelloc=t, nodesep=0.3, ranksep=0.32,
+         label=<<b>pymarxan web application — tab workflow</b>>, fontcolor="#1f4d3a", bgcolor="white", pad=0.3];
+  node  [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=11, color="#2f7d5b",
+         fillcolor="#eef6f1", penwidth=1.2, margin="0.16,0.08", width=2.6];
+  edge  [color="#4f6b5d", penwidth=1.2, arrowsize=0.7];
+
+  data  [label="1  Data Input\nupload Marxan project · import GIS · generate grid", fillcolor="#2f7d5b", fontcolor="white"];
+  spat  [label="2  Spatial Data\nGADM boundaries · WDPA protected areas · cost surface"];
+  feat  [label="3  Features\nfeature table · targets · SPF · ptarget"];
+  conn  [label="4  Connectivity\nmatrix input · connectivity metrics"];
+  conf  [label="5  Configure\nsolver · parameters · probability · partial selection · zones"];
+  cal   [label="6  Calibrate\nBLM · target sensitivity · SPF · parameter sweep"];
+  run   [label="7  Run Solver\nruns with progress · solution portfolio", fillcolor="#2f7d5b", fontcolor="white"];
+  maps  [label="8  Maps\nPUs · solution · selection frequency · comparison · network"];
+  res   [label="9  Results\nsummary · target achievement · SA convergence · scenarios"];
+  exp   [label="10  Export\nMarxan files · GeoPackage · Shapefile · CSV"];
+
+  data -> spat -> feat -> conn -> conf -> cal -> run -> maps -> res -> exp;
+  cal -> conf [style=dashed, constraint=false, label=" apply calibrated\n BLM / SPF", fontsize=9, fontname="DejaVu Sans", fontcolor="#4f6b5d"];
+  res -> conf [style=dashed, constraint=false, label=" adjust and\n re-run", fontsize=9, fontname="DejaVu Sans", fontcolor="#4f6b5d"];
+}

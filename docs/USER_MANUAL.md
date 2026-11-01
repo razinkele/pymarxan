@@ -68,6 +68,11 @@ pyMarxan is a Python-based web application for **systematic conservation plannin
 - Visualising results on interactive maps
 - Comparing scenarios and exporting results
 
+The same workflow is available from Python; the diagram shows how data moves through
+pymarxan, from Marxan project files or GIS layers to solutions, analyses and outputs.
+
+![pymarxan core workflow: inputs, problem, preparation, solvers, results](images/pymarxan_workflow.svg)
+
 ### What is Marxan?
 
 Marxan is the world's most widely used conservation planning software. It solves the **minimum set problem**: find the smallest-cost set of planning units that meets all conservation feature targets while optionally promoting spatial compactness (via the Boundary Length Modifier).
@@ -121,7 +126,11 @@ The application opens in your browser at `http://localhost:8000`.
 
 ## Application Overview
 
-The application is organised into tabs along the top navigation bar:
+The application is organised into tabs along the top navigation bar. A typical session
+moves through them in order, returning to **Configure** after calibration or to adjust a
+run:
+
+![The web application's tab workflow](images/pymarxan_app_workflow.svg)
 
 | Tab | Purpose |
 |-----|---------|

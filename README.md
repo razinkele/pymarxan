@@ -63,6 +63,8 @@ Then open http://localhost:8000 in your browser.
 
 ## Architecture
 
+![pymarxan core workflow: inputs, problem, preparation, solvers, results](docs/images/pymarxan_workflow.svg)
+
 ```
 pymarxan (three-layer monorepo)
 ├── src/pymarxan/          Core library: models, solvers, I/O, calibration, analysis

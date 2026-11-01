@@ -39,3 +39,9 @@ nav.toc ul ul { margin-left: 14pt; font: normal 9pt "DejaVu Serif"; }
 nav.toc ul ul li { margin: 1pt 0; }
 nav.toc a { color: #1d2a24; }
 nav.toc a::after { content: leader('.') target-counter(attr(href), page); color: #6b7a72; }
+@page wide { size: A4 landscape; margin: 14mm 14mm 14mm 14mm; }
+.landscape { page: wide; }
+.landscape figure { margin: 0; }
+.landscape img { width: 100%; max-height: 170mm; }
+figure { margin: 8pt 0; text-align: center; }
+figcaption { font: italic 8.5pt "DejaVu Sans"; color: #5b6f64; margin-top: 3pt; }

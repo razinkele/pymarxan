@@ -196,6 +196,12 @@ toc = re.search(r'(?s)<nav id="TOC"[^>]*>(.*?)</nav>', full).group(1)
 body = re.search(r'(?s)<body>(.*)</body>', full).group(1)
 body = re.sub(r'(?s)<header id="title-block-header">.*?</header>', '', body)
 body = re.sub(r'(?s)<nav id="TOC"[^>]*>.*?</nav>', '', body)
+# Wide diagrams get their own landscape page (book.css: .landscape / @page wide).
+body = re.sub(
+    r'(?s)(<p><img[^>]*pymarxan_workflow\.svg[^>]*></p>|<figure>\s*<img[^>]*pymarxan_workflow\.svg[^>]*>.*?</figure>)',
+    r'<div class="landscape">\1</div>',
+    body,
+)
 
 css = (Path(__file__).parent / "book.css").read_text()
 title = f"""

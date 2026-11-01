@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 840" width="1600" height="840" font-family="DejaVu Sans, Arial, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5b6f64"/></marker></defs>
+<rect width="1600" height="840" fill="white"/>
+<text x="800.0" y="44.0" font-size="26" fill="#1f4d3a" font-weight="bold" text-anchor="middle">pymarxan — core workflow</text>
+<text x="800.0" y="72.0" font-size="14" fill="#5b6f64" font-weight="normal" text-anchor="middle">Marxan-compatible data in, exact or heuristic solutions out, with analysis and reporting</text>
+<rect x="50" y="118" width="276" height="662" rx="14" fill="#f6faf7" stroke="#9cc5ae" stroke-width="1.2"/>
+<text x="188.0" y="146.0" font-size="16" fill="#1f4d3a" font-weight="bold" text-anchor="middle">1  Inputs</text>
+<rect x="62" y="259.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="188.0" y="280.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Marxan project</text>
+<text x="188.0" y="296.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">input.dat · pu.dat · spec.dat</text>
+<text x="188.0" y="312.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">puvspr.dat · bound.dat</text>
+<rect x="62" y="347.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="188.0" y="368.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Marxan with Zones</text>
+<text x="188.0" y="384.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">zones · zone costs</text>
+<text x="188.0" y="400.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">contributions · targets</text>
+<rect x="62" y="435.0" width="252" height="90" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="188.0" y="456.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">GIS layers</text>
+<text x="188.0" y="472.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">vector planning units</text>
+<text x="188.0" y="488.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">rasters (from_rasters)</text>
+<text x="188.0" y="504.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">square / hex grids</text>
+<rect x="62" y="539.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="188.0" y="560.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Spatial data</text>
+<text x="188.0" y="576.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">GADM · WDPA</text>
+<text x="188.0" y="592.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">cost surfaces</text>
+<rect x="62" y="627.0" width="252" height="58" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="188.0" y="648.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">River networks</text>
+<text x="188.0" y="664.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">HydroRIVERS · barriers</text>
+<rect x="356" y="118" width="276" height="662" rx="14" fill="#f6faf7" stroke="#9cc5ae" stroke-width="1.2"/>
+<text x="494.0" y="146.0" font-size="16" fill="#1f4d3a" font-weight="bold" text-anchor="middle">2  Problem</text>
+<rect x="368" y="295.0" width="252" height="106" rx="9" fill="#2f7d5b" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="494.0" y="316.0" font-size="14" fill="white" font-weight="bold" text-anchor="middle">ConservationProblem</text>
+<text x="494.0" y="332.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">planning units · features</text>
+<text x="494.0" y="348.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">amounts · boundary</text>
+<text x="494.0" y="364.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">probability · connectivity</text>
+<text x="494.0" y="380.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">parameters (BLM, SPF, …)</text>
+<rect x="368" y="415.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="494.0" y="436.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">ZonalProblem</text>
+<text x="494.0" y="452.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">zones · costs · targets</text>
+<text x="494.0" y="468.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">→ zone solvers</text>
+<rect x="368" y="503.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="494.0" y="524.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">RiverNetwork</text>
+<text x="494.0" y="540.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">segments · barriers</text>
+<text x="494.0" y="556.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">→ barrier optimisation</text>
+<rect x="368" y="591.0" width="252" height="58" rx="9" fill="#fff6e5" stroke="#c9932e" stroke-width="1.4"/>
+<text x="494.0" y="612.0" font-size="14" fill="#7a5512" font-weight="bold" text-anchor="middle">validate() · presolve</text>
+<text x="494.0" y="628.0" font-size="11.5" fill="#7a5512" font-weight="normal" text-anchor="middle">errors before solving</text>
+<rect x="662" y="118" width="276" height="662" rx="14" fill="#f6faf7" stroke="#9cc5ae" stroke-width="1.2"/>
+<text x="800.0" y="146.0" font-size="16" fill="#1f4d3a" font-weight="bold" text-anchor="middle">3  Prepare</text>
+<rect x="674" y="259.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="800.0" y="280.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Targets</text>
+<text x="800.0" y="296.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">absolute · relative</text>
+<text x="800.0" y="312.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">published methods</text>
+<rect x="674" y="347.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="800.0" y="368.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Connectivity</text>
+<text x="800.0" y="384.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">metrics · circuit theory</text>
+<text x="800.0" y="400.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">penalties</text>
+<rect x="674" y="435.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="800.0" y="456.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Constraints</text>
+<text x="800.0" y="472.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">locks · contiguity</text>
+<text x="800.0" y="488.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">budget · linear</text>
+<rect x="674" y="523.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="800.0" y="544.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Probability</text>
+<text x="800.0" y="560.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">PROBMODE 1–3</text>
+<text x="800.0" y="576.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">PROBZEROVAR</text>
+<rect x="674" y="611.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="800.0" y="632.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Calibration</text>
+<text x="800.0" y="648.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">BLM / SPF sweeps</text>
+<text x="800.0" y="664.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">sensitivity</text>
+<rect x="968" y="118" width="276" height="662" rx="14" fill="#f6faf7" stroke="#9cc5ae" stroke-width="1.2"/>
+<text x="1106.0" y="146.0" font-size="16" fill="#1f4d3a" font-weight="bold" text-anchor="middle">4  Solve</text>
+<rect x="980" y="215.0" width="252" height="90" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1106.0" y="236.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Exact MIP</text>
+<text x="1106.0" y="252.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">CBC · HiGHS · Gurobi</text>
+<text x="1106.0" y="268.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">min-set · coverage · shortfall</text>
+<text x="1106.0" y="284.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">multi-objective</text>
+<rect x="980" y="319.0" width="252" height="90" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1106.0" y="340.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Marxan heuristics</text>
+<text x="1106.0" y="356.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">simulated annealing</text>
+<text x="1106.0" y="372.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">greedy · iterative improvement</text>
+<text x="1106.0" y="388.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">RUNMODE pipelines</text>
+<rect x="980" y="423.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1106.0" y="444.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Zone solvers</text>
+<text x="1106.0" y="460.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">SA · heuristic · II · MIP</text>
+<text x="1106.0" y="476.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">for ZonalProblem</text>
+<rect x="980" y="511.0" width="252" height="58" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1106.0" y="532.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Zonation ranking</text>
+<text x="1106.0" y="548.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">CAZ / ABF priority maps</text>
+<rect x="980" y="583.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1106.0" y="604.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Barrier optimisation</text>
+<text x="1106.0" y="620.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">greedy · SA · MIP (DCI)</text>
+<text x="1106.0" y="636.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">for RiverNetwork</text>
+<rect x="980" y="671.0" width="252" height="58" rx="9" fill="white" stroke="#2f7d5b" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="1106.0" y="692.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Marxan C++ binary</text>
+<text x="1106.0" y="708.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">optional</text>
+<rect x="1274" y="118" width="276" height="662" rx="14" fill="#f6faf7" stroke="#9cc5ae" stroke-width="1.2"/>
+<text x="1412.0" y="146.0" font-size="16" fill="#1f4d3a" font-weight="bold" text-anchor="middle">5  Results</text>
+<rect x="1286" y="287.0" width="252" height="90" rx="9" fill="#2f7d5b" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1412.0" y="308.0" font-size="14" fill="white" font-weight="bold" text-anchor="middle">list[Solution]</text>
+<text x="1412.0" y="324.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">selection · cost · boundary</text>
+<text x="1412.0" y="340.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">objective · targets met</text>
+<text x="1412.0" y="356.0" font-size="11.5" fill="#e6f2eb" font-weight="normal" text-anchor="middle">chance penalty</text>
+<rect x="1286" y="391.0" width="252" height="90" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1412.0" y="412.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Analysis</text>
+<text x="1412.0" y="428.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">selection frequency</text>
+<text x="1412.0" y="444.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">portfolios · replacement cost</text>
+<text x="1412.0" y="460.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">rank importance · gaps</text>
+<rect x="1286" y="495.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1412.0" y="516.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Modern planning</text>
+<text x="1412.0" y="532.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">30×30 representation</text>
+<text x="1412.0" y="548.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">equity · robustness</text>
+<rect x="1286" y="583.0" width="252" height="74" rx="9" fill="#eef6f1" stroke="#2f7d5b" stroke-width="1.4"/>
+<text x="1412.0" y="604.0" font-size="14" fill="#1f4d3a" font-weight="bold" text-anchor="middle">Outputs</text>
+<text x="1412.0" y="620.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">Marxan files (best, mvbest)</text>
+<text x="1412.0" y="636.0" font-size="11.5" fill="#1d2a24" font-weight="normal" text-anchor="middle">GeoPackage · Shapefile · maps</text>
+<path d="M314.0,296.0 C340.0,296.0 340.0,348.0 366.0,348.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M314.0,480.0 C340.0,480.0 340.0,348.0 366.0,348.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M314.0,576.0 C340.0,576.0 340.0,348.0 366.0,348.0" fill="none" stroke="#5b6f64" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<path d="M314.0,384.0 C340.0,384.0 340.0,452.0 366.0,452.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M314.0,656.0 C340.0,656.0 340.0,540.0 366.0,540.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M620.0,348.0 C646.0,348.0 646.0,296.0 672.0,296.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M620.0,348.0 C646.0,348.0 646.0,384.0 672.0,384.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M620.0,348.0 C646.0,348.0 646.0,472.0 672.0,472.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M620.0,348.0 C646.0,348.0 646.0,560.0 672.0,560.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M620.0,348.0 C646.0,348.0 646.0,648.0 672.0,648.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M926.0,296.0 C952.0,296.0 952.0,260.0 978.0,260.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M926.0,472.0 C952.0,472.0 952.0,260.0 978.0,260.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M926.0,384.0 C952.0,384.0 952.0,364.0 978.0,364.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M926.0,560.0 C952.0,560.0 952.0,364.0 978.0,364.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M926.0,648.0 C952.0,648.0 952.0,364.0 978.0,364.0" fill="none" stroke="#5b6f64" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<path d="M1232.0,260.0 C1258.0,260.0 1258.0,332.0 1284.0,332.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M1232.0,364.0 C1258.0,364.0 1258.0,332.0 1284.0,332.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M1232.0,460.0 C1258.0,460.0 1258.0,332.0 1284.0,332.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M1232.0,540.0 C1258.0,540.0 1258.0,332.0 1284.0,332.0" fill="none" stroke="#5b6f64" stroke-width="1.6" marker-end="url(#arr)"/>
+<path d="M1232.0,700.0 C1258.0,700.0 1258.0,332.0 1284.0,332.0" fill="none" stroke="#5b6f64" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<path d="M1538,332.0 L1547,332.0 L1547,436.0 L1540,436.0" fill="none" stroke="#5b6f64" stroke-width="1.4" marker-end="url(#arr)"/>
+<path d="M1538,332.0 L1547,332.0 L1547,532.0 L1540,532.0" fill="none" stroke="#5b6f64" stroke-width="1.4" marker-end="url(#arr)"/>
+<path d="M1538,332.0 L1547,332.0 L1547,620.0 L1540,620.0" fill="none" stroke="#5b6f64" stroke-width="1.4" marker-end="url(#arr)"/>
+<path d="M1412.0,657.0 L1412.0,806 L40,806 L40,277.0 L60,277.0" fill="none" stroke="#2f7d5b" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+<text x="800.0" y="798.0" font-size="12" fill="#2f7d5b" font-weight="normal" text-anchor="middle">save_project: results and edited projects round-trip to Marxan&#x27;s file format</text>
+<text x="1576.0" y="830.0" font-size="11" fill="#c9932e" font-weight="normal" text-anchor="end">Validation anchor: the MIP reaches the hand-verified optimum 35.0 on tests/data/simple; heuristics never report less.</text>
+</svg>
