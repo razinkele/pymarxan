@@ -1,0 +1,41 @@
+@page { size: A4; margin: 22mm 18mm 20mm 18mm;
+  @top-left { content: "pymarxan documentation"; font: 8pt "DejaVu Sans"; color: #6b7a72; }
+  @top-right { content: string(chapter); font: 8pt "DejaVu Sans"; color: #6b7a72; }
+  @bottom-center { content: counter(page); font: 8pt "DejaVu Sans"; color: #6b7a72; } }
+@page :first { margin: 0; @top-left { content: none } @top-right { content: none } @bottom-center { content: none } }
+body { font: 9.6pt/1.45 "DejaVu Serif", Georgia, serif; color: #1d2a24; }
+h1, h2, h3, h4 { font-family: "DejaVu Sans", Arial, sans-serif; color: #1f4d3a; line-height: 1.2; }
+h1 { font-size: 21pt; page-break-before: always; string-set: chapter content(text);
+     border-bottom: 2.5pt solid #2f7d5b; padding-bottom: 5pt; margin: 0 0 14pt; }
+h2 { font-size: 13.5pt; margin: 18pt 0 6pt; page-break-after: avoid; }
+h3 { font-size: 11pt; margin: 12pt 0 4pt; page-break-after: avoid; }
+h4 { font-size: 10pt; margin: 10pt 0 3pt; page-break-after: avoid; }
+.header-section-number { color: #2f7d5b; margin-right: 6pt; }
+p { margin: 0 0 6pt; text-align: justify; hyphens: auto; }
+a { color: #1f6f8b; text-decoration: none; }
+code { font: 8.4pt "DejaVu Sans Mono", monospace; background: #eef4f0; padding: 0 2pt; border-radius: 2pt; }
+pre { background: #f3f7f4; border-left: 3pt solid #2f7d5b; padding: 6pt 8pt; font-size: 7.9pt;
+      line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 7.9pt; }
+table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 8.3pt; page-break-inside: auto; }
+th { background: #2f7d5b; color: white; text-align: left; padding: 3pt 5pt; font-family: "DejaVu Sans"; }
+td { border-bottom: 0.5pt solid #c9d8cf; padding: 3pt 5pt; vertical-align: top; }
+tr { page-break-inside: avoid; }
+blockquote { border-left: 3pt solid #9cc5ae; margin: 6pt 0; padding: 2pt 10pt; color: #3c4d44; background: #f6faf7; }
+img { max-width: 100%; display: block; margin: 8pt auto; }
+ul, ol { margin: 0 0 6pt 16pt; padding: 0; }
+li { margin: 1.5pt 0; }
+.titlepage { page: first; height: 297mm; padding: 70mm 22mm 0; box-sizing: border-box;
+  background: linear-gradient(160deg, #1f4d3a 0%, #2f7d5b 55%, #7fb59a 100%); color: white; }
+.tp-kicker { font: 11pt "DejaVu Sans"; letter-spacing: 2pt; text-transform: uppercase; opacity: .85; }
+.tp-title { font: bold 54pt "DejaVu Sans"; color: white; border: none; margin: 6pt 0 4pt; page-break-before: avoid; string-set: none; }
+.tp-sub { font: 16pt "DejaVu Sans"; margin-bottom: 26pt; }
+.tp-desc { font: 11pt/1.55 "DejaVu Serif"; max-width: 135mm; margin-bottom: 40pt; }
+.tp-meta { font: 9pt "DejaVu Sans"; opacity: .85; }
+.toc-page .toc-title { page-break-before: always; }
+nav.toc ul { list-style: none; margin: 0; padding: 0; }
+nav.toc > ul > li { margin-top: 7pt; font: bold 10.5pt "DejaVu Sans"; }
+nav.toc ul ul { margin-left: 14pt; font: normal 9pt "DejaVu Serif"; }
+nav.toc ul ul li { margin: 1pt 0; }
+nav.toc a { color: #1d2a24; }
+nav.toc a::after { content: leader('.') target-counter(attr(href), page); color: #6b7a72; }
