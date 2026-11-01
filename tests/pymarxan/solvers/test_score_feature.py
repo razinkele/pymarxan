@@ -61,8 +61,10 @@ class TestScoreFeature:
         assert fc.penalty == pytest.approx((0.95 - SF4) / 0.95)
 
     def test_zero_variance_met_rule(self) -> None:
+        """Under "met" the feature reports p = 1 (certain); z still holds Marxan's 4."""
         fc = score_feature(5.0, 0.0, 0, 10.0, 0.95, "met")
         assert fc.penalty == 0.0 and fc.shortfall == 0.0
+        assert fc.p == 1.0 and fc.z == 4.0
 
     def test_zero_variance_marxan_rule_with_tiny_ptarget(self) -> None:
         """ptarget below sf(4): even the Z = 4 rule is met."""
@@ -70,11 +72,17 @@ class TestScoreFeature:
         assert fc.penalty == 0.0 and fc.shortfall == 0.0
 
     def test_classification_uses_the_count_not_the_value(self) -> None:
-        """A tiny positive variance with nonzero > 0 is NOT zero variance."""
+        """A tiny positive variance with nonzero > 0 is NOT zero variance, and nonzero == 0
+        IS zero variance even beside a positive V (the count decides, not V > 0 alone)."""
         fc = score_feature(10.0, 1e-30, 1, 10.0, 0.95, "met")
         assert fc.z == 0.0
         assert fc.p == pytest.approx(0.5)
         assert fc.penalty == pytest.approx((0.95 - 0.5) / 0.95)
+        counted_zero = score_feature(10.0, 4.0, 0, 10.0, 0.95, "marxan")
+        assert counted_zero.z == 4.0  # V > 0 alone would give Z = 0
+        assert counted_zero.p == pytest.approx(SF4, abs=1e-18)
+        met = score_feature(10.0, 4.0, 0, 10.0, 0.95, "met")
+        assert (met.p, met.shortfall, met.penalty) == (1.0, 0.0, 0.0)
 
     @pytest.mark.parametrize("V", [-23.0, 0.0, float("nan")])
     def test_no_positive_variance_is_zero_variance(self, V: float) -> None:
@@ -232,9 +240,15 @@ class TestRoutedThroughScoreFeature:
         shortfalls, marxan = evaluate_solution_chance(_two_feature_problem(), sel)
         assert shortfalls[2] == pytest.approx(0.8 - SF4)
         assert marxan - met == pytest.approx(3.0 * (0.8 - SF4) / 0.8, abs=1e-12)
-        # build_solution's objective goes through the same evaluator
-        sol = build_solution(_two_feature_problem(), sel, 0.0)
-        assert sol.prob_penalty == pytest.approx(marxan, abs=1e-15)
+        # build_solution's prob_penalty and its objective (compute_objective_terms →
+        # _compute_probmode3_zscore_penalty, a separate path) both follow the rule: an
+        # objective path that kept its own E/V loop scored Z = 4 under "met" too.
+        for params, expected in (({}, marxan), ({"PROBZEROVAR": 1}, met)):
+            sol = build_solution(_two_feature_problem(**params), sel, 0.0)
+            assert sol.prob_penalty == pytest.approx(expected, abs=1e-15)
+            assert sol.objective == pytest.approx(
+                sol.cost + sol.penalty + sol.prob_penalty, abs=1e-12,
+            )
 
     def test_cache_honours_the_rule(self) -> None:
         """The solvers' chance term (``ChanceState`` over the cache, v0.47.0) follows the

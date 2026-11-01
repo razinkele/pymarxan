@@ -17,6 +17,7 @@ import copy
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import sparse
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.cache import ProblemCache
@@ -100,12 +101,26 @@ class TestProbmode3CacheFields:
             assert cells.v[k] == pytest.approx(amount ** 2 * prob * (1.0 - prob))
             assert cells.pos[k] == int(cells.v[k] > 0)
 
-    def test_dense_chance_matrices_are_gone(self):
-        """The dense (n_pu, n_feat) expected / variance matrices were removed (v0.47.0)."""
+    def test_dense_chance_matrices_are_gone(self, monkeypatch):
+        """The dense (n_pu, n_feat) expected / variance matrices were removed (v0.47.0),
+        and building a mode-3 cache densifies nothing.
+
+        v0.47.0 plan review: the ``pu_feat_matrix`` check alone held before the change
+        too (the old build densified through a local ``toarray()``, not the cached
+        property), so every sparse-to-dense conversion now raises during the build.
+        """
+        def refuse(self, *args, **kwargs):
+            raise AssertionError("ProblemCache.from_problem densified a sparse matrix")
+
+        for cls in (sparse.csr_matrix, sparse.csc_matrix, sparse.coo_matrix,
+                    sparse.csr_array, sparse.csc_array, sparse.coo_array):
+            monkeypatch.setattr(cls, "toarray", refuse)
+            monkeypatch.setattr(cls, "todense", refuse)
         cache = ProblemCache.from_problem(_make_probmode3_problem())
+        assert cache.chance_terms == frozenset({"2d"})
         assert not hasattr(cache, "expected_matrix")
         assert not hasattr(cache, "var_matrix")
-        assert "pu_feat_matrix" not in cache.__dict__  # mode 3 no longer densifies
+        assert "pu_feat_matrix" not in cache.__dict__
 
     def test_feat_ptarget_stored(self):
         problem = _make_probmode3_problem()
@@ -137,8 +152,9 @@ class TestProbmode3CacheFields:
 
 
 class TestProbmode3FullObjective:
-    """compute_full_objective adds the PROBMODE 3 penalty on top of
-    the deterministic objective."""
+    """compute_full_objective excludes the PROBMODE 3 chance term (v0.47.0): it equals
+    the deterministic objective, and ``ChanceState.penalty_total()`` on top of it gives
+    the reported (``build_solution``) objective."""
 
     def test_full_objective_plus_chance_state_is_the_evaluator_objective(self):
         """The cache's full objective excludes the chance term; adding
@@ -165,22 +181,34 @@ class TestProbmode3FullObjective:
             assert obj_3 + chance == pytest.approx(reported.objective, abs=1e-9)
 
     def test_full_objective_disabled_ptarget_no_penalty(self):
-        """When every feature has ptarget=-1, PROBMODE 3 contributes 0."""
+        """When every feature has ptarget=-1, PROBMODE 3 contributes 0: the ChanceState
+        penalty and the reported ``prob_penalty`` are 0, and the objective is mode 0's.
+
+        Rewritten (v0.47.0 plan review): the old body compared only the cache's full
+        objectives, which exclude the chance term at every ptarget, so it held at 0.95
+        too. The same selection at the fixture's ptargets (0.95 / 0.80) must pay.
+        """
         problem = _make_probmode3_problem(num_pus=4, seed=7)
         features = problem.features.copy()
         features["ptarget"] = -1.0
-        problem = problem.copy_with(features=features)
-        cache = ProblemCache.from_problem(problem)
+        disabled = problem.copy_with(features=features)
         selected = np.array([True, True, False, False])
-        held = cache.compute_held(selected)
+        det = build_solution(
+            disabled.copy_with(parameters={**disabled.parameters, "PROBMODE": 0}),
+            selected, 0.0,
+        )
 
-        problem_det = copy.deepcopy(problem)
-        problem_det.parameters["PROBMODE"] = 0
-        cache_det = ProblemCache.from_problem(problem_det)
+        cache = ProblemCache.from_problem(disabled)
+        assert ChanceState.from_selection(cache, selected).penalty_total() == 0.0
+        sol = build_solution(disabled, selected, 0.0)
+        assert sol.prob_penalty == 0.0
+        assert sol.objective == pytest.approx(det.objective, abs=1e-12)
 
-        obj_3 = cache.compute_full_objective(selected, held, blm=0.0)
-        obj_0 = cache_det.compute_full_objective(selected, held, blm=0.0)
-        assert obj_3 == pytest.approx(obj_0, abs=1e-9)
+        enabled_cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(enabled_cache, selected).penalty_total() > 0.1
+        enabled = build_solution(problem, selected, 0.0)
+        assert enabled.prob_penalty is not None and enabled.prob_penalty > 0.1
+        assert enabled.objective > det.objective + 0.1
 
 
 class TestProbmode3Delta:

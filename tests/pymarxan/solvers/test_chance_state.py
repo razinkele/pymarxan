@@ -611,10 +611,14 @@ def test_adds_from_a_selection_without_chance_cells_track_a_fresh_state(start: s
 
 
 def test_sparse_risk_recompute_floor() -> None:
-    """The 64·eps·|E| floor: mostly-certain features do not recompute on every touch."""
-    cs, *_ = _run(sparse_risk(0, n_pu=2000, n_feat=5), "marxan", seed=3, flips=3000,
-                  accept=0.6)
+    """The 64·eps·|E| floor: mostly-certain features do not recompute on every touch,
+    and skipping those recomputes keeps the delta contract (3000 more delta-checked
+    flips on the sparse-risk layout; the plan review found the run discarded both)."""
+    cs, _, worst, drift = _run(sparse_risk(0, n_pu=2000, n_feat=5), "marxan", seed=3,
+                               flips=3000, accept=0.6)
     assert cs.n_recompute < 300  # without the floor: ~one per touched feature per flip
+    assert worst <= TOL
+    assert drift <= 1e-8
 
 
 def test_tiny_probability_has_variance() -> None:

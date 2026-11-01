@@ -89,3 +89,22 @@ def test_solution_fields_follow_active_terms() -> None:
     assert on.prob_shortfalls is not None and on.prob_penalty is not None
     off = build_solution(_problem({"PROBMODE": 3}, prob_column=False), sel, 0.0)
     assert off.prob_shortfalls is None and off.prob_penalty is None
+
+
+def test_mip_records_the_strategy_for_a_requested_term_without_data() -> None:
+    """``MIPSolver.solve`` gates ``mip_chance_strategy`` on the *requested* terms: mode 3
+    without a puvspr ``prob`` column still records it, while the Solution's chance fields
+    follow the *active* terms (None). Mode 0 requests nothing and records nothing.
+
+    v0.47.0 plan review: only MultiObjectiveMIP's gate was pinned for this case; a
+    MIPSolver recording the strategy only for an active term passed everything.
+    """
+    from pymarxan.solvers.base import SolverConfig
+    from pymarxan.solvers.mip_solver import MIPSolver
+
+    config = SolverConfig(num_solutions=1)
+    sol = MIPSolver().solve(_problem({"PROBMODE": 3}, prob_column=False), config)[0]
+    assert sol.metadata["mip_chance_strategy"] == "drop"
+    assert sol.prob_shortfalls is None and sol.prob_penalty is None
+    det = MIPSolver().solve(_problem({"PROBMODE": 0}, prob_column=False), config)[0]
+    assert "mip_chance_strategy" not in det.metadata

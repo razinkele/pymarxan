@@ -98,7 +98,7 @@ def marxan3_probability2d(problem: ConservationProblem, selected: np.ndarray):
 def hand_example(**params) -> tuple[ConservationProblem, np.ndarray]:
     """PUs 1-3 selected, PU 4 not.
 
-    f1: q ≠ 0.5, E = 7.4 > target 5 (negative Z), ptarget 0.95.
+    f1: q ≠ 0.5, E = 6.9 > target 5 (negative Z, P ≈ 0.80), ptarget 0.95.
     f2: only q = 1 cells selected → zero variance, ptarget 0.6 > probZUT(4).
     f3: unselected (its only cell is in PU 4) → zero variance, ptarget 0.3.
     f4: E = 3.4 < target 6 (positive Z), ptarget 0.8.
@@ -164,6 +164,58 @@ class TestHandExampleAgainstMarxan3:
         assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
         cache = ProblemCache.from_problem(problem)
         assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+
+    def test_met_chance_target_follows_marxan3(self) -> None:
+        """Marxan 3's Heaviside 0 (``ptarget2d > rProbability`` false): f1 at ptarget 0.7
+        is met (P ≈ 0.80) and pays nothing. A separate case: lowering f1's ptarget in
+        ``hand_example`` itself would leave f1's duplicate row in
+        ``test_duplicate_rows_follow_marxan3`` met however the rows are added up."""
+        base, sel = hand_example()
+        feat = base.features.copy()
+        feat.loc[feat["id"] == 1, "ptarget"] = 0.7
+        problem = base.copy_with(features=feat)
+        P_mx, total_mx = marxan3_probability2d(problem, sel)
+        assert 0.7 < P_mx[0] < 0.95  # met at 0.7, not at hand_example's 0.95
+        shortfalls, total = evaluate_solution_chance(problem, sel)
+        assert shortfalls[1] == 0.0
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        _, base_total = evaluate_solution_chance(base, sel)
+        assert base_total - total == pytest.approx(7.0 * (0.95 - P_mx[0]) / 0.95, abs=1e-5)
+        cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+
+    def test_z_uses_the_raw_target_under_misslevel(self) -> None:
+        """Spec §4: MISSLEVEL ≠ 1 does not change Z (Marxan's ``spec.target``), in the
+        evaluator, ``ChanceState`` (fresh and per flip) and ``build_solution``. Folding
+        MISSLEVEL into the cache's targets would move the solvers' Z but not the
+        evaluator's."""
+        base, sel = hand_example()
+        problem, _ = hand_example(MISSLEVEL=0.5)
+        P_mx, total_mx = marxan3_probability2d(problem, sel)
+        ids = problem.features["id"].values
+        _, p, _, _ = score_features(
+            *_term_moments(problem, sel, "2d", ids), problem.features["target"].values,
+            problem.features["ptarget"].values, _zero_var_rule(problem),
+        )
+        np.testing.assert_allclose(p, P_mx, rtol=0, atol=1e-6)
+        assert evaluate_solution_chance(problem, sel) == evaluate_solution_chance(base, sel)
+        _, total = evaluate_solution_chance(problem, sel)
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        cache, base_cache = ProblemCache.from_problem(problem), ProblemCache.from_problem(base)
+        assert cache.misslevel == 0.5
+        cs, base_cs = ChanceState.from_selection(cache, sel), ChanceState.from_selection(
+            base_cache, sel,
+        )
+        assert cs.penalty_total() == pytest.approx(total, abs=1e-12)
+        for idx in range(cache.n_pu):
+            assert cs.delta_penalty(cache, idx, not sel[idx]) == pytest.approx(
+                base_cs.delta_penalty(base_cache, idx, not sel[idx]), abs=1e-12,
+            )
+        assert build_solution(problem, sel, 0.0).prob_penalty == pytest.approx(
             total, abs=1e-12,
         )
 
