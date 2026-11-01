@@ -80,3 +80,23 @@ class TestAddConnectivityFeatures:
         assert new_problem.n_features == problem.n_features + 1
         assert new_problem.parameters == problem.parameters
         assert new_problem.parameters is not problem.parameters
+
+    def test_synthetic_rows_are_certain_under_a_prob_column(self):
+        """A connectivity metric is deterministic: when puvspr has a ``prob`` column, the
+        added rows get prob 1.0, not NaN, which PROBMODE 3's finite-cell check rejects."""
+        from pymarxan.solvers.cache import ProblemCache
+
+        base = load_project(DATA_DIR)
+        puvspr = base.pu_vs_features.assign(prob=0.9)
+        problem = base.copy_with(
+            pu_vs_features=puvspr, parameters={**base.parameters, "PROBMODE": 3},
+        )
+        new_problem = add_connectivity_features(
+            problem,
+            metrics={"deg": np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])},
+            targets={"deg": 0.0},
+        )
+        added = new_problem.pu_vs_features.iloc[len(puvspr):]
+        assert len(added) == 6
+        assert (added["prob"] == 1.0).all()
+        ProblemCache.from_problem(new_problem)  # raised ValueError on NaN prob

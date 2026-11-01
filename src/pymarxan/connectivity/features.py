@@ -59,6 +59,9 @@ def add_connectivity_features(
         puvspr_rows = metric_to_feature(
             pu_ids, values, fid, threshold=threshold,
         )
+        if "prob" in new_puvspr.columns:
+            # The metric is deterministic; NaN would fail PROBMODE 3's finite-cell check.
+            puvspr_rows["prob"] = 1.0
         new_puvspr = pd.concat(
             [new_puvspr, puvspr_rows], ignore_index=True,
         )
