@@ -209,6 +209,14 @@ class TestChanceCells:
             np.testing.assert_array_equal(c.c_v[a:b], V[rows, j])
         assert c.c_indptr[-1] == len(c.e)
 
+    def test_csc_rows_are_contiguous(self) -> None:
+        """``c_e`` and ``c_v`` are contiguous rows, so the recompute's ``bincount`` reads
+        them in place. v0.47.0 review: ``ev[:, order]`` came out F-ordered (strides
+        (8, 16)), and every recompute copied the column's strided slice."""
+        c = ProblemCache.from_problem(mixed(2)).chance_cells["2d"]
+        assert c.c_ev.flags.c_contiguous
+        assert c.c_e.flags.c_contiguous and c.c_v.flags.c_contiguous
+
     def test_duplicate_rows_add_up_row_by_row(self) -> None:
         """A cell named by several puvspr rows adds each row's a·q and a²·q(1 − q).
 
@@ -777,6 +785,35 @@ def test_recompute_equals_a_fresh_state_bit_for_bit(layout: str) -> None:
             assert ee == fresh.E[j] and vv == fresh.V[j]
 
 
+def test_an_int_selection_gives_the_same_recompute() -> None:
+    """A state built from an int 0/1 selection holds it as bool and recomputes, previews
+    and commits exactly as the bool one does.
+
+    v0.47.0 review: the recompute indexed the column with the selection, so an int mask
+    became integer fancy indexing that summed cells 0 and 1 over and over, with no error.
+    """
+    cache = ProblemCache.from_problem(long_column(5))
+    c = cache.chance_cells["2d"]
+    rng = np.random.default_rng(3)
+    sel = rng.random(cache.n_pu) < 0.5
+    ref = ChanceState.from_selection(cache, sel)
+    base = ChanceState.from_selection(cache, sel)
+    cs = ChanceState(
+        selected=sel.astype(np.int8), terms=base.terms, weight=base.weight,
+        zero_var_rule=base.zero_var_rule, targets=base.targets, ptargets=base.ptargets,
+    )
+    assert cs.selected.dtype == np.bool_
+    for idx in rng.integers(cache.n_pu, size=10).tolist():
+        adding = not ref.selected[idx]
+        for j in range(cache.n_feat):
+            assert cs._column_sums(c, j, idx, adding) == ref._column_sums(c, j, idx, adding)
+        assert cs.delta_penalty(cache, idx, adding) == ref.delta_penalty(cache, idx, adding)
+        cs.apply_flip(cache, idx, adding)
+        ref.apply_flip(cache, idx, adding)
+    assert cs.penalty_total() == ref.penalty_total()
+    np.testing.assert_array_equal(cs.selected, ref.selected)
+
+
 def test_a_nan_in_an_unselected_cell_raises_at_cache_build() -> None:
     """PU 4's cell has no ``prob`` (a blank field reads as NaN) and is never selected.
 
@@ -810,8 +847,10 @@ def test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute() -> No
     Removing PU 1's large-variance cell recomputes the feature, which must add only the
     selected cells, as ``from_selection`` and the evaluator do. A recompute over the whole
     column against a 0/1 mask multiplies PU 4's inf by 0 (v0.47.0 plan review): V turns
-    NaN, the feature pays Marxan's Z = 4 (≈ 9.9996) instead of 6.2311, and no later flip
-    recovers it. PU 2 then leaves and comes back: the state must still match.
+    NaN, the feature pays Marxan's Z = 4 (≈ 9.9996) instead of 6.2311, and no recompute
+    trigger fires on a NaN V: it stays wrong until the feature's nonzero count reaches 0
+    and the snap resets E and V. PU 2 then leaves and comes back: the state must still
+    match.
     """
     pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
     feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],

@@ -78,9 +78,9 @@ class ChanceCells:
     index serves both on the hot path — ``abs_ev`` their absolute values (the error
     bounds' increments), and ``pos`` is 1 where ``v > 0`` as computed in float, else 0.
     The feature-major (CSC) copy — ``c_indptr`` / ``c_rows`` / ``c_ev`` (rows ``c_e`` /
-    ``c_v``), rows ascending within a feature — serves ``ChanceState``'s per-feature
-    recompute. For the 2D term (puvspr ``prob`` = ``q``, the probability of presence): ``e = a·q``,
-    ``v = a²·q·(1 − q)``.
+    ``c_v``, each C-contiguous), rows ascending within a feature — serves
+    ``ChanceState``'s per-feature recompute. For the 2D term (puvspr ``prob`` = ``q``, the
+    probability of presence): ``e = a·q``, ``v = a²·q·(1 − q)``.
     """
 
     indptr: np.ndarray
@@ -983,7 +983,7 @@ def _build_chance_cells_2d(
     np.cumsum(np.bincount(indices, minlength=n_feat), out=c_indptr[1:])
     return ChanceCells(
         indptr=indptr, indices=indices, ev=ev, abs_ev=np.abs(ev), pos=flag,
-        c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev[:, order],
+        c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev.take(order, axis=1),
     )
 
 
