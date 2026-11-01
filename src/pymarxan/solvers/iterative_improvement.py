@@ -180,7 +180,9 @@ class IterativeImprovementSolver(Solver):
         current = solution
         while True:
             improved = self._removal_pass(problem, cache, blm, current, locked_in)
-            if improved.objective >= current.objective:
+            # ``not <``, not ``>=``: a NaN objective (a blank cost or spf cell) never
+            # compares, and ``NaN >= x`` would keep the loop running forever.
+            if not improved.objective < current.objective:
                 break
             current = improved
         return current
@@ -270,7 +272,7 @@ class IterativeImprovementSolver(Solver):
         while True:
             after_removal = self._removal_pass(problem, cache, blm, current, locked_in)
             after_addition = self._addition_pass(problem, cache, blm, after_removal, locked_out)
-            if after_addition.objective >= current.objective:
+            if not after_addition.objective < current.objective:  # NaN stops too
                 break
             current = after_addition
         return current

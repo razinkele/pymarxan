@@ -388,3 +388,31 @@ class TestSolveMethod:
         sol = solutions[0]
         assert sol.cost >= 0
         assert sol.objective >= sol.cost
+
+
+class TestNonFiniteObjective:
+    """A NaN objective (a blank cost or spf cell reads as NaN, and validate() passes it)
+    must not loop forever: ``NaN >= x`` is never true, so a stop test written as
+    "no longer improving" has to treat NaN as not improving."""
+
+    @pytest.mark.parametrize("itimptype", [1, 2])
+    def test_improve_stops_on_a_nan_objective(self, simple_problem, monkeypatch, itimptype):
+        simple_problem.planning_units.loc[1, "cost"] = np.nan
+        sel = np.ones(4, dtype=bool)
+        start = build_solution(simple_problem, sel, 0.0)
+        assert np.isnan(start.objective)
+        passes = 0
+        original = IterativeImprovementSolver._removal_pass
+
+        def counting(self, *args, **kwargs):
+            nonlocal passes
+            passes += 1
+            if passes > 50:
+                raise RuntimeError("removal pass loop did not stop on a NaN objective")
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(IterativeImprovementSolver, "_removal_pass", counting)
+        solver = IterativeImprovementSolver(itimptype=itimptype)
+        result = solver.improve(simple_problem, start)
+        assert np.isnan(result.objective)
+        assert passes == 1
