@@ -62,9 +62,12 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
 def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
     """Write a planning-unit-vs-species DataFrame to a CSV file.
 
-    The optional ``prob`` column (Marxan PROB2D — per-cell Bernoulli
-    probability) is omitted from the output when every value is zero,
-    so legacy deterministic projects round-trip byte-identical.
+    The optional ``prob`` column (Marxan PROB2D — per-cell probability of
+    presence) is always written when present, whatever its values: without the
+    column PROBMODE 3's 2D chance term is off (``_active_chance_terms``), while
+    an all-0 or all-1 column has zero variance and pays Marxan's Z = 4 penalty
+    (unless ``PROBZEROVAR 1``); Marxan 3 also switches its 2D term on from a
+    ``prob`` header. A frame without ``prob`` is written without one.
 
     Parameters
     ----------
@@ -73,8 +76,6 @@ def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
     path : str | Path
         Output file path.
     """
-    if "prob" in df.columns and (df["prob"] == 0).all():
-        df = df.drop(columns=["prob"])
     df.to_csv(path, index=False)
 
 

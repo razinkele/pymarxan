@@ -12,31 +12,24 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 
 
 def _solve_single(
-    problem_data: dict,
+    problem: ConservationProblem,
     solver: Solver,
     params: dict,
     solver_config: SolverConfig,
     index: int,
-) -> tuple[int, Solution]:
-    """Solve a single sweep point. Returns (index, best_solution)."""
-    import pandas as pd
+) -> tuple[int, Solution | None]:
+    """Solve a single sweep point. Returns (index, best_solution), or (index, None) when
+    the solver returns no solutions (an infeasible point).
 
-    from pymarxan.models.problem import ConservationProblem
-
-    modified = ConservationProblem(
-        planning_units=pd.DataFrame(problem_data["planning_units"]),
-        features=pd.DataFrame(problem_data["features"]),
-        pu_vs_features=pd.DataFrame(problem_data["pu_vs_features"]),
-        boundary=(
-            pd.DataFrame(problem_data["boundary"])
-            if problem_data["boundary"] is not None
-            else None
-        ),
-        parameters={**problem_data["parameters"], **params},
-    )
+    The whole problem is pickled to the worker and derived with ``copy_with``, exactly
+    as ``run_sweep`` does, so its subclass and every optional table (probability,
+    connectivity, ...) survive the trip. Any error the solve raises reaches the caller,
+    as in ``run_sweep``.
+    """
+    modified = problem.copy_with(parameters={**problem.parameters, **params})
     sols = solver.solve(modified, solver_config)
     if not sols:
-        raise ValueError("Solver returned no solutions (infeasible)")
+        return (index, None)
     best = min(sols, key=lambda s: s.objective)
     return (index, best)
 
@@ -50,6 +43,10 @@ def run_sweep_parallel(
     """Run a parameter sweep with parallel execution.
 
     Falls back to sequential ``run_sweep`` when ``max_workers=1``.
+
+    Returns what ``run_sweep`` returns. If a point raises, the points still queued are
+    cancelled (those already running, or already handed to a worker, finish) and the
+    lowest-index failing point's error is raised, as from ``run_sweep``.
     """
     if max_workers <= 1:
         return run_sweep(problem, solver, config)
@@ -57,35 +54,31 @@ def run_sweep_parallel(
     solver_config = config.solver_config or SolverConfig(num_solutions=1)
     param_dicts = config.expand()
 
-    # Serialise problem data for pickling across processes
-    problem_data = {
-        "planning_units": problem.planning_units.to_dict(orient="list"),
-        "features": problem.features.to_dict(orient="list"),
-        "pu_vs_features": problem.pu_vs_features.to_dict(orient="list"),
-        "boundary": (
-            problem.boundary.to_dict(orient="list")
-            if problem.boundary is not None
-            else None
-        ),
-        "parameters": dict(problem.parameters),
-    }
-
-    # Submit all jobs; collect successful results and drop infeasible points
-    # (mirrors sequential run_sweep, which skips with `if not sols: continue`).
-    indexed_results: dict[int, Solution] = {}
+    # Submit all jobs in sweep order. On the first error, cancel the points still queued
+    # and wait for the ones already running (or already handed to a worker): without
+    # cancel_futures, leaving the with-block would solve every queued point first. Do
+    # not iterate as_completed after cancelling: futures cancelled by shutdown are never
+    # reported to it, so the loop would hang.
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _solve_single, problem_data, solver, params, solver_config, i
-            ): i
+        futures = [
+            executor.submit(_solve_single, problem, solver, params, solver_config, i)
             for i, params in enumerate(param_dicts)
-        }
+        ]
         for future in as_completed(futures):
-            try:
-                idx, sol = future.result()
-            except ValueError:
-                # Infeasible point — drop from results, like sequential sweep
-                continue
+            if future.exception() is not None:
+                executor.shutdown(wait=True, cancel_futures=True)
+                break
+
+    # Read the results in sweep order, so the error raised is the lowest-index failing
+    # point's, as in run_sweep (points are dispatched in order, so a point below a failed
+    # one is never cancelled). Infeasible points are dropped, as run_sweep skips them
+    # with `if not sols: continue`.
+    indexed_results: dict[int, Solution] = {}
+    for future in futures:
+        if future.cancelled():
+            continue
+        idx, sol = future.result()
+        if sol is not None:
             indexed_results[idx] = sol
 
     # Reassemble in original order, keeping only the points that succeeded

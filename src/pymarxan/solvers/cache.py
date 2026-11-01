@@ -51,16 +51,67 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from functools import cached_property
+from typing import cast
 
 import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE
 from pymarxan.solvers.utils import (
+    _active_chance_terms,
+    _check_finite_cells,
     _probability_vector,
     _probmode,
+    _zero_var_rule,
     compute_cost_threshold_penalty,
 )
+
+
+@dataclass(frozen=True)
+class ChanceCells:
+    """Immutable per-cell contributions of one chance term (spec §3.5).
+
+    PU-major (CSR) arrays have the same structure as ``held_csr``'s ``indptr`` /
+    ``indices`` (int64 copies, not shared), so row ``i``'s cells are
+    ``indptr[i]:indptr[i + 1]``. ``ev[0]`` (= ``e``) is each cell's expected-amount term,
+    ``ev[1]`` (= ``v``) its variance term — stacked so one fancy index serves both on the
+    hot path — ``abs_ev`` their absolute values (the error bounds' increments), and
+    ``pos`` is 1 where ``v > 0`` as computed in float, else 0.
+    The feature-major (CSC) copy — ``c_indptr`` / ``c_rows`` / ``c_ev`` (rows ``c_e`` /
+    ``c_v``, each C-contiguous), rows ascending within a feature — serves
+    ``ChanceState``'s per-feature recompute. For the 2D term (puvspr ``prob`` = ``q``, the
+    probability of presence): ``e = a·q``, ``v = a²·q·(1 − q)``.
+    """
+
+    indptr: np.ndarray
+    indices: np.ndarray
+    ev: np.ndarray
+    abs_ev: np.ndarray
+    pos: np.ndarray
+    c_indptr: np.ndarray
+    c_rows: np.ndarray
+    c_ev: np.ndarray
+
+    @property
+    def c_e(self) -> np.ndarray:
+        """Per-cell expected-amount terms (CSC order)."""
+        return cast(np.ndarray, self.c_ev[0])
+
+    @property
+    def c_v(self) -> np.ndarray:
+        """Per-cell variance terms (CSC order)."""
+        return cast(np.ndarray, self.c_ev[1])
+
+    @property
+    def e(self) -> np.ndarray:
+        """Per-cell expected-amount terms (CSR order)."""
+        return cast(np.ndarray, self.ev[0])
+
+    @property
+    def v(self) -> np.ndarray:
+        """Per-cell variance terms (CSR order)."""
+        return cast(np.ndarray, self.ev[1])
 
 
 @dataclass(frozen=True)
@@ -82,8 +133,8 @@ class ProblemCache:
     pu_feat_csr : scipy.sparse.csr_matrix
         (n_pu, n_feat) float64 — amount of each feature in each PU (the source of truth).
         ``pu_feat_matrix`` is a lazily-densified ``cached_property`` view over it, built
-        only when clumping / separation / probmode-3 / analysis touch it; a plain problem
-        never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
+        only when clumping / separation / analysis touch it; a plain problem (and a
+        PROBMODE 3 one) never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
     feat_targets : np.ndarray
         (n_feat,) float64 — target for each feature.
     feat_spf : np.ndarray
@@ -130,15 +181,23 @@ class ProblemCache:
     cost_thresh: float
     thresh_pen1: float
     thresh_pen2: float
-    # PROBMODE 3 (Z-score chance constraints) — populated for all problems
-    # but only used when probmode == 3. See solvers/probability.py for the math.
+    # Chance terms (PROBMODE 3, Z-score chance constraints). The cache holds only the
+    # immutable per-cell contributions (``chance_cells``); the running per-feature state and
+    # the penalty live in the ``ChanceState`` sidecar (solvers/chance_state.py), so neither
+    # ``compute_full_objective`` nor ``compute_delta_objective`` includes the chance term.
     probmode: int = 0
     prob_weight: float = 1.0
-    # expected_matrix[i, j] = amount_ij · p_ij (presence); collapses to amount
-    # when there is no `prob` column or when prob == 1.
-    expected_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    # var_matrix[i, j] = amount_ij² · p_ij · (1 − p_ij); all-zero when no `prob`.
-    var_matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
+    # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
+    # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
+    chance_terms: frozenset[str] = frozenset()
+    # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan" or "met".
+    # ``from_problem`` always passes it; the default is the release default, not the opt-out.
+    zero_var_rule: str = DEFAULT_ZERO_VAR_RULE
+    # Per-cell contributions of each ACTIVE chance term (``ChanceCells``), keyed by term;
+    # empty when no term is active. Read by ``ChanceState`` (solvers/chance_state.py).
+    chance_cells: dict[str, ChanceCells] = field(
+        default_factory=dict, compare=False, repr=False,
+    )
     # feat_ptarget[j] = per-feature probability target; ≤0 means disabled.
     feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # Phase 19 clumping (TARGET2 / CLUMPTYPE / type-4 species). All-zero /
@@ -207,11 +266,11 @@ class ProblemCache:
     @cached_property
     def pu_feat_matrix(self) -> np.ndarray:
         """Dense (n_pu, n_feat) view — densified on first access (clumping / separation /
-        probmode-3 / analysis). A plain problem never triggers this."""
+        analysis). A plain problem never triggers this."""
         if self.n_pu * self.n_feat > 20_000_000:  # ~160 MB float64 — the sparse win is lost
             warnings.warn(
                 "Densifying a large ProblemCache feature matrix "
-                f"({self.n_pu}x{self.n_feat}); clumping/separation/probmode-3 at raster "
+                f"({self.n_pu}x{self.n_feat}); clumping/separation at raster "
                 "scale is not yet sparse.",
                 stacklevel=2,
             )
@@ -313,44 +372,21 @@ class ProblemCache:
         thresh_pen2 = float(params.get("THRESHPEN2", 0.0))
 
         # PROBMODE: default 1 with a probability table (the MIP's and greedy's rule), else 0.
-        # Mode 3 state below is zero-cost when probmode != 3.
+        # Chance-term state below is zero-cost unless a chance term is active.
         probmode = _probmode(problem)
         prob_weight = float(params.get("PROBABILITYWEIGHTING", 1.0))
+        chance_terms = _active_chance_terms(problem)
+        zero_var_rule = _zero_var_rule(problem)
 
-        # Per-cell probability of PRESENCE — read once into a dense matrix.
-        # Marxan's PROB2D `prob` is the probability the feature is present at
-        # the cell (clumping.cpp / probability.cpp ComputeP_AllPUsSelected_2D:
-        # `ExpectedAmount2D += amount * SM.prob`). Cells without an explicit
-        # prob default to 1.0 (certain presence == deterministic), so a
-        # problem with no `prob` column reduces to the plain amount sum.
-        # NB: this is the *opposite* polarity to PROBMODE 2 (per-PU `prob`,
-        # Marxan 1D), where `prob` is the probability of loss and the held
-        # amount is `amount * (1 - prob)`.
-        # expected/var are read ONLY under probmode == 3 — build them (densely) only then;
-        # a plain problem pays zero memory for these two (n_pu, n_feat) matrices.
-        if probmode == 3:
-            dense = np.asarray(pu_feat_csr.toarray())
-            prob_matrix = np.ones_like(dense)
-            if (
-                problem.pu_vs_features is not None
-                and "prob" in problem.pu_vs_features.columns
-            ):
-                pv_pu = problem.pu_vs_features["pu"].values
-                pv_sp = problem.pu_vs_features["species"].values
-                pv_pr = problem.pu_vs_features["prob"].values
-                for k in range(len(pv_pu)):
-                    pi = pu_id_to_idx.get(int(pv_pu[k]))
-                    fj = feat_id_to_col.get(int(pv_sp[k]))
-                    if pi is not None and fj is not None:
-                        prob_matrix[pi, fj] = float(pv_pr[k])
-            # Marxan PROB2D math (probability.cpp ComputeP_AllPUsSelected_2D):
-            #   E[T_j contribution from i]   = amount_ij * p_ij          (presence)
-            #   Var[T_j contribution from i] = amount_ij^2 * p_ij * (1 - p_ij)
-            expected_matrix = dense * prob_matrix
-            var_matrix = (dense ** 2) * prob_matrix * (1.0 - prob_matrix)
-        else:
-            expected_matrix = np.zeros((0, 0))
-            var_matrix = np.zeros((0, 0))
+        # Per-cell contributions of the active chance terms. Marxan's PROB2D `prob` is the
+        # probability the feature is PRESENT at the cell (probability.c
+        # ComputeProbability2D: E += amount·prob, V += amount²·prob·(1 − prob)) — the
+        # opposite polarity to PROBMODE 2 (per-PU loss probability, held a·(1 − p)).
+        chance_cells: dict[str, ChanceCells] = {}
+        if "2d" in chance_terms:
+            chance_cells["2d"] = _build_chance_cells_2d(
+                problem, pu_id_to_idx, feat_id_to_col, pu_feat_csr,
+            )
 
         # Per-feature probability target; default -1 (disabled sentinel) for
         # legacy specs without a ptarget column (read_spec already fills this).
@@ -545,8 +581,9 @@ class ProblemCache:
             thresh_pen2=thresh_pen2,
             probmode=probmode,
             prob_weight=prob_weight,
-            expected_matrix=expected_matrix,
-            var_matrix=var_matrix,
+            chance_terms=chance_terms,
+            zero_var_rule=zero_var_rule,
+            chance_cells=chance_cells,
             feat_ptarget=feat_ptarget,
             feat_target2=feat_target2,
             feat_clumptype=feat_clumptype,
@@ -611,39 +648,6 @@ class ProblemCache:
         cols = csr.indices[s:e]
         held[cols] += sign * csr.data[s:e]
 
-    def _compute_zscore_penalty(
-        self, held_expected: np.ndarray, held_variance: np.ndarray,
-    ) -> float:
-        """Marxan-faithful Z-score chance-constraint penalty.
-
-        Active only when ``self.probmode == 3``; returns 0 otherwise (the
-        caller's hot path can skip this branch entirely via the probmode
-        check).  Features with ptarget ≤ 0 are skipped.  Features with
-        zero variance contribute 0 (Marxan's "degenerate → P=1").
-        """
-        if self.probmode != 3 or self.n_feat == 0:
-            return 0.0
-        from scipy.stats import norm  # local import keeps cold path cheap
-        total = 0.0
-        for j in range(self.n_feat):
-            ptarget = float(self.feat_ptarget[j])
-            if ptarget <= 0:
-                continue
-            var = float(held_variance[j])
-            if var <= 0:
-                # Degenerate / no uncertainty — deterministic path handles miss
-                continue
-            mean = float(held_expected[j])
-            target = float(self.feat_targets[j])
-            z = (target - mean) / np.sqrt(var)
-            prob_met = float(norm.sf(z))
-            shortfall = max(0.0, (ptarget - prob_met) / ptarget)
-            # Marxan's ComputeProbability2D weights the probability shortfall
-            # only by PROBABILITYWEIGHTING — NOT by SPF (unlike the
-            # representation penalty). See score_change.cpp:611.
-            total += shortfall
-        return self.prob_weight * total
-
     def compute_full_objective(
         self,
         selected: np.ndarray,
@@ -654,6 +658,9 @@ class ProblemCache:
 
         objective = cost + BLM * boundary + penalty [+ cost_threshold_penalty]
         [+ connectivity]
+
+        The chance terms (PROBMODE 3) are not included: callers add
+        ``ChanceState.penalty_total()`` (SA, II) — as for clumping / separation.
 
         Parameters
         ----------
@@ -694,12 +701,6 @@ class ProblemCache:
             obj += compute_cost_threshold_penalty(
                 total_cost, self.cost_thresh, self.thresh_pen1, self.thresh_pen2
             )
-
-        # PROBMODE 3 chance-constraint penalty (additive; no-op when probmode!=3)
-        if self.probmode == 3:
-            held_expected = self.expected_matrix[selected].sum(axis=0)
-            held_variance = self.var_matrix[selected].sum(axis=0)
-            obj += self._compute_zscore_penalty(held_expected, held_variance)
 
         # Connectivity term (no-op when conn_mode == 0)
         if self.conn_mode:
@@ -825,27 +826,6 @@ class ProblemCache:
             )
             delta += new_ct_penalty - old_ct_penalty
 
-        # --- PROBMODE 3 chance-constraint delta ---
-        # Recompute the Z-score penalty before and after the flip from the
-        # full selection mask. This is O(n_feat) per flip — heavier than
-        # the deterministic delta but cheap relative to the SA outer loop.
-        # The future optimisation (sparse per-PU feature index) lands in a
-        # later patch if benchmarks demand it.
-        if self.probmode == 3:
-            held_exp_before = self.expected_matrix[selected].sum(axis=0)
-            held_var_before = self.var_matrix[selected].sum(axis=0)
-            held_exp_after = held_exp_before + sign * self.expected_matrix[idx]
-            held_var_after = held_var_before + sign * self.var_matrix[idx]
-            # Underflow guard — held_var must be non-negative
-            np.clip(held_var_after, 0.0, None, out=held_var_after)
-            prob_before = self._compute_zscore_penalty(
-                held_exp_before, held_var_before,
-            )
-            prob_after = self._compute_zscore_penalty(
-                held_exp_after, held_var_after,
-            )
-            delta += prob_after - prob_before
-
         # --- Connectivity delta (one integer comparison when off) ---
         # O(degree), against the pre-flip selection; s = sign (+1 add, -1 remove).
         #   symmetric:  -s·w·(conn_self[idx] + Σ_out v·sel[nbr])
@@ -949,6 +929,63 @@ class ProblemCache:
         # Correct.
         
         return total
+
+
+def _build_chance_cells_2d(
+    problem: ConservationProblem,
+    pu_id_to_idx: dict[int, int],
+    feat_id_to_col: dict[int, int],
+    pu_feat_csr: csr_matrix,
+) -> ChanceCells:
+    """``ChanceCells`` of the 2D term from the puvspr ``prob`` column (presence ``q``).
+
+    One cell per ``(pu, species)`` (the CSR of ``build_pu_feature_csr``), holding the sum of
+    its puvspr rows' ``a·q`` and ``a²·q(1 − q)``: Marxan 3 keeps one sparse-matrix entry
+    per row (``input.c`` ``readSparseMatrix``) and adds them one by one
+    (``ReturnProbabilityAmounts2D``), as the evaluator (``_term_moments``) does. A cell's
+    variance is > 0 exactly when one of its rows' is (for q in [0, 1] every term is ≥ 0).
+    A non-finite ``amount`` or ``prob`` in any row raises ``ValueError`` naming the PU ids
+    (``_check_finite_cells``, as the evaluator does). Rows with an unknown id are skipped;
+    a cell no row names keeps ``q = 1`` (certain).
+    """
+    pv = problem.pu_vs_features
+    _check_finite_cells(pv)
+    csr = pu_feat_csr
+    n_feat = csr.shape[1]
+    indptr = np.asarray(csr.indptr, dtype=np.int64)
+    indices = np.asarray(csr.indices, dtype=np.int64)
+    amt = np.asarray(csr.data, dtype=np.float64)
+    cell_row = np.repeat(np.arange(csr.shape[0], dtype=np.int64), np.diff(indptr))
+    cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
+
+    e = amt.copy()
+    v = np.zeros(len(amt), dtype=np.float64)
+    if len(pv) and len(amt):
+        rows = np.fromiter((pu_id_to_idx.get(int(u), -1) for u in pv["pu"].values),
+                           np.int64, len(pv))
+        cols = np.fromiter((feat_id_to_col.get(int(f), -1) for f in pv["species"].values),
+                           np.int64, len(pv))
+        a = np.asarray(pv["amount"].values, dtype=np.float64)
+        q = np.asarray(pv["prob"].values, dtype=np.float64)
+        ok = (rows >= 0) & (cols >= 0)
+        keys = rows[ok] * n_feat + cols[ok]
+        a, q = a[ok], q[ok]
+        pos = np.searchsorted(cell_key, keys)
+        hit = (pos < len(cell_key)) & (cell_key[np.minimum(pos, len(cell_key) - 1)] == keys)
+        pos, a, q = pos[hit], a[hit], q[hit]
+        e[pos] = 0.0  # named cells are the sums of their rows
+        np.add.at(e, pos, a * q)
+        np.add.at(v, pos, a * a * q * (1.0 - q))  # operand order as in _term_moments
+
+    ev = np.vstack([e, v])
+    flag = (v > 0).astype(np.int64)
+    order = np.lexsort((cell_row, indices))  # feature-major, rows ascending
+    c_indptr = np.zeros(n_feat + 1, dtype=np.int64)
+    np.cumsum(np.bincount(indices, minlength=n_feat), out=c_indptr[1:])
+    return ChanceCells(
+        indptr=indptr, indices=indices, ev=ev, abs_ev=np.abs(ev), pos=flag,
+        c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev.take(order, axis=1),
+    )
 
 
 def _build_probability(

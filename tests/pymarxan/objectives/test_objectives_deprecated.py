@@ -1,6 +1,7 @@
 """pymarxan.objectives is deprecated in v0.39 (spec §5, Testing 13)."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +20,7 @@ PROBE = (
 def _count(mod: str) -> int:
     out = subprocess.run(
         [sys.executable, "-c", PROBE.format(mod=mod)], cwd=ROOT, check=True,
-        capture_output=True, text=True, env={"PYTHONPATH": "src", "PATH": ""},
+        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": "src"},
     ).stdout
     return int(out.strip())
 

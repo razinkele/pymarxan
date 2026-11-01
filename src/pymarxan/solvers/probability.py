@@ -1,35 +1,41 @@
-"""Marxan-faithful Z-score chance-constraint math (PROBMODE 3).
+"""Marxan-faithful Z-score chance-constraint math (PROBMODE 3, Marxan's Probability 2D).
 
 This is the pure-functional layer: no problem objects, no solver state.
-Inputs are plain dicts keyed by feature id; outputs are scalars or dicts.
-Solver integration lives in ``cache.py`` (SA / iterative improvement),
-``heuristic.py`` (inline), and ``mip_solver.py`` (post-hoc evaluation).
+Solver integration lives in ``chance_state.py`` (``ChanceState``: SA / iterative
+improvement, incremental per-feature E / V), ``utils.py`` (the evaluator, via
+:func:`evaluate_solution_chance`) and ``mip_solver.py`` (post-hoc report).
 
-The formulation mirrors Marxan v4's ``computation.hpp::computeProbMeasures``:
+The reference is Marxan 3 (``marxan3`` branch, ``probability.c``
+``ComputeProbability2D`` / ``probZUT``) — not Marxan v4, whose ``probZUT`` has an
+integer-division bug that inverts the penalty. Per feature ``j``, over the selected PUs:
 
-    Z_j = (T_j − E[T_j]) / sqrt(Var[T_j])    # positive = shortfall
-    P_j = probZUT(Z_j) = 1 − Φ(Z_j)          # scipy.stats.norm.sf
+    E_j = Σ amount_ij · q_ij,   V_j = Σ amount_ij² · q_ij · (1 − q_ij)
+    Z_j = (T_j − E_j) / sqrt(V_j)            # positive = shortfall
+    P_j = probZUT(Z_j) = 1 − Φ(Z_j)          # scipy.special.ndtr(−Z) = norm.sf(Z)
 
-When Var[T_j] == 0 the routine returns Marxan's sentinel ``rZ = 4``
-(``probZUT(4) ≈ 3e-5``), which short-circuits the upper-tail probability
-to "trivially met". The deterministic-target shortfall is handled
-elsewhere via the regular penalty path.
+``q`` is the per-cell probability of **presence** (puvspr ``prob``; Marxan's PROB2D),
+the opposite polarity to PROBMODE 2 / Marxan 1D, where the per-PU ``prob`` is a loss
+probability and the held amount is ``amount · (1 − prob)``. ``T_j`` is the resolved
+deterministic target (no MISSLEVEL). Marxan's ``probZUT`` is the Ibbetson polynomial
+(exact 0 / 1 for |z| ≥ 5, within ~1e-9 of ``norm.sf`` below); pymarxan keeps ``norm.sf``.
 
-Penalty per feature is normalised by ptarget (matching Marxan):
+**Zero variance** is ``nonzero_j == 0`` — no selected cell whose variance term, as
+computed in float, is > 0 — or ``V_j`` not > 0, Marxan 3's own test; never a tolerance
+on ``V``. For ``q`` in [0, 1] the two agree (a sum of terms ≥ 0 is > 0 exactly when one
+term is, and ``ChanceState`` recomputes a running ``V ≤ 0``); the ``V`` test decides
+when a ``q`` outside [0, 1] adds an uncounted negative term. The rule is
+``zero_var_rule`` (``PROBZEROVAR`` in input.dat): ``"marxan"`` (``PROBZEROVAR 0``, the
+default) gives Marxan 3's ``Z = 4``, so ``P = probZUT(4) ≈ 3.17e-5`` fails any
+``ptarget`` above that — nothing selected, all ``q`` in {0, 1}; ``"met"``
+(``PROBZEROVAR 1``) counts such a feature as met (pymarxan before v0.47).
 
-    penalty_j = max(0, (ptarget_j − P_j) / ptarget_j)
+Penalty per feature is the Marxan step function normalised by ptarget:
 
-Marxan's ``ComputeProbability2D`` scales the probability shortfall only by
-``PROBABILITYWEIGHTING`` — **not** by SPF (the SPF weighting applies to the
-*representation* penalty, a separate objective term; see
-``score_change.cpp:611``). Features with ``ptarget_j ≤ 0`` are disabled
-(Marxan's sentinel) and contribute 0 regardless of Z.
+    penalty_j = [ptarget_j > P_j] · (ptarget_j − P_j) / ptarget_j
 
-Expected amount uses the PROB2D *presence* convention
-(``ComputeP_AllPUsSelected_2D``: ``ExpectedAmount2D += amount * prob``), i.e.
-``E[T_j] = Σ amount_ij · p_ij`` — the opposite polarity to PROBMODE 2 / Marxan
-1D, where the per-PU ``prob`` is a loss probability and held amount is
-``amount · (1 − prob)``.
+Marxan's ``ComputeProbability2D`` scales the summed penalties only by
+``PROBABILITYWEIGHTING`` — **not** by SPF (SPF weights the separate representation
+penalty). Features with ``ptarget_j ≤ 0`` are disabled (Marxan's −1) and contribute 0.
 
 References
 ----------
@@ -40,12 +46,164 @@ References
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from typing import Literal, cast
 
-from scipy.stats import norm
+import numpy as np
+from scipy.special import ndtr
 
-# Marxan v4 short-circuit value when variance == 0: rZ = 4 gives
-# probZUT(4) ≈ 3.17e-5, i.e. effectively "target is trivially met".
+# Marxan's Z for a zero-variance feature (``probability.c``: ``rZ = 4``);
+# probZUT(4) = norm.sf(4) ≈ 3.17e-5.
 _MARXAN_ZERO_VARIANCE_SENTINEL = 4.0
+
+ZeroVarRule = Literal["marxan", "met"]
+_ZERO_VAR_RULES = ("marxan", "met")
+# The rule used when a caller names none: Marxan 3's (PROBZEROVAR 0).
+DEFAULT_ZERO_VAR_RULE: ZeroVarRule = "marxan"
+
+_TERMS = ("2d",)
+
+
+@dataclass(frozen=True)
+class FeatureChance:
+    """One feature's chance-term score (spec §3.4).
+
+    ``z`` and ``p`` (= ``norm.sf(z)``) are the Marxan Z-score and probability of meeting
+    the target; ``shortfall`` = ``max(0, ptarget − p)`` (absolute, for reports);
+    ``penalty`` = ``[ptarget > p]·(ptarget − p)/ptarget``, unweighted. Both are 0 for a
+    disabled feature (``ptarget ≤ 0``). Under the ``"met"`` rule a zero-variance feature
+    reports ``p = 1`` and no shortfall or penalty.
+    """
+
+    z: float
+    p: float
+    shortfall: float
+    penalty: float
+
+
+def _check_rule(zero_var_rule: str) -> None:
+    if zero_var_rule not in _ZERO_VAR_RULES:
+        raise ValueError(
+            f"zero_var_rule must be one of {_ZERO_VAR_RULES}, got {zero_var_rule!r}"
+        )
+
+
+def _chance_z(
+    E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
+) -> np.ndarray:
+    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (zero variance).
+
+    Both callers, :func:`score_features` and :func:`_chance_penalty`, fold Marxan's own
+    test into ``zero`` (``| ~(V > 0)``, also True for a NaN ``V``), so the square root
+    only sees ``V > 0`` where ``zero`` is False. No ``np.errstate`` here (it costs more
+    than the arithmetic on the hot path).
+    """
+    z = (target - E) / np.sqrt(np.where(zero, 1.0, V))
+    return np.where(zero, _MARXAN_ZERO_VARIANCE_SENTINEL, z)
+
+
+def _ptarget_den(ptarget: np.ndarray) -> np.ndarray:
+    """Penalty denominator: ``ptarget`` where enabled (> 0), else 1 (its gap is 0)."""
+    return np.where(ptarget > 0, ptarget, 1.0)
+
+
+def _chance_from_z(
+    z: np.ndarray, zero: np.ndarray, ptarget: np.ndarray, ptarget_den: np.ndarray,
+    met: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(p, shortfall, penalty)`` from Z: the one copy of the probability arithmetic.
+
+    ``p ≥ 0``, so ``ptarget > p`` is False for a disabled feature (``ptarget ≤ 0``).
+    """
+    p = ndtr(-z)  # = norm.sf(z), Marxan's probZUT up to ~1e-9
+    gap = np.where(ptarget > p, ptarget - p, 0.0)
+    penalty = gap / ptarget_den
+    if met:
+        p = np.where(zero, 1.0, p)
+        gap = np.where(zero, 0.0, gap)
+        penalty = np.where(zero, 0.0, penalty)
+    return p, gap, penalty
+
+
+def _chance_penalty(
+    E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
+    ptarget: np.ndarray, ptarget_den: np.ndarray, met: bool,
+) -> np.ndarray:
+    """Unweighted penalties only (``ChanceState``'s hot path): ``zero`` widened by
+    Marxan's ``V > 0`` test, then the same operations, in the same order, as the
+    ``penalty`` of :func:`score_features` (:func:`_chance_z` + :func:`_chance_from_z`)."""
+    zero = zero | ~(V > 0)
+    p = ndtr(-_chance_z(E, V, zero, target))
+    penalty = np.where(ptarget > p, ptarget - p, 0.0) / ptarget_den
+    if met:
+        penalty = np.where(zero, 0.0, penalty)
+    return cast(np.ndarray, penalty)
+
+
+def score_features(
+    E: np.ndarray,
+    V: np.ndarray,
+    nonzero: np.ndarray,
+    target: np.ndarray,
+    ptarget: np.ndarray,
+    zero_var_rule: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorised :func:`score_feature`: arrays ``(z, p, shortfall, penalty)``.
+
+    The evaluator and ``ChanceState`` use this arithmetic; it is the same as
+    :func:`score_feature`, element for element. Zero variance is ``nonzero == 0`` or
+    ``V`` not > 0 (Marxan 3's test; a NaN ``V`` too).
+    """
+    _check_rule(zero_var_rule)
+    E = np.asarray(E, dtype=np.float64)
+    V = np.asarray(V, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    ptarget = np.asarray(ptarget, dtype=np.float64)
+    zero = (np.asarray(nonzero) == 0) | ~(V > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = _chance_z(E, V, zero, target)
+    p, shortfall, penalty = _chance_from_z(
+        z, zero, ptarget, _ptarget_den(ptarget), zero_var_rule == "met",
+    )
+    return z, p, shortfall, penalty
+
+
+def score_feature(
+    E: float,
+    V: float,
+    nonzero: int,
+    target: float,
+    ptarget: float,
+    zero_var_rule: str,
+) -> FeatureChance:
+    """Score one feature's chance term (spec §3.4).
+
+    Parameters
+    ----------
+    E, V
+        Expected amount and variance of the feature over the selected cells.
+    nonzero
+        Number of selected cells whose variance term, as computed in float, is > 0.
+        **Zero variance is ``nonzero == 0``, or ``V`` not > 0** (Marxan 3's test, which
+        decides when a ``q`` outside [0, 1] makes ``V ≤ 0`` beside counted cells); no
+        tolerance on ``V``.
+    target
+        Deterministic target (the resolved target, without MISSLEVEL).
+    ptarget
+        Probability target; ``≤ 0`` disables the feature (Marxan's −1).
+    zero_var_rule
+        ``"marxan"``: zero variance gives Marxan 3's ``Z = 4``, then the normal path
+        (so ``P ≈ 3.17e-5`` fails any ``ptarget`` above it). ``"met"``: zero variance
+        counts as met (penalty and shortfall 0).
+    """
+    z, p, shortfall, penalty = score_features(
+        np.array([E]), np.array([V]), np.array([nonzero]), np.array([target]),
+        np.array([ptarget]), zero_var_rule,
+    )
+    return FeatureChance(
+        z=float(z[0]), p=float(p[0]), shortfall=float(shortfall[0]),
+        penalty=float(penalty[0]),
+    )
 
 
 def compute_zscore_per_feature(
@@ -87,13 +245,16 @@ def compute_zscore_penalty(
     zscore_per_feature: dict[int, float],
     prob_targets: dict[int, float],
     weight: float = 1.0,
+    *,
+    zero_variance: frozenset[int] = frozenset(),
+    zero_var_rule: str = DEFAULT_ZERO_VAR_RULE,
 ) -> float:
     """Marxan-faithful normalised probability shortfall penalty.
 
     For each feature *j*::
 
         P_j = norm.sf(Z_j)
-        penalty_j = max(0, (ptarget_j − P_j) / ptarget_j)
+        penalty_j = [ptarget_j > P_j] · (ptarget_j − P_j) / ptarget_j
 
     Total: ``weight · Σ penalty_j``. Following Marxan's ``ComputeProbability2D``
     the probability shortfall is scaled **only** by ``PROBABILITYWEIGHTING``,
@@ -109,38 +270,92 @@ def compute_zscore_penalty(
         Per-feature probability target. ``-1`` (or any ≤ 0) means disabled.
     weight
         Global ``PROBABILITYWEIGHTING`` scaling factor.
+    zero_variance
+        Ids of the zero-variance features, so a real ``Z = 4`` is told apart from
+        Marxan's zero-variance 4; ``zero_var_rule`` applies to these only.
+    zero_var_rule
+        ``"marxan"`` or ``"met"`` (see :func:`score_feature`).
 
     Returns
     -------
     float
         The total weighted probability penalty.
     """
-    total = 0.0
-    for fid, z in zscore_per_feature.items():
-        ptarget = prob_targets.get(fid, -1.0)
-        if ptarget <= 0:
+    _check_rule(zero_var_rule)
+    fids = list(zscore_per_feature)
+    if not fids:
+        return 0.0
+    z = np.array([zscore_per_feature[f] for f in fids], dtype=np.float64)
+    pt = np.array([prob_targets.get(f, -1.0) for f in fids], dtype=np.float64)
+    zero = np.array([f in zero_variance for f in fids], dtype=bool)
+    _, _, penalty = _chance_from_z(z, zero, pt, _ptarget_den(pt), zero_var_rule == "met")
+    return float(weight * float(np.sum(penalty)))
+
+
+def _term_moments(
+    problem,  # ConservationProblem
+    selected,  # np.ndarray
+    term: str,
+    feat_ids: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-feature ``(E, V, nonzero)`` of one chance term over the selected PUs.
+
+    A non-finite ``amount`` or ``prob`` in any puvspr row, selected or not, raises
+    ``ValueError`` naming the PU ids, as building the cache's chance cells does.
+    """
+    from pymarxan.solvers.utils import _check_finite_cells
+
+    if term not in _TERMS:
+        raise ValueError(f"unknown chance term {term!r}; release A knows {_TERMS}")
+    puvspr = problem.pu_vs_features
+    _check_finite_cells(puvspr)
+    col = {int(f): j for j, f in enumerate(feat_ids)}
+    n = len(feat_ids)
+    E = np.zeros(n)
+    V = np.zeros(n)
+    N = np.zeros(n, dtype=np.int64)
+    pu_ids = problem.planning_units["id"].values
+    selected_pu_ids = {int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]}
+    pv_pu = puvspr["pu"].values
+    pv_sp = puvspr["species"].values
+    pv_am = puvspr["amount"].values
+    pv_pr = puvspr["prob"].values if "prob" in puvspr.columns else None
+    for k in range(len(pv_pu)):
+        if int(pv_pu[k]) not in selected_pu_ids:
             continue
-        # Marxan zero-variance sentinel means "no uncertainty"; the
-        # chance constraint is satisfied vacuously (P = 1) and the
-        # deterministic shortfall penalty handles any deterministic miss.
-        if z == _MARXAN_ZERO_VARIANCE_SENTINEL:
+        j = col.get(int(pv_sp[k]))
+        if j is None:
             continue
-        prob = float(norm.sf(z))  # upper tail; matches Marxan's probZUT
-        shortfall = max(0.0, (ptarget - prob) / ptarget)
-        total += shortfall
-    return float(weight * total)
+        amt = float(pv_am[k])
+        # PROB2D presence convention: q = P(present); default 1.0 (certain presence)
+        # when there is no `prob` column (only on a direct call: evaluate_solution_chance
+        # scores a term without its data as off first). Marxan 3 ComputeProbability2D:
+        # E += amount·q, V += amount²·q·(1 − q).
+        q = float(pv_pr[k]) if pv_pr is not None else 1.0
+        v = amt * amt * q * (1.0 - q)
+        E[j] += amt * q
+        V[j] += v
+        N[j] += int(v > 0)
+    return E, V, N
 
 
 def evaluate_solution_chance(
     problem,  # ConservationProblem — typed loosely to avoid circular import
     selected,  # np.ndarray
+    term: str = "2d",
 ) -> tuple[dict[int, float], float]:
-    """Post-hoc Z-score evaluation of a fully-formed solution.
+    """Post-hoc evaluation of one chance term for a fully-formed solution.
 
-    Used by the MIP "drop" strategy: the MIP returns a solution against
-    the deterministic problem; this evaluator computes the
-    chance-constraint gap so the Solution can carry
-    ``prob_shortfalls`` and ``prob_penalty``.
+    Used by ``build_solution`` (every solver's reported objective and the MIP "drop"
+    strategy's post-hoc report): computes the per-feature E / V / nonzero over the
+    selected PUs and scores them with :func:`score_features`.
+
+    The gate is the term's data, not ``PROBMODE``. A term without its data (``"2d"``: no
+    ``prob`` column on ``pu_vs_features``) is off, as in every solver (spec §3.1): each
+    feature's shortfall is 0 and the penalty is 0 under either ``PROBZEROVAR`` rule, and
+    no cell is read (so a non-finite ``amount`` does not raise here). With its data the
+    term is scored whatever the mode, so a caller can score a problem as if the term
+    were requested.
 
     Returns
     -------
@@ -148,64 +363,29 @@ def evaluate_solution_chance(
         ``shortfalls`` is a feature_id → ``max(0, ptarget − P)`` dict
         (per-feature absolute gap in probability space, NOT normalised
         by ptarget — easier to interpret in the UI).
-        ``penalty`` is the weighted normalised total that would have been
-        added to the objective under PROBMODE 3.
+        ``penalty`` is the weighted normalised total that the term adds to the
+        objective.
     """
+    from pymarxan.solvers.utils import _zero_var_rule
 
+    if term not in _TERMS:
+        raise ValueError(f"unknown chance term {term!r}; release A knows {_TERMS}")
     if "ptarget" not in problem.features.columns:
         return {}, 0.0
     feat_ids = problem.features["id"].astype(int).values
     feat_target = problem.features["target"].astype(float).values
     feat_ptarget = problem.features["ptarget"].astype(float).values
 
-    if not any(pt > 0 for pt in feat_ptarget):
+    # Off without its data (spec §3.1), as ``utils._active_chance_terms`` makes it in the
+    # solvers, or with no ptarget > 0. The 2D term's data is the puvspr ``prob`` column.
+    no_data = term == "2d" and "prob" not in problem.pu_vs_features.columns
+    if no_data or not any(pt > 0 for pt in feat_ptarget):
         return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
 
-    pu_ids = problem.planning_units["id"].values
-    selected_pu_ids = {
-        int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]
-    }
-
-    puvspr = problem.pu_vs_features
-    has_prob = "prob" in puvspr.columns
-    achieved_mean: dict[int, float] = {}
-    achieved_var: dict[int, float] = {}
-    pv_pu = puvspr["pu"].values
-    pv_sp = puvspr["species"].values
-    pv_am = puvspr["amount"].values
-    pv_pr = puvspr["prob"].values if has_prob else None
-    for k in range(len(pv_pu)):
-        pid = int(pv_pu[k])
-        if pid not in selected_pu_ids:
-            continue
-        fid = int(pv_sp[k])
-        amt = float(pv_am[k])
-        # PROB2D presence convention: p = P(present); default 1.0 (certain
-        # presence) when there is no `prob` column. Matches Marxan
-        # ComputeP_AllPUsSelected_2D (`ExpectedAmount2D += amount * prob`).
-        p = float(pv_pr[k]) if pv_pr is not None else 1.0
-        achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amt * p
-        achieved_var[fid] = achieved_var.get(fid, 0.0) + amt * amt * p * (1.0 - p)
-
-    targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
-    ptargets = {int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))}
-
-    # Ensure every feature is keyed (E=Var=0 → sentinel Z)
-    for fid in targets:
-        achieved_mean.setdefault(fid, 0.0)
-        achieved_var.setdefault(fid, 0.0)
-
-    z_per = compute_zscore_per_feature(achieved_mean, achieved_var, targets)
+    E, V, N = _term_moments(problem, selected, term, feat_ids)
+    _, _, shortfall, penalty = score_features(
+        E, V, N, feat_target, feat_ptarget, _zero_var_rule(problem),
+    )
     weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
-    penalty = compute_zscore_penalty(z_per, ptargets, weight=weight)
-
-    shortfalls: dict[int, float] = {}
-    for fid, z in z_per.items():
-        pt = ptargets.get(fid, -1.0)
-        if pt <= 0 or z == _MARXAN_ZERO_VARIANCE_SENTINEL:
-            shortfalls[fid] = 0.0
-        else:
-            prob_met = float(norm.sf(z))
-            shortfalls[fid] = max(0.0, pt - prob_met)
-
-    return shortfalls, penalty
+    shortfalls = {int(f): float(sf) for f, sf in zip(feat_ids, shortfall)}
+    return shortfalls, float(weight * float(np.sum(penalty)))

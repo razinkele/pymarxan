@@ -56,7 +56,15 @@ score. (a) `ChangeProbability1D` and `ChangeProbability2D` read `spec[i].ptarget
 write `spec[isp].Zscore1D` / `probability1D` even for rejected moves. (b) `doChange` does not
 update the 1D/2D expected and variance totals for clumping species (`target2 > 0`,
 `marxan.c:1995-2025`). (c) Marxan 3's SA keeps running E/V sums and tests `rNewVariance > 0`
-(`probability.c:207-212`), so float residue can misclassify zero variance there too. pymarxan
+(`probability.c:207-212`), so float residue can misclassify zero variance there too. (d) On
+duplicate (pu, species) rows, `ChangeProbability1D` and `ChangeProbability2D` score each row
+against the pre-flip `expected1D/2D` / `variance1D/2D`, which their loops do not update
+(`probability.c:173-262, 265-355`), so their move delta is a sum of single-row deltas while
+`ReturnProbabilityAmounts1D/2D` and `doChange` add the rows up. The deterministic
+`computeChangePenalty` also runs once per row, but prices each row's amount-target penalty
+(non-clumping species) through `returnAmountSpecAtPu`, the first matching row's amount, so
+it adds the first row's delta once per duplicate row; its shortfall total uses each row's
+own amount (`marxan.c:873, 1408, 1446, 1472, 1932`). pymarxan
 reproduces the **score** (`ComputeProbability1D/2D`); its SA delta equals the difference of its
 own full recompute, and its zero-variance test is exact (§3.4) by design.
 
@@ -306,7 +314,13 @@ is active. `terms["probability"]` in `compute_objective_terms` is the sum of the
   matters because Z amplifies E error by 1/√V. The `64·eps·|E|` floor (final review, I-1) stops
   the E trigger firing on every touch when |E|/√V > ~1100 (coefficient of variation below ~9e-4,
   the usual 1D layout of mostly p = 0 with a few risky PUs: without it, 1 % risky PUs recomputed
-  on 5000 of 5000 touches; with it, 82). The Z error is then bounded by `64·eps·|E|/√V`.
+  on 5000 of 5000 touches; with it, 82). The Z error from drift since the last
+  recompute is then bounded by `64·eps·|E|/√V`. The reset value `4·eps·|value|` is starting
+  slack, not a bound on a fresh sum's own rounding error, past about 1000 selected cells: a
+  sequential sum's error exceeds it by about 2× at 10³ cells and over 10× at 10⁵ (measured).
+  The total Z error adds that residue, so it is not strictly bounded by `64·eps·|E|/√V`, but
+  it stays under twice that at 10⁵ cells (about `(64 + 56)·eps·|E|/√V`). The triggers still
+  catch the drift that accumulates after the reset, which is what they are for.
   Measured (round 3): every adversarial case
   ≤ 7.4e-14 for τ from 1e-12 to 1e-9, the 1e8 chain included; at 2000 × 20 and 10 000 × 50,
   0–101 recomputes in 4000–6000 flips. No periodic full resync is needed (its jumps were

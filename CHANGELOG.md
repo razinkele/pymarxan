@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (PROBMODE 3):** a feature with zero variance over the selection — nothing
+  holding it selected, or every selected cell with puvspr `prob` 0 or 1 — now follows
+  Marxan 3's rule (`probability.c` `ComputeProbability2D`): Z = 4, so its probability of
+  meeting the target is `norm.sf(4) ≈ 3.17e-5` and it pays
+  `PROBABILITYWEIGHTING × (ptarget − 3.17e-5) / ptarget` (≈ the full weighting) for any
+  `ptarget` above that. pymarxan used to treat it as met. This inverts a preference: a
+  plan holding a feature only in certain (`prob = 1`) cells now scores worse than one using
+  a slightly risky cell (target 10, ptarget 0.9, weighting 10, plans costing 1: safe
+  10.9996, risky 1.0). The new input.dat parameter **`PROBZEROVAR 1`** restores the old
+  result (`0`, the default, is Marxan's rule; `validate()` reports other values). Results
+  change for PROBMODE 3 projects whose selections leave a feature with zero variance. With
+  PROBMODE 3 and no puvspr `prob` column the chance term is off (penalty 0), as before.
+- PROBMODE 3 simulated annealing and iterative improvement are much faster: the chance term
+  moved out of `ProblemCache` into a new incremental sidecar, `ChanceState`
+  (`solvers/chance_state.py`), which keeps per-feature expected amount, variance and an exact
+  count of uncertain cells and re-scores only the flipped unit's features, with an
+  error-bounded recompute that keeps every delta equal to the full difference (1e-9).
+  Measured per flip (delta, plus commit on an accepted flip) by `bench_prob.py` on a
+  Windows 11 laptop with MKL, as the median of five paired mode 0 / mode 3 rounds, ~5
+  feature cells per unit: 4.0–4.5× mode 0 at 2 000 × 20 and 4.2–4.5× at 10 000 × 50
+  (dense and sparse risk); with ~30 cells per unit (dense risk), 4.2–5.4× and 5.0–5.6×
+  (ranges over three runs). The plan measured 17× and 103× for
+  the dense-matrix code it replaced. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
+  are removed, and `ProblemCache.compute_full_objective` / `compute_delta_objective` no
+  longer include the chance term (SA and II add `ChanceState`'s; the evaluator and
+  `Solution.objective` are unchanged).
+- `compute_zscore_penalty` gains keyword-only `zero_variance` (the ids of zero-variance
+  features, so a real Z of 4 is no longer mistaken for one) and `zero_var_rule`
+  (`"marxan"` / `"met"`); `evaluate_solution_chance` gains `term="2d"`. New
+  `score_feature` / `score_features` / `FeatureChance` in `solvers/probability.py` are
+  the one copy of the Z / P / penalty arithmetic every path uses.
+- PROBMODE 3 without a puvspr `prob` column leaves `Solution.prob_shortfalls` /
+  `prob_penalty` as None (they were all-zero), since the chance term is off. So
+  `write_mvbest` then omits its `Prob_Gap` column, and the Shiny target-met table its
+  `ptarget` / `P(met)` / `prob_gap` columns (which showed every feature as met).
+
+### Fixed
+
+- `write_puvspr` always writes a `prob` column that is present. It dropped an all-zero
+  one, so a reload lost the column: that used to read as presence 1, and now it switches
+  PROBMODE 3's chance term off, where the all-zero column has zero variance and pays
+  Marxan's Z = 4 penalty.
+- `run_sweep_parallel` passes the whole problem to its workers. It rebuilt the problem
+  from five fields, dropping `probability`, `connectivity`, `grid` and the subclass type
+  and turning a GeoDataFrame `planning_units` into a plain DataFrame (no geometry, no
+  CRS), so e.g. a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with
+  `run_sweep`, and separation and space terms lost the PU coordinates they need.
+  Errors raised in a worker now reach the caller, as from `run_sweep`; only a point with
+  no solutions is skipped. Every `ValueError` counted as an infeasible point, so e.g. a NaN
+  in prob.dat silently dropped the sweep points that read it. On a worker's error the
+  points still queued are now cancelled (those already running, or already handed to a
+  worker, about 2 × `max_workers` + 1, still finish), where every queued point used to be
+  solved and thrown away before the error arrived; and the error raised is the
+  lowest-index failing point's, as from `run_sweep`, not whichever failure finished first.
+- `add_connectivity_features` returns a copy of the problem (`copy_with`), keeping
+  `probability`, `connectivity`, `grid` and the subclass type, which its five-field rebuild
+  dropped. When puvspr has a `prob` column, the connectivity rows it adds get `prob` 1.0
+  (the metric is deterministic) instead of NaN, which PROBMODE 3 now rejects.
+- PROBMODE 3 with duplicate `(pu, species)` puvspr rows: simulated annealing and iterative
+  improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as the evaluator,
+  Marxan 3's objective (`ReturnProbabilityAmounts2D`) and its committed state
+  (`doChange`) do. They put the last row's `prob` on the summed amount, so they optimised
+  a different chance term from the one they reported (and a certain last row hid the
+  cell's variance), and could return a plan worse than the reported optimum. This
+  predates v0.47.0: the dense chance matrices used the same rule. pymarxan's moves are
+  now exact (each delta is the difference of the score); Marxan 3's are not on such
+  files: its SA / II move delta (`ChangeProbability2D`) scores each row of the flipped
+  unit against the pre-flip totals, so it is a sum of single-row deltas and its running
+  total drifts from its score. SA / II runs on duplicate-row files can therefore differ
+  from Marxan 3's.
+- PROBMODE 3: a non-finite puvspr `amount` or `prob` (a blank field reads as NaN) raises
+  `ValueError` naming the planning unit IDs, both where simulated annealing and iterative
+  improvement build their chance cells and in the evaluator (every solver's reported
+  objective), as a non-finite prob.dat value does. It gave the feature NaN moments and a
+  chance penalty of 0, silently. A feature with an uncertain selected cell whose variance
+  still sums to ≤ 0 (a `prob` outside [0, 1] beside it) now gets Marxan 3's Z = 4, as
+  `ComputeProbability2D` tests V > 0; its penalty was a silent 0 too. Finite `prob` values
+  outside [0, 1] are still used as given.
+
 ## [0.46.0] — 2026-10-23
 
 ### Changed

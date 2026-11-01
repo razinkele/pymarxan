@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
-from pymarxan.solvers.utils import _probmode
+from pymarxan.solvers.utils import _active_chance_terms
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 
 
@@ -43,13 +43,13 @@ def target_met_server(
         if p is None or s is None:
             return None
 
-        # Show probability-target columns only when PROBMODE 3 is active
+        # Show probability-target columns only when the PROBMODE 3 (2D) chance term is active
         # and the solution actually carries a Z-score evaluation. Show
         # clumping columns only when any feature has target2 > 0 and the
         # solution carries a clump evaluation. Same for separation when
         # any feature is sep-active. Keeps the table tidy for legacy runs.
         is_probmode3 = (
-            _probmode(p) == 3
+            "2d" in _active_chance_terms(p)
             and s.prob_shortfalls is not None
         )
         has_clumping = (

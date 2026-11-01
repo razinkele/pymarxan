@@ -7,7 +7,7 @@ import threading
 from shiny import Inputs, Outputs, Session, module, reactive, render, ui
 
 from pymarxan.solvers.base import SolverConfig
-from pymarxan.solvers.utils import _probmode
+from pymarxan.solvers.utils import _chance_terms
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
 from pymarxan_shiny.modules.run_control.progress import SolverProgress
 
@@ -247,7 +247,7 @@ def run_panel_server(
         p = problem()
         if p is None:
             return ui.tags.div()
-        if _probmode(p) != 3:
+        if not _chance_terms(p):
             return ui.tags.div()
         try:
             active = solver()
@@ -259,8 +259,9 @@ def run_panel_server(
             ui.tags.strong("PROBMODE 3 + MIP: "),
             "the chance-constraint term is dropped from the MIP objective "
             "(CBC can't solve √Σσ²·x). The MIP solves the deterministic "
-            "relaxation; the chance-constraint gap is reported post-hoc on "
-            "the Solution. For chance-constraint optimality, use SA, "
+            "relaxation; the chance-constraint gap ("
+            "when the puvspr prob column is present) is reported post-hoc "
+            "on the Solution. For chance-constraint optimality, use SA, "
             "heuristic, or iterative-improvement.",
             class_="alert alert-warning small",
             role="alert",

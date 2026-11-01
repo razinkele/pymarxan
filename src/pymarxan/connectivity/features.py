@@ -30,7 +30,12 @@ def add_connectivity_features(
     start_feature_id: int | None = None,
     threshold: float | None = None,
 ) -> ConservationProblem:
-    """Add connectivity metrics as synthetic features to a problem."""
+    """Add connectivity metrics as synthetic features to a problem.
+
+    Returns a copy of ``problem`` (same type) with only ``features``,
+    ``pu_vs_features`` and a copy of ``parameters`` replaced; every other field,
+    such as ``probability``, ``connectivity`` and ``grid``, is kept.
+    """
     pu_ids = problem.planning_units["id"].tolist()
     existing_max = int(problem.features["id"].max())
     if start_feature_id is None:
@@ -54,18 +59,16 @@ def add_connectivity_features(
         puvspr_rows = metric_to_feature(
             pu_ids, values, fid, threshold=threshold,
         )
+        if "prob" in new_puvspr.columns:
+            # The metric is deterministic; NaN would fail PROBMODE 3's finite-cell check.
+            puvspr_rows["prob"] = 1.0
         new_puvspr = pd.concat(
             [new_puvspr, puvspr_rows], ignore_index=True,
         )
         fid += 1
 
-    return ConservationProblem(
-        planning_units=problem.planning_units,
+    return problem.copy_with(
         features=new_features,
         pu_vs_features=new_puvspr,
-        boundary=problem.boundary,
-        parameters=problem.parameters,
+        parameters=dict(problem.parameters),
     )
-    # NOTE: connectivity_as_features creates a structurally different problem
-    # (new features/amounts), so copy_with() is not appropriate here —
-    # the new features/pu_vs_features replace the originals entirely.

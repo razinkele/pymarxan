@@ -83,9 +83,10 @@ def test_probmode_2_returns_zero():
 
 
 def test_probmode_3_with_no_probability_data_returns_zero():
-    """PROBMODE 3 but no `prob` column on puvspr -> deterministic case;
-    every feature gets the zero-variance sentinel; P ≈ 1 ≥ ptarget so
-    no penalty."""
+    """PROBMODE 3 but no `prob` column on puvspr -> the 2D chance term is off
+    (spec §3.1, a term without its data; `_active_chance_terms`), so the
+    penalty is 0 under either PROBZEROVAR rule. It is not the zero-variance
+    case: under the default rule that gets Z = 4 and nearly the full penalty."""
     problem = _problem_with_prob2d(prob_mode=3)
     # Drop the prob column to simulate "deterministic" data
     problem = problem.copy_with(

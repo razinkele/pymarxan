@@ -179,18 +179,27 @@ class TestZscorePenalty:
         assert p == pytest.approx(expected, abs=1e-9)
 
     def test_sentinel_variance_means_deterministic_no_penalty(self):
-        """Z=4 (Marxan zero-variance sentinel) -> no chance-constraint
-        penalty. The deterministic-target shortfall path handles any
-        deterministic miss; the probability penalty is vacuously
-        satisfied (P=1) when there's no uncertainty.
+        """A zero-variance feature pays Marxan's Z = 4 penalty by default; 0 when opted out.
 
-        Matches Marxan's intent (probability.cpp comment: "degenerate
-        case → P=1") even though norm.sf(4) ≈ 3e-5 would give a
-        non-trivial penalty if we passed it through naïvely.
+        Rewritten (v0.47.0): this test pinned pymarxan's old rule, "zero variance means
+        the chance constraint is vacuously met (P = 1)". Marxan 3's ComputeProbability2D
+        sets Z = 4 for zero variance and scores it normally, so P = norm.sf(4) ≈ 3.17e-5
+        fails ptarget 0.95: penalty (ptarget − norm.sf(4))/ptarget. That is now the
+        default (PROBZEROVAR 0); ``zero_var_rule="met"`` (PROBZEROVAR 1) restores the old
+        result (spec §1 "Zero-variance quirk", §3.6 item 1).
         """
-        p = compute_zscore_penalty(
+        default = compute_zscore_penalty(
             zscore_per_feature={1: 4.0},
             prob_targets={1: 0.95},
             weight=1.0,
+            zero_variance=frozenset({1}),
         )
-        assert p == 0.0
+        assert default == pytest.approx((0.95 - norm.sf(4.0)) / 0.95, abs=1e-15)
+        opted_out = compute_zscore_penalty(
+            zscore_per_feature={1: 4.0},
+            prob_targets={1: 0.95},
+            weight=1.0,
+            zero_variance=frozenset({1}),
+            zero_var_rule="met",
+        )
+        assert opted_out == 0.0

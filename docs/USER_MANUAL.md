@@ -393,7 +393,7 @@ persistence is 1 − probability. It is attached automatically when the project 
 | 0 | Probabilities ignored | — |
 | 1 (default with a table) | Risk premium `PROBABILITYWEIGHTING × Σ probability × cost` over selected units, added to the objective (not to the reported cost; off when the weighting is 0 or below) — the expected cost of protecting units that are then lost; it does not depend on the features a unit holds, and a zero-cost unit carries no premium | pymarxan extension |
 | 2 | Expected amounts: every feature amount counts as `amount × (1 − probability)`, and targets, shortfalls, penalties, representation and gap analysis are judged on them | pymarxan extension |
-| 3 | Z-score probability penalty (a soft chance target, not a hard constraint) from a per-cell probability of **presence** (a `prob` column in `puvspr.dat`) and a per-feature `ptarget` in spec.dat (Marxan's column is `ptarget2d`) | Based on Marxan's Probability 2D, except that a feature with zero variance is treated as met (Marxan 3 treats it as failing: Z = 4) |
+| 3 | Z-score probability penalty (a soft chance target, not a hard constraint) from a per-cell probability of **presence** (a `prob` column in `puvspr.dat`) and a per-feature `ptarget` in spec.dat (Marxan's column is `ptarget2d`) | Marxan's Probability 2D (Marxan 3), including its zero-variance rule (below) |
 
 Modes 1 and 2 have the same meaning in every single-zone solver: the MIP, simulated annealing and
 iterative improvement optimise them, the greedy heuristics use them in their scores (mode 1 as an
@@ -404,6 +404,20 @@ non-finite values (a blank cell reads as NaN) in every mode. Wherever the table 
 with `PROBABILITYWEIGHTING` above 0, and mode 2 — every single-zone solver and the evaluator raise
 `ValueError` on a non-finite probability; modes 0 and 3, and mode 1 with a weighting of 0 or below,
 ignore the table. The zone solvers ignore the probability table.
+
+**PROBMODE 3 and zero variance (`PROBZEROVAR`).** A feature's variance over the selection
+is zero when no selected cell of it is uncertain: nothing that holds it is selected, or every
+selected cell has `prob` 0 or 1. Marxan 3 then sets Z = 4, so the feature's probability of
+meeting its target is `probZUT(4) ≈ 3.2e-5` and it pays almost the full penalty
+(`PROBABILITYWEIGHTING × (ptarget − 3.2e-5) / ptarget`) for any `ptarget` above that. Since
+v0.47.0 this is pymarxan's default (`PROBZEROVAR 0`). It has a counter-intuitive consequence:
+a plan holding a feature only in certain (`prob = 1`) cells scores worse than one that also
+uses a slightly risky cell — with target 10, `ptarget` 0.9, weighting 10 and plans costing 1,
+holding the feature safely scores 10.9996 and holding it in a risky unit 1.0. `PROBZEROVAR 1` in input.dat
+(or `parameters["PROBZEROVAR"] = 1`) restores the pre-v0.47 rule, "zero variance counts as
+met" (no chance penalty for that feature; a deterministic shortfall is still penalised by the
+ordinary target penalty). `validate()` reports any other value. With PROBMODE 3 but no `prob`
+column in puvspr.dat the chance term is off (penalty 0), whatever `PROBZEROVAR` says.
 
 Marxan's own **Probability 1D** (a `prob` column in `pu.dat`, a Z-score on the expected
 amount `Σ amount × (1 − p)` with variance `Σ amount² × p × (1 − p)` against `ptarget1d`) is
@@ -416,7 +430,11 @@ at p = 0.05 with the same expected amount count the same. Use it as a risk-disco
 representation target; for a stated confidence level use a chance formulation (Watts et al.
 2021). Until Probability 1D is implemented, it can be reproduced with PROBMODE 3 by writing
 `prob = 1 − p` (the unit's persistence) on every puvspr.dat row of that unit and setting
-`ptarget` (same mean and variance; zero-variance features differ as noted above).
+`ptarget` (same mean, variance and zero-variance rule). One exception: for a tiny loss
+probability p, `q = 1 − p` rounds to 1 (in double precision below about 5.6e-17, and below
+about 1.7e-16 once written to puvspr.dat and read back by pymarxan's reader), so the cell has
+zero variance, and a feature held only in such cells gets Marxan's zero-variance rule (Z = 4,
+under the default `PROBZEROVAR 0`), where Probability 1D would see a tiny positive variance.
 
 Under PROBMODE 2 some paths still use raw amounts: clumping occupancy (`target2`), separation
 occurrence and space-target weights (simulated annealing and iterative improvement warn when

@@ -27,10 +27,10 @@ class Solution:
     shortfall: float = 0.0  # Total raw feature shortfall (sum of max(0, target - achieved))
     metadata: dict = field(default_factory=dict)
     zone_assignment: np.ndarray | None = None
-    # PROBMODE 3 outputs — populated when the problem has PROBMODE=3 (and
-    # any feature with ptarget > 0). Always None otherwise.
+    # PROBMODE 3 outputs — populated when the 2D chance term is active (PROBMODE 3 with a
+    # puvspr `prob` column; empty / 0 without a spec `ptarget` column). None otherwise.
     prob_shortfalls: dict[int, float] | None = None  # feature_id -> max(0, ptarget − P)
-    prob_penalty: float | None = None  # γ · Σ SPF · (ptarget − P) / ptarget
+    prob_penalty: float | None = None  # γ · Σ [ptarget > P] · (ptarget − P) / ptarget
     # TARGET2 / clumping outputs — populated when the problem has any
     # feature with target2 > 0. Always None otherwise.
     # clump_shortfalls: feature_id -> max(0, T·MISSLEVEL − held_eff)

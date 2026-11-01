@@ -646,7 +646,9 @@ class MultiObjectiveMIP:
                 objective_senses=dict(senses), mip_backend=backend,
             )
             meta.update(
-                mip._strategy_metadata(base.probmode, base.has_target2, base.has_sep_active)
+                mip._strategy_metadata(
+                    base.chance_terms, base.has_target2, base.has_sep_active,
+                )
             )
             solutions.append(build_solution(problem, selected, base.blm, metadata=meta))
         return solutions

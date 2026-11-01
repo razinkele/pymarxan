@@ -1,0 +1,930 @@
+"""``ChanceState`` sidecar and the cache's per-cell chance arrays (spec §3.5).
+
+The contract SA relies on: ``delta_penalty`` equals the difference of the from-scratch
+chance penalty across a flip (tolerance 1e-9), never mutates, and ``apply_flip`` commits
+exactly the previewed state. The adversarial layouts are the ones the spec review used
+to break running sums: p forced to 0 / 1, features whose variance empties and refills,
+amounts spread over 1e6 with the dominant-variance cell removed, p = 1e-17 cells beside
+large-variance cells, and the sparse-risk layout (1 % risky PUs). The plan review added
+layouts where only E or only V cancels, which pin each recompute trigger on its own.
+"""
+from __future__ import annotations
+
+import dataclasses
+import warnings
+
+import numpy as np
+import pandas as pd
+import pytest
+from scipy.special import ndtr
+
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.chance_state import ChanceState
+from pymarxan.solvers.probability import evaluate_solution_chance, score_features
+from pymarxan.solvers.utils import build_solution
+
+TOL = 1e-9
+
+
+# ----------------------------------------------------------------------------- fixtures
+
+
+def _problem(pv: pd.DataFrame, n_pu: int, n_feat: int, rng, *, weight: float = 2.0,
+             pu_ids=None, target_frac=(0.2, 0.6)) -> ConservationProblem:
+    pu_ids = np.arange(1, n_pu + 1) if pu_ids is None else pu_ids
+    pu = pd.DataFrame({"id": pu_ids, "cost": rng.uniform(1, 5, n_pu), "status": 0})
+    tot = (pv.amount * pv.prob).groupby(pv.species).sum().reindex(
+        range(1, n_feat + 1), fill_value=0.0,
+    )
+    feat = pd.DataFrame({
+        "id": range(1, n_feat + 1), "name": [f"f{j}" for j in range(n_feat)],
+        "target": tot.values * rng.uniform(*target_frac, n_feat), "spf": 1.0,
+        # >= 2 features with different ptarget, one disabled
+        "ptarget": np.r_[rng.uniform(0.3, 0.95, n_feat - 1), -1.0],
+    })
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": weight},
+    )
+
+
+def mixed(seed: int, n_pu: int = 120, n_feat: int = 6) -> ConservationProblem:
+    """Shuffled PU ids; q forced to 0 or 1 on ~40 % of cells."""
+    rng = np.random.default_rng(seed)
+    ids = rng.permutation(np.arange(1, n_pu + 1) * 3)
+    k = n_pu * 4
+    pv = pd.DataFrame({
+        "species": rng.integers(1, n_feat + 1, k), "pu": rng.choice(ids, k),
+        "amount": rng.uniform(0.1, 3, k),
+    }).drop_duplicates(["species", "pu"]).reset_index(drop=True)
+    q = rng.uniform(0, 1, len(pv))
+    r = rng.random(len(pv))
+    q[r < 0.25] = 0.0
+    q[(r >= 0.25) & (r < 0.4)] = 1.0
+    pv["prob"] = q
+    return _problem(pv, n_pu, n_feat, rng, pu_ids=ids)
+
+
+def few_risky(seed: int, n_pu: int = 40, n_feat: int = 3) -> ConservationProblem:
+    """Each feature has only 2-3 uncertain cells: its variance empties and refills."""
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)
+            if rng.random() < 0.5]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = rng.uniform(0.5, 4, len(pv))
+    pv["prob"] = 1.0
+    for f in range(1, n_feat + 1):
+        idx = pv.index[pv.species == f][:3]
+        pv.loc[idx, "prob"] = rng.uniform(0.2, 0.8, len(idx))
+    return _problem(pv, n_pu, n_feat, rng)
+
+
+def wide_amounts(seed: int, n_pu: int = 60, n_feat: int = 4) -> ConservationProblem:
+    """Amounts spanning 1e0 .. 1e6, q in (0.01, 0.99)."""
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)
+            if rng.random() < 0.6]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = 10 ** rng.uniform(0, 6, len(pv))
+    pv["prob"] = rng.uniform(0.01, 0.99, len(pv))
+    return _problem(pv, n_pu, n_feat, rng)
+
+
+def tiny_beside_big(seed: int, n_pu: int = 60, n_feat: int = 4) -> ConservationProblem:
+    """q = 1e-17 cells sharing features with a = 1e4, q = 0.5 cells.
+
+    Once the large cells leave, the running V is float residue of order 1e-8 while the
+    true V is ~1e-17: without the error-bounded recompute the delta is off by up to the
+    weight·ptarget scale (measured 4.0) or NaN.
+    """
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)
+            if rng.random() < 0.6]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = rng.uniform(0.5, 3, len(pv))
+    q = np.full(len(pv), 1e-17)
+    big = rng.random(len(pv)) < 0.15
+    pv.loc[big, "amount"] = 1e4
+    q[big] = 0.5
+    pv["prob"] = q
+    return _problem(pv, n_pu, n_feat, rng)
+
+
+def sparse_risk(seed: int, n_pu: int = 400, n_feat: int = 5) -> ConservationProblem:
+    """1 % of PUs risky (presence q = 0.95, i.e. loss p = 0.05); every other cell q = 1."""
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)
+            if rng.random() < 0.6]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = rng.uniform(1, 10, len(pv))
+    risky = rng.choice(np.arange(1, n_pu + 1), max(1, n_pu // 100), replace=False)
+    pv["prob"] = np.where(pv.pu.isin(risky), 0.95, 1.0)
+    return _problem(pv, n_pu, n_feat, rng, target_frac=(0.3, 0.5))
+
+
+def duplicated(seed: int, n_pu: int = 60, n_feat: int = 4) -> ConservationProblem:
+    """Rows drawn with replacement: many cells are named by 2-3 puvspr rows with different
+    q, some ending on a q = 0 or q = 1 row (Marxan 3 adds the rows up one by one)."""
+    rng = np.random.default_rng(seed)
+    ids = rng.permutation(np.arange(1, n_pu + 1) * 5)
+    k = n_pu * 3
+    pv = pd.DataFrame({
+        "species": rng.integers(1, n_feat + 1, k), "pu": rng.choice(ids, k),
+        "amount": rng.uniform(0.1, 3, k),
+    })
+    q = rng.uniform(0, 1, k)
+    r = rng.random(k)
+    q[r < 0.2] = 0.0
+    q[(r >= 0.2) & (r < 0.35)] = 1.0
+    pv["prob"] = q
+    assert pv.duplicated(["species", "pu"]).sum() > k // 10
+    return _problem(pv, n_pu, n_feat, rng, pu_ids=ids)
+
+
+LAYOUTS = {
+    "mixed": mixed, "few_risky": few_risky, "wide_amounts": wide_amounts,
+    "tiny_beside_big": tiny_beside_big, "sparse_risk": sparse_risk, "duplicated": duplicated,
+}
+
+
+def _cache(problem: ConservationProblem, rule: str) -> ProblemCache:
+    return dataclasses.replace(ProblemCache.from_problem(problem), zero_var_rule=rule)
+
+
+def _dense_cells(cache: ProblemCache) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    c = cache.chance_cells["2d"]
+    E = np.zeros((cache.n_pu, cache.n_feat))
+    V = np.zeros_like(E)
+    rows = np.repeat(np.arange(cache.n_pu), np.diff(c.indptr))
+    E[rows, c.indices] = c.e
+    V[rows, c.indices] = c.v
+    return E, V, (V > 0).astype(float)
+
+
+def _reference(cache: ProblemCache, dense, sel: np.ndarray) -> float:
+    """From-scratch chance penalty, independent of ChanceState's arithmetic."""
+    Ec, Vc, Pc = dense
+    x = sel.astype(float)
+    pen = score_features(
+        x @ Ec, x @ Vc, np.rint(x @ Pc).astype(np.int64), cache.feat_targets,
+        cache.feat_ptarget, cache.zero_var_rule,
+    )[3]
+    return cache.prob_weight * float(np.sum(pen))
+
+
+# ----------------------------------------------------------------------- per-cell arrays
+
+
+class TestChanceCells:
+    def test_cells_are_aligned_with_held_csr(self) -> None:
+        cache = ProblemCache.from_problem(mixed(0))
+        c = cache.chance_cells["2d"]
+        np.testing.assert_array_equal(c.indptr, cache.held_csr.indptr)
+        np.testing.assert_array_equal(c.indices, cache.held_csr.indices)
+        assert c.e.shape == c.v.shape == c.pos.shape == cache.held_csr.data.shape
+
+    def test_cell_values_match_the_puvspr_rows(self) -> None:
+        problem = mixed(1)
+        cache = ProblemCache.from_problem(problem)
+        E, V, P = _dense_cells(cache)
+        for row in problem.pu_vs_features.itertuples():
+            i = cache.pu_id_to_idx[int(row.pu)]
+            j = cache.feat_id_to_col[int(row.species)]
+            assert E[i, j] == pytest.approx(row.amount * row.prob, rel=1e-15)
+            assert V[i, j] == pytest.approx(
+                row.amount ** 2 * row.prob * (1.0 - row.prob), rel=1e-15,
+            )
+            assert P[i, j] == float(V[i, j] > 0)
+
+    def test_csc_is_the_same_cells_feature_major(self) -> None:
+        cache = ProblemCache.from_problem(mixed(2))
+        c = cache.chance_cells["2d"]
+        E, V, _ = _dense_cells(cache)
+        for j in range(cache.n_feat):
+            a, b = c.c_indptr[j], c.c_indptr[j + 1]
+            rows = c.c_rows[a:b]
+            assert np.all(np.diff(rows) > 0)
+            np.testing.assert_array_equal(c.c_e[a:b], E[rows, j])
+            np.testing.assert_array_equal(c.c_v[a:b], V[rows, j])
+        assert c.c_indptr[-1] == len(c.e)
+
+    def test_csc_rows_are_contiguous(self) -> None:
+        """``c_e`` and ``c_v`` are contiguous rows, so the recompute's ``bincount`` reads
+        them in place. v0.47.0 review: ``ev[:, order]`` came out F-ordered (strides
+        (8, 16)), and every recompute copied the column's strided slice."""
+        c = ProblemCache.from_problem(mixed(2)).chance_cells["2d"]
+        assert c.c_ev.flags.c_contiguous
+        assert c.c_e.flags.c_contiguous and c.c_v.flags.c_contiguous
+
+    def test_duplicate_rows_add_up_row_by_row(self) -> None:
+        """A cell named by several puvspr rows adds each row's a·q and a²·q(1 − q).
+
+        Marxan 3 keeps one sparse-matrix entry per row (``input.c`` ``readSparseMatrix``)
+        and ``ReturnProbabilityAmounts2D`` adds them one by one, as the evaluator
+        (``_term_moments``) does. Rewritten after the v0.47.0 plan review: the cells put
+        the last row's q on the summed amount (E 2.0, V 6.0 for PU 1 here), so SA / II
+        optimised a different chance term from the one they reported. The unknown species
+        (9) sits on PU 2 (index 1), whose key ``1·n_feat − 1`` is PU 1's real cell: without
+        the builder's unknown-id mask its row lands there (on PU 1 its key, −1, matches
+        nothing, so the mask went untested; v0.47.0 review).
+        """
+        pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+        feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0],
+                             "ptarget": [0.5]})
+        pv = pd.DataFrame({"species": [1, 1, 1, 9], "pu": [1, 1, 2, 2],
+                           "amount": [2.0, 3.0, 4.0, 1.0], "prob": [0.1, 0.4, 0.5, 0.9]})
+        problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                      parameters={"PROBMODE": 3})
+        cache = ProblemCache.from_problem(problem)
+        c = cache.chance_cells["2d"]
+        np.testing.assert_allclose(c.e, [2.0 * 0.1 + 3.0 * 0.4, 4.0 * 0.5], rtol=1e-15)
+        np.testing.assert_allclose(
+            c.v, [4.0 * 0.1 * 0.9 + 9.0 * 0.4 * 0.6, 16.0 * 0.5 * 0.5], rtol=1e-15,
+        )
+        assert c.pos.tolist() == [1, 1]
+
+    def test_a_certain_last_row_keeps_the_cell_uncertain(self) -> None:
+        """Rows (a = 5, q = 0.5) then (a = 1, q = 1) in one cell: V = 6.25, not 0.
+
+        With the last row's q on the summed amount the cell read as zero variance, which
+        under Marxan's rule (Z = 4) charges about the full weighting for a met feature.
+        The cell's nonzero flag follows its summed ``v`` too. Only the hot path reads the
+        flag (``from_selection`` counts ``c_v > 0``), so it is also checked through a flip
+        from the empty selection (v0.47.0 review: a last-row flag passed every chance test).
+        """
+        pu = pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]})
+        feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [2.0], "spf": [1.0],
+                             "ptarget": [0.5]})
+        pv = pd.DataFrame({"species": [1, 1], "pu": [1, 1], "amount": [5.0, 1.0],
+                           "prob": [0.5, 1.0]})
+        problem = ConservationProblem(
+            planning_units=pu, features=feat, pu_vs_features=pv,
+            parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+        )
+        cache = ProblemCache.from_problem(problem)
+        c = cache.chance_cells["2d"]
+        assert c.e.tolist() == [5.0 * 0.5 + 1.0]
+        assert c.v.tolist() == [25.0 * 0.5 * 0.5]
+        assert c.pos.tolist() == [1]
+        sel = np.array([True])
+        expected = evaluate_solution_chance(problem, sel)[1]
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            expected, abs=1e-12,
+        )
+        cs = ChanceState.from_selection(cache, ~sel)
+        before = evaluate_solution_chance(problem, ~sel)[1]
+        assert before > 9.0  # nothing selected: Z = 4; the cell alone meets the target
+        assert cs.delta_penalty(cache, 0, True) == pytest.approx(expected - before, abs=1e-12)
+        cs.apply_flip(cache, 0, True)
+        assert cs.terms["2d"].N.tolist() == [1]
+        assert cs.penalty_total() == pytest.approx(expected, abs=1e-12)
+
+    def test_built_only_for_active_terms(self) -> None:
+        problem = mixed(3)
+        assert set(ProblemCache.from_problem(problem).chance_cells) == {"2d"}
+        off = problem.copy_with(parameters={"PROBMODE": 0})
+        assert ProblemCache.from_problem(off).chance_cells == {}
+        no_data = problem.copy_with(
+            pu_vs_features=problem.pu_vs_features.drop(columns=["prob"]),
+        )
+        assert ProblemCache.from_problem(no_data).chance_cells == {}
+
+
+# ------------------------------------------------------------------------- ChanceState
+
+
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_from_selection_equals_the_evaluator(rule: str, monkeypatch) -> None:
+    import pymarxan.solvers.cache as cache_mod
+    import pymarxan.solvers.utils as utils
+
+    monkeypatch.setattr(utils, "_zero_var_rule", lambda problem: rule)
+    monkeypatch.setattr(cache_mod, "_zero_var_rule", lambda problem: rule)
+    rng = np.random.default_rng(5)
+    for build in LAYOUTS.values():
+        problem = build(11)
+        cache = ProblemCache.from_problem(problem)
+        assert cache.zero_var_rule == rule
+        for _ in range(5):
+            sel = rng.random(cache.n_pu) < rng.uniform(0, 1)
+            cs = ChanceState.from_selection(cache, sel)
+            assert cs.penalty_total() == pytest.approx(
+                evaluate_solution_chance(problem, sel)[1], rel=1e-12, abs=1e-12,
+            )
+
+
+def _run(problem, rule: str, seed: int, flips: int, accept: float,
+         sel=None) -> tuple[ChanceState, np.ndarray, float, float]:
+    cache = _cache(problem, rule)
+    dense = _dense_cells(cache)
+    rng = np.random.default_rng(seed)
+    sel = rng.random(cache.n_pu) < 0.5 if sel is None else sel.copy()
+    cs = ChanceState.from_selection(cache, sel)
+    full = _reference(cache, dense, sel)
+    tracked = cs.penalty_total()
+    assert tracked == pytest.approx(full, abs=TOL)
+    worst = 0.0
+    for _ in range(flips):
+        idx = int(rng.integers(cache.n_pu))
+        add = not sel[idx]
+        d = cs.delta_penalty(cache, idx, add)
+        assert np.isfinite(d)
+        s2 = sel.copy()
+        s2[idx] = add
+        f2 = _reference(cache, dense, s2)
+        worst = max(worst, abs(d - (f2 - full)))
+        if rng.random() < accept:  # mixes accepted and rejected moves
+            cs.apply_flip(cache, idx, add)
+            sel, full = s2, f2
+            tracked += d
+    np.testing.assert_array_equal(cs.selected, sel)
+    return cs, sel, worst, abs(tracked - full)
+
+
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+@pytest.mark.parametrize("layout", sorted(LAYOUTS))
+def test_delta_equals_full_difference(layout: str, rule: str) -> None:
+    flips = 5000 if layout != "sparse_risk" else 2500
+    cs, _, worst, drift = _run(LAYOUTS[layout](7), rule, seed=17, flips=flips, accept=0.6)
+    assert worst <= TOL
+    assert drift <= 1e-8
+
+
+def test_removing_the_dominant_variance_cells_largest_first() -> None:
+    """A largest-first removal chain at amounts spanning 1e6 (round 3's drift case)."""
+    n = 40
+    rng = np.random.default_rng(4)
+    a = 10 ** (6 * np.arange(n) / (n - 1)) * rng.uniform(0.9, 1.1, n)
+    pu = pd.DataFrame({"id": np.arange(1, n + 1), "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": 1, "pu": np.arange(1, n + 1), "amount": a, "prob": 0.5})
+    keep = 3
+    e_k = (a[:keep] * 0.5).sum()
+    sd = np.sqrt((a[:keep] ** 2 * 0.25).sum())
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [e_k + 0.3 * sd], "spf": 1.0,
+                         "ptarget": [0.9]})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    cache = ProblemCache.from_problem(problem)
+    dense = _dense_cells(cache)
+    sel = np.ones(n, dtype=bool)
+    cs = ChanceState.from_selection(cache, sel)
+    full = _reference(cache, dense, sel)
+    for idx in range(n - 1, keep - 1, -1):
+        d = cs.delta_penalty(cache, idx, False)
+        s2 = sel.copy()
+        s2[idx] = False
+        f2 = _reference(cache, dense, s2)
+        assert abs(d - (f2 - full)) <= TOL
+        cs.apply_flip(cache, idx, False)
+        sel, full = s2, f2
+    assert cs.penalty_total() == pytest.approx(full, abs=TOL)
+
+
+def cancelling(seed: int, *, big_a: float, big_q: float, n_certain: int = 0,
+               certain_a: float = 0.0) -> ConservationProblem:
+    """One feature: ``n_certain`` certain cells of amount ``certain_a``, one big cell
+    (``big_a``, ``big_q``), then 60 cells with a ~ U(0.5, 2), q ~ U(0.3, 0.7), on PUs 1..n.
+
+    The target is the certain amount plus the first 30 small cells' E and half their
+    standard deviation, so the penalty is unsaturated once the big cell has left.
+    """
+    rng = np.random.default_rng(seed)
+    n_small = 60
+    a_small = rng.uniform(0.5, 2.0, n_small)
+    q_small = rng.uniform(0.3, 0.7, n_small)
+    amount = np.r_[np.full(n_certain, certain_a), big_a, a_small]
+    prob = np.r_[np.ones(n_certain), big_q, q_small]
+    ids = np.arange(1, len(amount) + 1)
+    pu = pd.DataFrame({"id": ids, "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": 1, "pu": ids, "amount": amount, "prob": prob})
+    half = slice(0, n_small // 2)
+    e_small = (a_small * q_small)[half].sum()
+    sd = np.sqrt((a_small ** 2 * q_small * (1 - q_small))[half].sum())
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "spf": 1.0, "ptarget": [0.6],
+                         "target": [n_certain * certain_a + e_small + 0.5 * sd]})
+    return ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                               parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 1.0})
+
+
+def _row_reference(problem: ConservationProblem, cache: ProblemCache, sel: np.ndarray) -> float:
+    """From-scratch chance penalty of a one-feature problem straight from its puvspr rows
+    (each row's ``a·q`` and ``a²·q(1 − q)``): no cache cells, no running sums."""
+    pv = problem.pu_vs_features
+    x = sel[[cache.pu_id_to_idx[int(u)] for u in pv.pu]]
+    a, q = pv.amount.to_numpy()[x], pv.prob.to_numpy()[x]
+    v = a * a * q * (1.0 - q)
+    feat = problem.features
+    pen = score_features(
+        np.array([np.sum(a * q)]), np.array([np.sum(v)]),
+        np.array([np.count_nonzero(v > 0)], dtype=np.int64),
+        feat.target.to_numpy(), feat.ptarget.to_numpy(), cache.zero_var_rule,
+    )[3]
+    return float(problem.parameters["PROBABILITYWEIGHTING"]) * float(np.sum(pen))
+
+
+@pytest.mark.parametrize(
+    ("big_a", "big_q", "n_certain", "certain_a"),
+    [pytest.param(1e9, 1.0, 0, 0.0, id="E_cancels"),
+     pytest.param(1e5, 0.5, 10, 1e4, id="V_cancels")],
+)
+def test_each_recompute_trigger_repairs_its_own_cancellation(
+    big_a: float, big_q: float, n_certain: int, certain_a: float,
+) -> None:
+    """Only one running sum cancels, so only its trigger can repair it.
+
+    E cancels: an a = 1e9, q = 1 cell leaves beside the 60 uncertain cells and V does not
+    move, so only ``BE > max(τ·√V, 64·eps·|E|)`` fires. V cancels: an a = 1e5, q = 0.5
+    cell leaves while ten certain a = 1e4 cells hold E, so the 64·eps·|E| floor keeps the
+    E trigger quiet and only ``BV > τ·V`` fires. v0.47.0 plan review: in every other
+    layout E and V cancel together, so deleting either trigger left the suite green;
+    without its trigger, each layout's delta missed the full difference by 2.4e-8 to 3e-8.
+    """
+    for seed in range(5):
+        problem = cancelling(seed, big_a=big_a, big_q=big_q, n_certain=n_certain,
+                             certain_a=certain_a)
+        cache = _cache(problem, "met")
+        rng = np.random.default_rng(seed)
+        big = n_certain  # PU index of the big cell
+        small = np.arange(big + 1, cache.n_pu)
+        sel = np.zeros(cache.n_pu, dtype=bool)
+        sel[: big + 1] = True  # the certain cells and the big one
+        sel[small[: len(small) // 2]] = True
+        cs = ChanceState.from_selection(cache, sel)
+        full = _row_reference(problem, cache, sel)
+        # small flips, the big cell leaves, then small flips on the cancelled sum
+        for idx in map(int, [*rng.choice(small, 20), big, *rng.choice(small, 20)]):
+            add = not sel[idx]
+            d = cs.delta_penalty(cache, idx, add)
+            s2 = sel.copy()
+            s2[idx] = add
+            f2 = _row_reference(problem, cache, s2)
+            assert abs(d - (f2 - full)) <= TOL, (seed, idx)
+            cs.apply_flip(cache, idx, add)
+            sel, full = s2, f2
+
+
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_delta_never_mutates(rule: str) -> None:
+    problem = tiny_beside_big(3)
+    cache = _cache(problem, rule)
+    rng = np.random.default_rng(1)
+    cs = ChanceState.from_selection(cache, rng.random(cache.n_pu) < 0.5)
+    t = cs.terms["2d"]
+    snap = [x.copy() for x in (t.E, t.V, t.N, t.BE, t.BV, t.pen, cs.selected)]
+    for _ in range(500):
+        idx = int(rng.integers(cache.n_pu))
+        cs.delta_penalty(cache, idx, not cs.selected[idx])
+    for before, after in zip(snap, (t.E, t.V, t.N, t.BE, t.BV, t.pen, cs.selected)):
+        np.testing.assert_array_equal(before, after)
+
+
+@pytest.mark.parametrize("layout", ["mixed", "duplicated"])
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_commit_equals_preview_and_fresh_state(rule: str, layout: str) -> None:
+    """``duplicated`` holds cells whose rows differ in certainty: their nonzero flag (read
+    only on the hot path) must follow the summed ``v``, or ``N`` leaves a fresh state's."""
+    problem = LAYOUTS[layout](9)
+    cache = _cache(problem, rule)
+    rng = np.random.default_rng(2)
+    cs = ChanceState.from_selection(cache, rng.random(cache.n_pu) < 0.5)
+    t = cs.terms["2d"]
+    for _ in range(300):
+        idx = int(rng.integers(cache.n_pu))
+        add = not cs.selected[idx]
+        cs.delta_penalty(cache, idx, add)
+        assert cs._preview is not None
+        cols, EV2, _, N2, pen2 = cs._preview[3][0]
+        E2, V2 = EV2
+        cs.apply_flip(cache, idx, add)
+        assert cs._preview is None
+        # equals the previewed scratch state exactly
+        np.testing.assert_array_equal(t.E[cols], E2)
+        np.testing.assert_array_equal(t.V[cols], V2)
+        np.testing.assert_array_equal(t.N[cols], N2)
+        np.testing.assert_array_equal(t.pen[cols], pen2)
+        # equals a fresh from_selection to 1e-12 relative
+        fresh = ChanceState.from_selection(cache, cs.selected).terms["2d"]
+        np.testing.assert_array_equal(t.N, fresh.N)
+        np.testing.assert_allclose(t.E, fresh.E, rtol=1e-12, atol=1e-300)
+        np.testing.assert_allclose(t.V, fresh.V, rtol=1e-12, atol=1e-300)
+        np.testing.assert_allclose(t.pen, fresh.pen, rtol=0, atol=1e-12)
+
+
+def test_stale_preview_is_never_committed() -> None:
+    """delta(i), apply_flip(j), apply_flip(i) commits i against the post-j state.
+
+    i and j share a feature through cells with e > 0 and v > 0, so j's flip changes the
+    state i's flip must commit there. v0.47.0 plan review: the old pair (1, 3) shared
+    features only through j's q = 0 cells, so a stale commit gave the right state and the
+    test passed with ``apply_flip``'s preview clearing removed.
+    """
+    problem = mixed(4)
+    cache = ProblemCache.from_problem(problem)
+    dense = _dense_cells(cache)
+    E, V, _ = dense
+    sel = np.zeros(cache.n_pu, dtype=bool)
+    sel[::2] = True
+    i, j = 1, 5
+    assert not sel[i] and not sel[j]
+    assert np.any((E[i] > 0) & (V[i] > 0) & (E[j] > 0) & (V[j] > 0))
+    cs = ChanceState.from_selection(cache, sel)
+    cs.delta_penalty(cache, i, True)
+    cs.apply_flip(cache, j, True)
+    cs.apply_flip(cache, i, True)
+    sel[[i, j]] = True
+    assert cs.penalty_total() == pytest.approx(_reference(cache, dense, sel), abs=TOL)
+    np.testing.assert_allclose(
+        cs.terms["2d"].E, ChanceState.from_selection(cache, sel).terms["2d"].E, rtol=1e-12,
+    )
+
+
+def test_a_pu_without_cells_has_zero_delta() -> None:
+    problem = mixed(5)
+    pu = problem.planning_units
+    extra = pd.DataFrame({"id": [10_000], "cost": [1.0], "status": [0]})
+    problem = problem.copy_with(planning_units=pd.concat([pu, extra], ignore_index=True))
+    cache = ProblemCache.from_problem(problem)
+    cs = ChanceState.from_selection(cache, np.zeros(cache.n_pu, dtype=bool))
+    before = cs.penalty_total()
+    assert cs.delta_penalty(cache, cache.n_pu - 1, True) == 0.0
+    cs.apply_flip(cache, cache.n_pu - 1, True)
+    assert cs.penalty_total() == before
+    assert cs.selected[-1]
+
+
+def _with_a_cell_free_pu(problem: ConservationProblem) -> ConservationProblem:
+    """``problem`` plus PU 10000 (cost 1), which no puvspr row names: the last PU index."""
+    extra = pd.DataFrame({"id": [10_000], "cost": [1.0], "status": [0]})
+    return problem.copy_with(
+        planning_units=pd.concat([problem.planning_units, extra], ignore_index=True),
+    )
+
+
+def test_a_selection_without_chance_cells_gives_a_float_state() -> None:
+    """``np.bincount`` of an empty index array is int64 even with float weights.
+
+    v0.47.0 review: ``from_selection`` built ``EV`` that way, so a start holding no chance
+    cell (SA at PROP 0, an II addition pass from an empty start) had an int ``EV``, and
+    every later ``apply_flip`` truncated the committed E and V toward zero.
+    """
+    cache = ProblemCache.from_problem(_with_a_cell_free_pu(mixed(11)))
+    for sel in (np.zeros(cache.n_pu, dtype=bool), np.arange(cache.n_pu) == cache.n_pu - 1):
+        t = ChanceState.from_selection(cache, sel).terms["2d"]
+        assert t.EV.dtype == np.float64
+        assert t.B.dtype == np.float64
+        assert t.pen.dtype == np.float64
+        assert t.N.dtype == np.int64
+        assert not t.EV.any() and not t.N.any()
+
+
+@pytest.mark.parametrize("start", ["empty", "cell_free"])
+def test_adds_from_a_selection_without_chance_cells_track_a_fresh_state(start: str) -> None:
+    """Three adds from a selection holding no chance cell: nothing selected, or only a PU
+    without cells. Each delta equals the evaluator's difference and each commit a fresh
+    state (the int ``EV`` above truncated E and V from the first commit on)."""
+    problem = _with_a_cell_free_pu(mixed(11))
+    cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    assert c.indptr[-1] == c.indptr[-2]  # the extra PU has no cells
+    sel = np.zeros(cache.n_pu, dtype=bool)
+    sel[-1] = start == "cell_free"
+    cs = ChanceState.from_selection(cache, sel)
+    t = cs.terms["2d"]
+    # the first three PUs whose cells carry non-integral E and V terms
+    adds = [i for i in range(cache.n_pu - 1)
+            if np.any(c.ev[:, c.indptr[i]:c.indptr[i + 1]] % 1.0 != 0.0, axis=1).all()][:3]
+    assert len(adds) == 3
+    prev = evaluate_solution_chance(problem, sel)[1]
+    for idx in adds:
+        d = cs.delta_penalty(cache, idx, True)
+        cs.apply_flip(cache, idx, True)
+        sel[idx] = True
+        expected = evaluate_solution_chance(problem, sel)[1]
+        assert d == pytest.approx(expected - prev, abs=TOL)
+        fresh = ChanceState.from_selection(cache, sel).terms["2d"]
+        np.testing.assert_array_equal(t.N, fresh.N)
+        np.testing.assert_allclose(t.E, fresh.E, rtol=1e-12, atol=0)
+        np.testing.assert_allclose(t.V, fresh.V, rtol=1e-12, atol=0)
+        assert cs.penalty_total() == pytest.approx(expected, abs=TOL)
+        prev = expected
+
+
+def test_sparse_risk_recompute_floor() -> None:
+    """The 64·eps·|E| floor: mostly-certain features do not recompute on every touch,
+    and skipping those recomputes keeps the delta contract (3000 more delta-checked
+    flips on the sparse-risk layout; the plan review found the run discarded both)."""
+    cs, _, worst, drift = _run(sparse_risk(0, n_pu=2000, n_feat=5), "marxan", seed=3,
+                               flips=3000, accept=0.6)
+    assert cs.n_recompute < 300  # without the floor: ~one per touched feature per flip
+    assert worst <= TOL
+    assert drift <= 1e-8
+
+
+def test_tiny_probability_has_variance() -> None:
+    """q = 1e-17 gives a positive variance term: nonzero > 0, not zero variance."""
+    pu = pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0],
+                         "ptarget": [0.5]})
+    pv = pd.DataFrame({"species": [1], "pu": [1], "amount": [5.0], "prob": [1e-17]})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    cache = ProblemCache.from_problem(problem)
+    cs = ChanceState.from_selection(cache, np.array([True]))
+    assert cs.terms["2d"].N[0] == 1
+    assert cs.terms["2d"].V[0] > 0
+
+
+def test_no_active_term_is_inert() -> None:
+    problem = mixed(6).copy_with(parameters={"PROBMODE": 0})
+    cache = ProblemCache.from_problem(problem)
+    cs = ChanceState.from_selection(cache, np.ones(cache.n_pu, dtype=bool))
+    assert cs.penalty_total() == 0.0
+    assert cs.delta_penalty(cache, 0, False) == 0.0
+    cs.apply_flip(cache, 0, False)
+    assert not cs.selected[0]
+
+
+def test_variance_snaps_to_zero_when_nonzero_reaches_zero() -> None:
+    """Removing every feature's last uncertain cell leaves N and V exactly 0.
+
+    Later removals still subtract certain cells from a snapped feature's E, so E is a
+    running sum again and is held to spec §4's 1e-12 of a fresh state; the snap's own E
+    is pinned by ``test_snap_replaces_a_drifted_running_e_with_the_fresh_sum``.
+    """
+    problem = few_risky(2)
+    cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    sel = np.ones(cache.n_pu, dtype=bool)
+    cs = ChanceState.from_selection(cache, sel)
+    t = cs.terms["2d"]
+    risky_rows = np.unique(np.repeat(np.arange(cache.n_pu), np.diff(c.indptr))[c.pos > 0])
+    for i in risky_rows:
+        cs.delta_penalty(cache, int(i), False)
+        cs.apply_flip(cache, int(i), False)
+        sel[i] = False
+    assert (t.N == 0).all()
+    assert (t.V == 0.0).all()
+    fresh = ChanceState.from_selection(cache, sel).terms["2d"]
+    np.testing.assert_allclose(t.E, fresh.E, rtol=1e-12)
+
+
+def test_snap_replaces_a_drifted_running_e_with_the_fresh_sum() -> None:
+    """When nonzero reaches 0, E becomes the sum ``from_selection`` forms, not the running E.
+
+    Adding and removing an a = 1e9, q = 1 cell rounds the running E onto that cell's grid
+    (ulp ~1.2e-7). The a = 1e8, q = 0.5 cell's √V keeps the E trigger quiet (τ·√V = 5e-5),
+    so nothing repairs the drift until that last uncertain cell leaves and the snap does.
+    A recompute adds the cells as ``from_selection`` does, so E is compared bit for bit.
+    v0.47.0 plan review: at few_risky's amounts the running E passed the old rtol = 1e-15,
+    so a snap keeping it went unnoticed.
+    """
+    m = 10  # certain cells, then the toggled cell and the risky one
+    rng = np.random.default_rng(1)
+    a = np.r_[rng.uniform(0.5, 2.0, m), 1e9, 1e8]
+    q = np.r_[np.ones(m + 1), 0.5]
+    ids = np.arange(1, m + 3)
+    pu = pd.DataFrame({"id": ids, "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": 1, "pu": ids, "amount": a, "prob": q})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [0.5 * a[:m].sum()],
+                         "spf": 1.0, "ptarget": [0.9]})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    cache = ProblemCache.from_problem(problem)
+    big, risky = m, m + 1
+    sel = np.ones(m + 2, dtype=bool)
+    sel[big] = False
+    cs = ChanceState.from_selection(cache, sel)
+    t = cs.terms["2d"]
+    for add in (True, False):
+        cs.delta_penalty(cache, big, add)
+        cs.apply_flip(cache, big, add)
+    sel[risky] = False
+    fresh = ChanceState.from_selection(cache, sel).terms["2d"]
+    # a snap keeping the running E would leave it off the fresh sum by > 100 × 1e-12
+    kept = t.E[0] - a[risky] * q[risky]
+    assert abs(kept - fresh.E[0]) > 1e-10 * fresh.E[0]
+    cs.delta_penalty(cache, risky, False)
+    cs.apply_flip(cache, risky, False)
+    assert t.N[0] == 0 and t.V[0] == 0.0
+    assert t.E[0] == fresh.E[0]
+
+
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_hot_path_penalty_is_the_core_arithmetic(rule: str) -> None:
+    """``ChanceState``'s lean scorer equals ``score_features``' penalty bit for bit."""
+    from pymarxan.solvers.probability import _chance_penalty, _ptarget_den
+
+    rng = np.random.default_rng(8)
+    n = 500
+    N = rng.integers(0, 3, n)
+    V = np.where(N > 0, rng.uniform(1e-300, 9, n), 0.0)
+    E = rng.uniform(0, 20, n)
+    t = rng.uniform(0, 20, n)
+    pt = rng.choice([-1.0, 0.0, 1e-6, 0.3, 0.95, 1.0], n)
+    ref = score_features(E, V, N, t, pt, rule)[3]
+    got = _chance_penalty(E, V, N == 0, t, pt, _ptarget_den(pt), rule == "met")
+    np.testing.assert_array_equal(got, ref)
+
+
+@pytest.mark.parametrize("rule", ["marxan", "met"])
+def test_hot_path_penalty_tests_the_variance_as_marxan_does(rule: str) -> None:
+    """Counted as uncertain (``zero`` False) yet ``V`` ≤ 0 or NaN: Marxan's ``Z = 4``.
+
+    Marxan 3 tests ``V > 0`` (``ComputeProbability2D``: else ``Z = 4``); a puvspr ``prob``
+    outside [0, 1] beside a valid uncertain cell gives such a feature, and a recompute
+    cannot help, since V is negative. The hot path took √V there (NaN, a RuntimeWarning)
+    and scored 0 (v0.47.0 plan review). The last feature (V = 1) is the normal path.
+    """
+    from pymarxan.solvers.probability import _chance_penalty, _ptarget_den
+
+    E = np.array([13.0, 13.0, 13.0, 1.0])
+    V = np.array([-23.0, 0.0, np.nan, 1.0])
+    t = np.full(4, 8.0)
+    pt = np.full(4, 0.9)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        got = _chance_penalty(E, V, np.zeros(4, dtype=bool), t, pt, _ptarget_den(pt),
+                              rule == "met")
+    sf4 = float(ndtr(-4.0))
+    expected = 0.0 if rule == "met" else (0.9 - sf4) / 0.9
+    np.testing.assert_array_equal(got[:3], [expected] * 3)
+    np.testing.assert_array_equal(got, score_features(E, V, np.ones(4), t, pt, rule)[3])
+
+
+def long_column(seed: int, n_pu: int = 2000, n_feat: int = 2) -> ConservationProblem:
+    """Every PU holds every feature: 2000 cells per feature column, where a threaded BLAS
+    matvec splits the recompute's sum across threads."""
+    rng = np.random.default_rng(seed)
+    rows = [(f, i) for f in range(1, n_feat + 1) for i in range(1, n_pu + 1)]
+    pv = pd.DataFrame(rows, columns=["species", "pu"])
+    pv["amount"] = 10 ** rng.uniform(-1, 3, len(pv))
+    pv["prob"] = rng.uniform(0.05, 0.95, len(pv))
+    return _problem(pv, n_pu, n_feat, rng)
+
+
+@pytest.mark.parametrize(
+    "layout", ["mixed", "wide_amounts", "tiny_beside_big", "duplicated", "long_column"],
+)
+def test_recompute_equals_a_fresh_state_bit_for_bit(layout: str) -> None:
+    """A feature's recompute sums in ``from_selection``'s order: bit for bit the same.
+
+    This pins the summation order only. On finite cells a whole-column sum with 0/1
+    weights is bit-identical to the selected-only sum, so this test cannot see whether
+    unselected cells are excluded; that is pinned by
+    ``test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute``.
+
+    v0.47.0 plan review: the masked BLAS matvec it replaced summed in another order on
+    long columns (threaded MKL past ~800 cells, thread-count dependent), so a recompute
+    only approximated a fresh state there.
+    """
+    problem = {**LAYOUTS, "long_column": long_column}[layout](4)
+    cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    rng = np.random.default_rng(12)
+    for _ in range(30):
+        sel = rng.random(cache.n_pu) < rng.uniform(0.2, 0.9)
+        cs = ChanceState.from_selection(cache, sel)
+        idx = int(rng.integers(cache.n_pu))
+        after = sel.copy()
+        after[idx] = not sel[idx]
+        fresh = ChanceState.from_selection(cache, after).terms["2d"]
+        for j in range(cache.n_feat):
+            ee, vv = cs._column_sums(c, j, idx, bool(after[idx]))
+            assert ee == fresh.E[j] and vv == fresh.V[j]
+
+
+def test_an_int_selection_gives_the_same_recompute() -> None:
+    """A state built from an int 0/1 selection holds it as bool and recomputes, previews
+    and commits exactly as the bool one does.
+
+    v0.47.0 review: the recompute indexed the column with the selection, so an int mask
+    became integer fancy indexing that summed cells 0 and 1 over and over, with no error.
+    """
+    cache = ProblemCache.from_problem(long_column(5))
+    c = cache.chance_cells["2d"]
+    rng = np.random.default_rng(3)
+    sel = rng.random(cache.n_pu) < 0.5
+    ref = ChanceState.from_selection(cache, sel)
+    base = ChanceState.from_selection(cache, sel)
+    cs = ChanceState(
+        selected=sel.astype(np.int8), terms=base.terms, weight=base.weight,
+        zero_var_rule=base.zero_var_rule, targets=base.targets, ptargets=base.ptargets,
+    )
+    assert cs.selected.dtype == np.bool_
+    for idx in rng.integers(cache.n_pu, size=10).tolist():
+        adding = not ref.selected[idx]
+        for j in range(cache.n_feat):
+            assert cs._column_sums(c, j, idx, adding) == ref._column_sums(c, j, idx, adding)
+        assert cs.delta_penalty(cache, idx, adding) == ref.delta_penalty(cache, idx, adding)
+        cs.apply_flip(cache, idx, adding)
+        ref.apply_flip(cache, idx, adding)
+    assert cs.penalty_total() == ref.penalty_total()
+    np.testing.assert_array_equal(cs.selected, ref.selected)
+
+
+def test_a_nan_in_an_unselected_cell_raises_at_cache_build() -> None:
+    """PU 4's cell has no ``prob`` (a blank field reads as NaN) and is never selected.
+
+    Building the chance cells raises ``ValueError`` naming PU 4, and so does the
+    evaluator for a selection without PU 4. v0.47.0 plan review: removing PU 1's
+    large-variance cell recomputed the feature with a masked matvec that multiplied
+    PU 4's NaN by 0, which left E and V NaN and the penalty silently 0. The recompute now
+    adds only the selected cells; a non-finite cell that still gets past this check (an
+    overflowing a²) pins that, in
+    ``test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute``.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1] * 4, "pu": [1, 2, 3, 4],
+                       "amount": [1e4, 2.0, 3.0, 5.0], "prob": [0.5, 0.6, 0.7, np.nan]})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+    )
+    with pytest.raises(ValueError, match=r"non-finite .* prob for planning unit IDs \[4\]"):
+        ProblemCache.from_problem(problem)
+    with pytest.raises(ValueError, match=r"non-finite .* prob for planning unit IDs \[4\]"):
+        evaluate_solution_chance(problem, np.array([True, True, True, False]))
+
+
+def test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute() -> None:
+    """PU 4 is never selected. Its amount (1e200) and prob (0.5) are finite, so they pass
+    the finiteness check, but its variance term a²·q(1 − q) overflows to inf.
+
+    Removing PU 1's large-variance cell recomputes the feature, which must add only the
+    selected cells, as ``from_selection`` and the evaluator do. A recompute over the whole
+    column against a 0/1 mask multiplies PU 4's inf by 0 (v0.47.0 plan review): V turns
+    NaN, the feature pays Marxan's Z = 4 (≈ 9.9996) instead of 6.2311, and no recompute
+    trigger fires on a NaN V: it stays wrong until the feature's nonzero count reaches 0
+    and the snap resets E and V. PU 2 then leaves and comes back: the state must still
+    match.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0] * 4, "status": [0] * 4})
+    feat = pd.DataFrame({"id": [1], "name": ["a"], "target": [4.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1] * 4, "pu": [1, 2, 3, 4],
+                       "amount": [1e4, 2.0, 3.0, 1e200], "prob": [0.5, 0.6, 0.7, 0.5]})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0},
+    )
+    with np.errstate(over="ignore"):  # PU 4's a² overflows: the point of the test
+        cache = ProblemCache.from_problem(problem)
+    c = cache.chance_cells["2d"]
+    assert np.isinf(c.v[c.indptr[3]])
+    sel = np.array([True, True, True, False])
+    cs = ChanceState.from_selection(cache, sel)
+    before = cs.n_recompute
+    prev = evaluate_solution_chance(problem, sel)[1]
+    for step, (idx, adding) in enumerate([(0, False), (1, False), (1, True)]):
+        d = cs.delta_penalty(cache, idx, adding)
+        cs.apply_flip(cache, idx, adding)
+        sel[idx] = adding
+        if step == 0:
+            assert cs.n_recompute > before  # PU 1 left: the feature was recomputed
+        expected = evaluate_solution_chance(problem, sel)[1]
+        assert np.isfinite(expected) and expected > 1.0
+        fresh = ChanceState.from_selection(cache, sel).penalty_total()
+        assert cs.penalty_total() == pytest.approx(fresh, rel=1e-12)
+        assert cs.penalty_total() == pytest.approx(expected, rel=1e-12)
+        assert d == pytest.approx(expected - prev, abs=TOL)
+        prev = expected
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+@pytest.mark.parametrize("column", ["prob", "amount"])
+def test_a_non_finite_cell_raises_in_the_cache_and_the_evaluator(
+    column: str, bad: float,
+) -> None:
+    """A non-finite puvspr ``prob`` or ``amount`` raises where the 2D cells are built and
+    in the evaluator, naming every such PU, selected (2) or not (3).
+
+    As ``_probability_map`` does for prob.dat: with only one site, the value would still
+    reach the other path silently, as NaN moments and a chance penalty of 0. Without an
+    active chance term (PROBMODE 0, or no ``prob`` column) nothing reads the cells, and
+    nothing raises.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [1.0] * 3, "status": [0] * 3})
+    feat = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [2.0, 1.0],
+                         "spf": [1.0, 1.0], "ptarget": [0.9, 0.5]})
+    pv = pd.DataFrame({"species": [1, 1, 2, 2], "pu": [1, 2, 2, 3],
+                       "amount": [2.0, 3.0, 1.0, 4.0], "prob": [0.5, 0.6, 0.7, 0.8]})
+    pv.loc[[1, 3], column] = bad
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3})
+    sel = np.array([True, True, False])
+    match = rf"non-finite .* {column} for planning unit IDs \[2, 3\]"
+    with pytest.raises(ValueError, match=match):
+        ProblemCache.from_problem(problem)
+    with pytest.raises(ValueError, match=match):
+        evaluate_solution_chance(problem, sel)
+    with pytest.raises(ValueError, match=match):
+        build_solution(problem, sel, 0.0)
+    inactive = [problem.copy_with(parameters={"PROBMODE": 0})]
+    if column == "amount":
+        inactive.append(problem.copy_with(pu_vs_features=pv.drop(columns=["prob"])))
+    for off in inactive:
+        assert ProblemCache.from_problem(off).chance_cells == {}
+        build_solution(off, sel, 0.0)

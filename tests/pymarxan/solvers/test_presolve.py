@@ -1,6 +1,7 @@
 """presolve_check (spec §4, Testing 10, 14; Review Focus 4)."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import warnings
@@ -191,7 +192,7 @@ def test_presolve_check_guards_internal_errors(monkeypatch: pytest.MonkeyPatch) 
 def test_import_order_no_cycle(module: str) -> None:
     code = f"import {module}; import pymarxan; pymarxan.presolve_check; pymarxan.PresolveWarning"
     subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).parents[3],
-                   env={"PYTHONPATH": "src", "PATH": ""})
+                   env={**os.environ, "PYTHONPATH": "src"})
 
 
 def test_p1_messages_name_entities() -> None:

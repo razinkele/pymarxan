@@ -1,0 +1,468 @@
+"""Marxan 3's zero-variance rule (Z = 4) is the default; ``PROBZEROVAR 1`` opts out.
+
+v0.47.0 (spec §1 "Zero-variance quirk", §3.4). Marxan 3 ``ComputeProbability2D`` sets
+``Z = 4`` when a feature's variance over the selection is 0, so ``P = probZUT(4) ≈ 3.17e-5``
+fails any ``ptarget`` above it. ``PROBZEROVAR 1`` restores pymarxan's pre-v0.47 rule
+("zero variance = met"). Includes a hand example against a test-local Python port of
+Marxan 3's ``ReturnProbabilityAmounts2D`` / ``ComputeProbability2D`` / ``probZUT``
+(``marxan3`` branch, ``probability.c``).
+"""
+from __future__ import annotations
+
+import dataclasses
+import math
+import warnings
+
+import numpy as np
+import pandas as pd
+import pytest
+from scipy.stats import norm
+
+from pymarxan.io.readers import load_project
+from pymarxan.io.writers import save_project
+from pymarxan.models import problem as problem_mod
+from pymarxan.models.problem import ConservationProblem
+from pymarxan.solvers import utils
+from pymarxan.solvers.cache import ProblemCache
+from pymarxan.solvers.chance_state import ChanceState
+from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+from pymarxan.solvers.probability import (
+    DEFAULT_ZERO_VAR_RULE,
+    _term_moments,
+    evaluate_solution_chance,
+    score_features,
+)
+from pymarxan.solvers.utils import _zero_var_rule, build_solution
+
+SF4 = float(norm.sf(4.0))
+
+
+# ------------------------------------------------- Marxan 3 transcription (probability.c)
+
+
+def probZUT(z: float) -> float:
+    """Ibbetson (CACM Alg. 209) upper tail, Z_MAX = 5 — probability.c ``probZUT``."""
+    Z_MAX = 5.0
+    if z == 0.0:
+        x = 0.0
+    else:
+        y = 0.5 * abs(z)
+        if y >= Z_MAX * 0.5:
+            x = 1.0
+        elif y < 1.0:
+            w = y * y
+            x = ((((((((0.000124818987 * w
+                        - 0.001075204047) * w + 0.005198775019) * w
+                      - 0.019198292004) * w + 0.059054035642) * w
+                    - 0.151968751364) * w + 0.319152932694) * w
+                  - 0.531923007300) * w + 0.797884560593) * y * 2.0
+        else:
+            y -= 2.0
+            x = (((((((((((((-0.000045255659 * y
+                             + 0.000152529290) * y - 0.000019538132) * y
+                           - 0.000676904986) * y + 0.001390604284) * y
+                         - 0.000794620820) * y - 0.002034254874) * y
+                       + 0.006549791214) * y - 0.010557625006) * y
+                     + 0.011630447319) * y - 0.009279453341) * y
+                   + 0.005353579108) * y - 0.002141268741) * y
+                 + 0.000535310849) * y + 0.999936657524
+    return (x + 1.0) * 0.5 if z < 0.0 else (1.0 - x) * 0.5
+
+
+def marxan3_probability2d(problem: ConservationProblem, selected: np.ndarray):
+    """``ReturnProbabilityAmounts2D`` over the selected PUs, then ``ComputeProbability2D``.
+
+    Returns (per-feature P, weighted probability2D)."""
+    feats = problem.features
+    idx = {int(f): j for j, f in enumerate(feats["id"])}
+    E = [0.0] * len(feats)
+    V = [0.0] * len(feats)
+    chosen = {int(p) for p, s in zip(problem.planning_units["id"], selected) if s}
+    for row in problem.pu_vs_features.itertuples():
+        if int(row.pu) in chosen and row.amount:
+            j = idx[int(row.species)]
+            E[j] += row.amount * row.prob
+            V[j] += row.amount * row.amount * row.prob * (1 - row.prob)
+    P, total = [], 0.0
+    for j, (target, ptarget2d) in enumerate(zip(feats["target"], feats["ptarget"])):
+        z = (target - E[j]) / math.sqrt(V[j]) if V[j] > 0 else 4
+        p = probZUT(z) if z >= 0 else 1 - probZUT(-1 * z)
+        heaviside = 1 if ptarget2d > p else 0
+        shortfall = (ptarget2d - p) / ptarget2d if ptarget2d > 0 else 0
+        P.append(p)
+        total += heaviside * shortfall
+    weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
+    return P, total * weight
+
+
+def hand_example(**params) -> tuple[ConservationProblem, np.ndarray]:
+    """PUs 1-3 selected, PU 4 not.
+
+    f1: q ≠ 0.5, E = 6.9 > target 5 (negative Z, P ≈ 0.80), ptarget 0.95.
+    f2: only q = 1 cells selected → zero variance, ptarget 0.6 > probZUT(4).
+    f3: unselected (its only cell is in PU 4) → zero variance, ptarget 0.3.
+    f4: E = 3.4 < target 6 (positive Z), ptarget 0.8.
+    """
+    pu = pd.DataFrame({"id": [1, 2, 3, 4], "cost": [1.0, 2.0, 3.0, 4.0], "status": [0] * 4})
+    feat = pd.DataFrame({
+        "id": [1, 2, 3, 4], "name": list("abcd"), "target": [5.0, 4.0, 2.0, 6.0],
+        "spf": [1.0] * 4, "ptarget": [0.95, 0.6, 0.3, 0.8],
+    })
+    pv = pd.DataFrame({
+        "species": [1, 1, 1, 2, 2, 3, 4, 4],
+        "pu": [1, 2, 3, 1, 2, 4, 2, 3],
+        "amount": [4.0, 3.0, 2.0, 5.0, 1.0, 9.0, 2.0, 3.0],
+        "prob": [0.8, 0.7, 0.8, 1.0, 1.0, 0.4, 0.2, 1.0],
+    })
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 7.0, **params},
+    )
+    return problem, np.array([True, True, True, False])
+
+
+class TestHandExampleAgainstMarxan3:
+    def test_per_feature_probability(self) -> None:
+        problem, sel = hand_example()
+        P_mx, _ = marxan3_probability2d(problem, sel)
+        E, V, N = _term_moments(problem, sel, "2d", problem.features["id"].values)
+        z, p, _, _ = score_features(
+            E, V, N, problem.features["target"].values, problem.features["ptarget"].values,
+            _zero_var_rule(problem),
+        )
+        assert z[0] < 0 and z[3] > 0  # both signs of Z exercised
+        assert N[1] == 0 and N[2] == 0  # f2 (q = 1) and f3 (unselected): zero variance
+        assert np.all(np.abs(z) < 5)  # Marxan's probZUT is exact 0/1 beyond |z| = 5
+        np.testing.assert_allclose(p, P_mx, rtol=0, atol=1e-6)
+
+    def test_total_penalty_evaluator_and_chance_state(self) -> None:
+        problem, sel = hand_example()
+        _, total_mx = marxan3_probability2d(problem, sel)
+        _, total = evaluate_solution_chance(problem, sel)
+        # penalty differences are P differences / ptarget (min ptarget 0.3), times weight 7
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        assert total > 7 * 0.9  # the zero-variance f2 alone costs ~ weight·1
+        cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+        assert build_solution(problem, sel, 0.0).prob_penalty == pytest.approx(total, abs=1e-12)
+
+    def test_duplicate_rows_follow_marxan3(self) -> None:
+        """Marxan 3 keeps one sparse-matrix entry per puvspr row (``input.c``
+        ``readSparseMatrix``) and adds them up one by one: a cell named twice is two rows,
+        not the summed amount with the last row's q. Adds f4 at PU 2 again with q = 1 (after
+        its q = 0.2 row) and f1 at PU 1 again with the same q."""
+        problem, sel = hand_example()
+        extra = pd.DataFrame({"species": [4, 1], "pu": [2, 1], "amount": [1.0, 4.0],
+                              "prob": [1.0, 0.8]})
+        problem = problem.copy_with(
+            pu_vs_features=pd.concat([problem.pu_vs_features, extra], ignore_index=True),
+        )
+        _, total_mx = marxan3_probability2d(problem, sel)
+        _, total = evaluate_solution_chance(problem, sel)
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+
+    def test_met_chance_target_follows_marxan3(self) -> None:
+        """Marxan 3's Heaviside 0 (``ptarget2d > rProbability`` false): f1 at ptarget 0.7
+        is met (P ≈ 0.80) and pays nothing. A separate case: lowering f1's ptarget in
+        ``hand_example`` itself would leave f1's duplicate row in
+        ``test_duplicate_rows_follow_marxan3`` met however the rows are added up."""
+        base, sel = hand_example()
+        feat = base.features.copy()
+        feat.loc[feat["id"] == 1, "ptarget"] = 0.7
+        problem = base.copy_with(features=feat)
+        P_mx, total_mx = marxan3_probability2d(problem, sel)
+        assert 0.7 < P_mx[0] < 0.95  # met at 0.7, not at hand_example's 0.95
+        shortfalls, total = evaluate_solution_chance(problem, sel)
+        assert shortfalls[1] == 0.0
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        _, base_total = evaluate_solution_chance(base, sel)
+        assert base_total - total == pytest.approx(7.0 * (0.95 - P_mx[0]) / 0.95, abs=1e-5)
+        cache = ProblemCache.from_problem(problem)
+        assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+            total, abs=1e-12,
+        )
+
+    def test_z_uses_the_raw_target_under_misslevel(self) -> None:
+        """Spec §4: MISSLEVEL ≠ 1 does not change Z (Marxan's ``spec.target``), in the
+        evaluator, ``ChanceState`` (fresh and per flip) and ``build_solution``. Folding
+        MISSLEVEL into the cache's targets would move the solvers' Z but not the
+        evaluator's."""
+        base, sel = hand_example()
+        problem, _ = hand_example(MISSLEVEL=0.5)
+        P_mx, total_mx = marxan3_probability2d(problem, sel)
+        ids = problem.features["id"].values
+        _, p, _, _ = score_features(
+            *_term_moments(problem, sel, "2d", ids), problem.features["target"].values,
+            problem.features["ptarget"].values, _zero_var_rule(problem),
+        )
+        np.testing.assert_allclose(p, P_mx, rtol=0, atol=1e-6)
+        assert evaluate_solution_chance(problem, sel) == evaluate_solution_chance(base, sel)
+        _, total = evaluate_solution_chance(problem, sel)
+        assert total == pytest.approx(total_mx, abs=7 * 1e-6 / 0.3)
+        cache, base_cache = ProblemCache.from_problem(problem), ProblemCache.from_problem(base)
+        assert cache.misslevel == 0.5
+        cs, base_cs = ChanceState.from_selection(cache, sel), ChanceState.from_selection(
+            base_cache, sel,
+        )
+        assert cs.penalty_total() == pytest.approx(total, abs=1e-12)
+        for idx in range(cache.n_pu):
+            assert cs.delta_penalty(cache, idx, not sel[idx]) == pytest.approx(
+                base_cs.delta_penalty(base_cache, idx, not sel[idx]), abs=1e-12,
+            )
+        assert build_solution(problem, sel, 0.0).prob_penalty == pytest.approx(
+            total, abs=1e-12,
+        )
+
+    def test_zero_variance_features_pay_marxans_penalty(self) -> None:
+        problem, sel = hand_example()
+        shortfalls, _ = evaluate_solution_chance(problem, sel)
+        assert shortfalls[2] == pytest.approx(0.6 - SF4)
+        assert shortfalls[3] == pytest.approx(0.3 - SF4)
+
+    def test_opt_out_drops_only_the_zero_variance_features(self) -> None:
+        problem, sel = hand_example()
+        opt_out, _ = hand_example(PROBZEROVAR=1)
+        _, marxan = evaluate_solution_chance(problem, sel)
+        shortfalls, met = evaluate_solution_chance(opt_out, sel)
+        assert shortfalls[2] == 0.0 and shortfalls[3] == 0.0
+        expected_gap = 7.0 * ((0.6 - SF4) / 0.6 + (0.3 - SF4) / 0.3)
+        assert marxan - met == pytest.approx(expected_gap, abs=1e-12)
+
+
+# ------------------------------------------------------------- zero-variance rule cases
+
+
+def _zero_var_problem(qs: list[float], **params) -> ConservationProblem:
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [3.0, 3.0],
+                         "spf": [1.0, 1.0], "ptarget": [0.9, 0.5]})
+    pv = pd.DataFrame({"species": [1, 1, 2, 2], "pu": [1, 2, 1, 2],
+                       "amount": [2.0, 2.0, 2.0, 2.0], "prob": qs})
+    return ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                               parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 2.0,
+                                           **params})
+
+
+ZERO_VAR_CASES = {
+    "nothing selected": ([0.5, 0.5, 0.5, 0.5], [False, False]),
+    "all q = 1": ([1.0, 1.0, 1.0, 1.0], [True, True]),
+    "all q = 0": ([0.0, 0.0, 0.0, 0.0], [True, True]),
+    "q in {0, 1}": ([0.0, 1.0, 1.0, 0.0], [True, True]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(ZERO_VAR_CASES))
+def test_zero_variance_default_is_marxans_rule(case: str) -> None:
+    qs, sel = ZERO_VAR_CASES[case]
+    problem = _zero_var_problem(qs)
+    sel_arr = np.array(sel)
+    expected = 2.0 * ((0.9 - SF4) / 0.9 + (0.5 - SF4) / 0.5)
+    assert evaluate_solution_chance(problem, sel_arr)[1] == pytest.approx(expected)
+    cache = ProblemCache.from_problem(problem)
+    assert cache.zero_var_rule == "marxan"
+    assert ChanceState.from_selection(cache, sel_arr).penalty_total() == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("case", sorted(ZERO_VAR_CASES))
+def test_zero_variance_opt_out_is_met(case: str) -> None:
+    qs, sel = ZERO_VAR_CASES[case]
+    problem = _zero_var_problem(qs, PROBZEROVAR=1)
+    sel_arr = np.array(sel)
+    shortfalls, penalty = evaluate_solution_chance(problem, sel_arr)
+    assert penalty == 0.0 and shortfalls == {1: 0.0, 2: 0.0}
+    cache = ProblemCache.from_problem(problem)
+    assert cache.zero_var_rule == "met"
+    assert ChanceState.from_selection(cache, sel_arr).penalty_total() == 0.0
+
+
+def test_the_documented_safe_vs_risky_inversion() -> None:
+    """Under Marxan's rule a safe (q = 1) PU scores worse than a risky one (CHANGELOG).
+
+    PU 1 risky (cost 1, q = 0.5), PU 2 safe (cost 2, q = 1); amount 10, target 5,
+    ptarget 0.9, weight 50. Holding PU 1: 1 + 50·(0.9 − 0.5)/0.9 ≈ 23.2; holding PU 2:
+    2 + 50·(0.9 − sf(4))/0.9 ≈ 52.0 by default, 2 under PROBZEROVAR 1.
+    """
+    def problem(**params):
+        pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 2.0], "status": [0, 0]})
+        feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [5.0], "spf": [1.0],
+                             "ptarget": [0.9]})
+        pv = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [10.0, 10.0],
+                           "prob": [0.5, 1.0]})
+        return ConservationProblem(
+            planning_units=pu, features=feat, pu_vs_features=pv,
+            parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 50.0, "BLM": 0.0, **params},
+        )
+
+    risky, safe = np.array([True, False]), np.array([False, True])
+    p = problem()
+    assert build_solution(p, safe, 0.0).objective == pytest.approx(
+        2 + 50 * (0.9 - SF4) / 0.9,
+    )
+    assert build_solution(p, risky, 0.0).objective < build_solution(p, safe, 0.0).objective
+    start = build_solution(p, risky, 0.0)
+    assert IterativeImprovementSolver(itimptype=3).improve(p, start).selected.tolist() == [
+        True, False,
+    ]
+    q = problem(PROBZEROVAR=1)
+    assert build_solution(q, safe, 0.0).objective == pytest.approx(2.0)
+    sol = IterativeImprovementSolver(itimptype=3).improve(q, build_solution(q, risky, 0.0))
+    assert sol.selected.tolist() == [False, True]
+
+
+def _out_of_range_problem(q: float, **params) -> ConservationProblem:
+    """PU 1: a = 10 with presence ``q``; PU 2: a = 2, q = 0.5 (a valid uncertain cell).
+    One feature, target 8, ptarget 0.9; weighting 10."""
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [8.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [10.0, 2.0],
+                       "prob": [q, 0.5]})
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, **params},
+    )
+
+
+@pytest.mark.parametrize("q", [1.2, -0.1])
+def test_a_prob_outside_0_1_beside_an_uncertain_cell_follows_marxan3(q: float) -> None:
+    """Marxan 3 tests the variance itself: ``ComputeProbability2D`` takes Z = 4 unless V > 0.
+
+    The q = 1.2 (−0.1) cell's variance term is negative, so it is not counted: the feature
+    has nonzero 1 from the q = 0.5 cell but V = −23 (−10). The count alone gave Z = NaN and
+    a silent penalty of 0, in the evaluator and in ``ChanceState``, where adding the valid
+    cell to the invalid one dropped the penalty from about the full weighting to 0
+    (v0.47.0 plan review). Such a ``prob`` is used as given; ``validate()`` reporting it is
+    release B. Under ``PROBZEROVAR 1`` the feature counts as met, as before v0.47.
+    """
+    problem = _out_of_range_problem(q)
+    both = np.array([True, True])
+    _, V, N = _term_moments(problem, both, "2d", problem.features["id"].values)
+    assert N[0] == 1 and V[0] < 0
+    _, total_mx = marxan3_probability2d(problem, both)
+    z4 = 10.0 * (0.9 - SF4) / 0.9
+    assert total_mx == pytest.approx(z4, abs=10 * 1e-6 / 0.9)
+    shortfalls, total = evaluate_solution_chance(problem, both)
+    assert total == pytest.approx(total_mx, abs=10 * 1e-6 / 0.9)
+    assert total == pytest.approx(z4, abs=1e-12)
+    assert shortfalls[1] == pytest.approx(0.9 - SF4, abs=1e-15)
+    assert build_solution(problem, both, 0.0).prob_penalty == pytest.approx(total, abs=1e-12)
+    cache = ProblemCache.from_problem(problem)
+    assert ChanceState.from_selection(cache, both).penalty_total() == pytest.approx(
+        total, abs=1e-12,
+    )
+    cs = ChanceState.from_selection(cache, np.array([True, False]))  # nonzero 0: Z = 4
+    assert cs.penalty_total() == pytest.approx(z4, abs=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the hot path took √V of V < 0
+        assert cs.delta_penalty(cache, 1, True) == pytest.approx(0.0, abs=1e-12)
+        cs.apply_flip(cache, 1, True)
+    assert cs.penalty_total() == pytest.approx(total, abs=1e-12)
+    met = _out_of_range_problem(q, PROBZEROVAR=1)
+    assert evaluate_solution_chance(met, both) == ({1: 0.0}, 0.0)
+    assert ChanceState.from_selection(ProblemCache.from_problem(met), both).penalty_total() == 0.0
+
+
+@pytest.mark.parametrize("probzerovar", [0, 1])
+@pytest.mark.parametrize("qs", [(1.5, 0.5), (0.5, 1.5)], ids=["q1.5_first", "q0.5_first"])
+def test_a_prob_outside_0_1_inside_a_duplicated_cell_follows_marxan3(
+    qs: tuple[float, float], probzerovar: int,
+) -> None:
+    """One PU names the feature twice, (a 1, q 1.5) and (a 1, q 0.5): E = 2, V = −0.5.
+
+    The evaluator counts one row with v > 0, the cell's summed v is −0.5 (nonzero 0);
+    Marxan 3 tests V > 0 either way, so Z = 4 and the penalty is 10·(0.5 − sf(4))/0.5 ≈
+    9.999367 under PROBZEROVAR 0, and 0 under PROBZEROVAR 1 (met), in both row orders and
+    on every path: the evaluator, ``from_selection`` and the hot path from the empty
+    selection. Before the zero mask took ``~(V > 0)`` the evaluator gave Z = NaN and 0
+    (v0.47.0 review); target 1, ptarget 0.5, weighting 10.
+    """
+    pu = pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [1.0], "spf": [1.0],
+                         "ptarget": [0.5]})
+    pv = pd.DataFrame({"species": [1, 1], "pu": [1, 1], "amount": [1.0, 1.0],
+                       "prob": list(qs)})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, "PROBZEROVAR": probzerovar},
+    )
+    sel = np.array([True])
+    E, V, N = _term_moments(problem, sel, "2d", problem.features["id"].values)
+    assert (E[0], V[0], N[0]) == (2.0, -0.5, 1)
+    expected = 10.0 * (0.5 - SF4) / 0.5 if probzerovar == 0 else 0.0
+    if probzerovar == 0:
+        assert expected == pytest.approx(9.999367, abs=1e-6)
+        assert marxan3_probability2d(problem, sel)[1] == pytest.approx(expected, abs=1e-5)
+    assert evaluate_solution_chance(problem, sel)[1] == pytest.approx(expected, abs=1e-12)
+    cache = ProblemCache.from_problem(problem)
+    assert cache.chance_cells["2d"].pos.tolist() == [0]
+    assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+        expected, abs=1e-12,
+    )
+    cs = ChanceState.from_selection(cache, ~sel)  # nothing selected: zero variance too
+    assert cs.penalty_total() == pytest.approx(expected, abs=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert cs.delta_penalty(cache, 0, True) == pytest.approx(0.0, abs=1e-12)
+        cs.apply_flip(cache, 0, True)
+    assert cs.penalty_total() == pytest.approx(expected, abs=1e-12)
+    np.testing.assert_allclose(cs.terms["2d"].EV[:, 0], [2.0, -0.5], rtol=1e-15)
+
+
+# ------------------------------------------------------------------ parameter handling
+
+
+@pytest.mark.parametrize("value, rule", [(None, "marxan"), (0, "marxan"), (1, "met"),
+                                         (1.0, "met"), ("1", "met"), (0.0, "marxan")])
+def test_rule_from_parameter(value, rule: str) -> None:
+    params = {} if value is None else {"PROBZEROVAR": value}
+    problem, _ = hand_example(**params)
+    assert _zero_var_rule(problem) == rule
+
+
+@pytest.mark.parametrize("value", [
+    2, -1, 0.5, "yes",
+    # A bool is not 0 / 1 (v0.47.0 plan review #18): write_input_dat saves True as the text
+    # "True", which reads back as a string, so True meant the opt-out in memory and Marxan's
+    # rule after save_project / load_project. Now a bool means Marxan's rule in both, and
+    # validate() reports it before the save.
+    True, False, pytest.param(np.True_, id="np.True_"), pytest.param(np.False_, id="np.False_"),
+])
+def test_validate_reports_bad_probzerovar(value) -> None:
+    problem, _ = hand_example(PROBZEROVAR=value)
+    errors = problem.validate()
+    assert any("PROBZEROVAR" in e for e in errors)
+    assert _zero_var_rule(problem) == "marxan"  # pure: never raises; validate() reports
+
+
+@pytest.mark.parametrize("value", [None, 0, 1])
+def test_validate_accepts_probzerovar(value) -> None:
+    params = {} if value is None else {"PROBZEROVAR": value}
+    problem, _ = hand_example(**params)
+    assert not any("PROBZEROVAR" in e for e in problem.validate())
+
+
+def test_validate_and_the_solvers_share_one_parser() -> None:
+    """``validate()`` and ``_zero_var_rule`` read ``PROBZEROVAR`` through one function, in
+    the models layer, so ``validate()`` imports no solver (v0.47.0 plan review task7-7)."""
+    assert utils._probzerovar_value is problem_mod._probzerovar_value
+
+
+def test_problem_cache_defaults_to_the_release_rule() -> None:
+    """A ``ProblemCache`` built without naming the rule gets the release default, not the
+    opt-out (v0.47.0 plan review #21). ``from_problem`` always passes ``_zero_var_rule``."""
+    default = {f.name: f.default for f in dataclasses.fields(ProblemCache)}["zero_var_rule"]
+    assert default == DEFAULT_ZERO_VAR_RULE == "marxan"
+
+
+def test_probzerovar_round_trips_through_input_dat(tmp_path) -> None:
+    problem, _ = hand_example(PROBZEROVAR=1)
+    save_project(problem, tmp_path)
+    loaded = load_project(tmp_path)
+    assert loaded.parameters["PROBZEROVAR"] == 1
+    assert _zero_var_rule(loaded) == "met"

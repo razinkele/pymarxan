@@ -1,6 +1,7 @@
 """MIPSolver._build_base (Stage 3 spec §2): the objective-free base model."""
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pandas as pd
@@ -8,7 +9,7 @@ import pandas as pd
 from pymarxan.io.readers import load_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
-from pymarxan.solvers.mip_solver import MIPSolver
+from pymarxan.solvers.mip_solver import MIPSolver, _BaseModel, _BuiltModel
 
 DATA = Path(__file__).parent.parent.parent / "data"
 
@@ -25,6 +26,15 @@ def test_base_has_no_targets_budget_or_objective() -> None:
     assert base.model.objective is None or not base.model.objective.items()
     assert [t.key for t in base.terms] == ["f1", "f2", "f3"]
     assert set(base.amount_exprs) == {1, 2, 3}
+
+
+def test_models_carry_the_requested_chance_terms_not_probmode() -> None:
+    """``PROBMODE`` is read only inside ``_build_base`` (mode 1's risk premium); the structs
+    carry the requested ``chance_terms``. Their ``probmode`` fields lost their last readers
+    in v0.47.0 Task 3 (plan review task3-3)."""
+    for struct in (_BaseModel, _BuiltModel):
+        names = {f.name for f in dataclasses.fields(struct)}
+        assert "chance_terms" in names and "probmode" not in names, struct.__name__
 
 
 def test_context_shares_the_registry() -> None:

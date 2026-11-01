@@ -12,7 +12,7 @@ import numbers
 import numpy as np
 import pandas as pd
 
-from pymarxan.models.problem import ConservationProblem
+from pymarxan.models.problem import ConservationProblem, _probzerovar_value
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 from pymarxan.solvers._tolerance import target_tol as target_tol
 from pymarxan.solvers.base import Solution
@@ -98,6 +98,47 @@ def _probmode(problem: ConservationProblem) -> int:
     return int(problem.parameters.get("PROBMODE", default))
 
 
+def _chance_terms(problem: ConservationProblem) -> frozenset[str]:
+    """Chance terms **requested** by ``PROBMODE`` (spec §3.1): 3 → ``{"2d"}``, else none.
+
+    ``"2d"`` is the Z-score chance term from the puvspr ``prob`` column (Marxan
+    Probability 2D). Requested terms gate what depends on the mode alone: non-binary
+    rejection, the MIP chance-strategy gate and metadata, the Shiny MIP notice. Pure; never
+    warns.
+    """
+    if _probmode(problem) == 3:
+        return frozenset({"2d"})
+    return frozenset()
+
+
+def _active_chance_terms(problem: ConservationProblem) -> frozenset[str]:
+    """Requested chance terms whose data exists (spec §3.1 "term without data").
+
+    ``"2d"`` needs a ``prob`` column on ``pu_vs_features``; without one the term is off
+    (penalty 0). Active terms gate the evaluator, ``ProblemCache``, the ``Solution``
+    fields and the reports. Pure; never warns.
+    """
+    terms = _chance_terms(problem)
+    if "2d" in terms and "prob" not in problem.pu_vs_features.columns:
+        terms = terms - {"2d"}
+    return terms
+
+
+def _zero_var_rule(problem: ConservationProblem) -> str:
+    """The chance terms' zero-variance rule from ``PROBZEROVAR`` (spec §3.4).
+
+    ``PROBZEROVAR 0`` (the default) → ``"marxan"``: Marxan 3's rule, a feature with no
+    selected cell carrying variance gets ``Z = 4`` (``P ≈ 3.17e-5``) and so fails any
+    ``ptarget`` above that. ``PROBZEROVAR 1`` → ``"met"``: such a feature counts as met (the
+    pre-v0.47 behaviour). Any other value, a bool included, means ``"marxan"`` here and is
+    reported by ``ConservationProblem.validate()``, which shares the parser
+    (``models.problem._probzerovar_value``). Pure; never warns or raises.
+    """
+    return "met" if _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0)) == 1 else (
+        "marxan"
+    )
+
+
 def _probmode2_active(problem: ConservationProblem) -> bool:
     """True iff PROBMODE 2 applies: a probability table and ``PROBMODE == 2``."""
     return problem.probability is not None and _probmode(problem) == 2
@@ -138,6 +179,33 @@ def _probability_vector(
         if k is not None:
             p[k] = val
     return p
+
+
+def _check_finite_cells(puvspr: pd.DataFrame) -> None:
+    """``ValueError`` naming the PU ids when a puvspr ``amount`` or ``prob`` is non-finite.
+
+    These are the 2D chance term's cell data (a blank field reads as NaN). Both of its
+    readers check every row, selected or not, so they fail identically, as
+    ``_probability_map`` makes the prob.dat readers do: ``ProblemCache``'s chance cells
+    (SA / iterative improvement) and the evaluator (``probability._term_moments``: every
+    solver's reported objective). A non-finite cell gave NaN moments and a silent chance
+    penalty of 0. Finite values outside [0, 1] are used as given; a missing ``prob``
+    column is not checked.
+    """
+    pids = puvspr["pu"].to_numpy()
+    found: list[str] = []
+    for column in ("prob", "amount"):
+        if column not in puvspr.columns:
+            continue
+        bad = ~np.isfinite(np.asarray(puvspr[column].to_numpy(), dtype=np.float64))
+        if bad.any():
+            found.append(
+                f"{column} for planning unit IDs {sorted({int(u) for u in pids[bad]})}"
+            )
+    if found:
+        raise ValueError(
+            "pu_vs_features has non-finite values (NaN or infinite): " + "; ".join(found)
+        )
 
 
 def _compute_achieved(
@@ -457,14 +525,17 @@ def compute_probability_penalty(
     prob_mode = _probmode(problem)
     if prob_mode == 1:
         return _compute_probmode1_risk_premium(problem, selected)
-    if prob_mode == 3:
+    # Two gates: a *requested* chance term rejects proportion decisions whether or not its
+    # data exists; only an *active* one (requested, with data) adds a penalty.
+    if _chance_terms(problem):
         if _is_fractional(selected):
             raise ValueError(
                 "PROBMODE 3 (Z-score chance constraints) is only defined for binary "
                 "selections; this selection holds proportion decisions. Solve with "
                 "decisions='binary' or convert with binarize_solution()."
             )
-        return _compute_probmode3_zscore_penalty(problem, selected)
+        if "2d" in _active_chance_terms(problem):
+            return _compute_probmode3_zscore_penalty(problem, selected)
     return 0.0
 
 
@@ -502,89 +573,21 @@ def _compute_probmode3_zscore_penalty(
     problem: ConservationProblem,
     selected: np.ndarray,
 ) -> float:
-    """PROBMODE 3: Marxan-faithful Z-score chance-constraint penalty.
+    """PROBMODE 3: the weighted Z-score chance penalty of the 2D term.
 
-    Computes E[T_j] and Var[T_j] from the per-cell ``prob`` column on
-    ``pu_vs_features`` (Marxan PROB2D wire format):
+    Per feature, over the selected PUs, with the per-cell presence probability ``q`` from
+    the ``prob`` column on ``pu_vs_features`` (Marxan PROB2D wire format)::
 
-        E[T_j]   = Σ_i x_i · amount_ij · (1 − p_ij)
-        Var[T_j] = Σ_i x_i · amount_ij² · p_ij · (1 − p_ij)
+        E[T_j]   = Σ_i x_i · amount_ij · q_ij
+        Var[T_j] = Σ_i x_i · amount_ij² · q_ij · (1 − q_ij)
 
-    Then routes to ``compute_zscore_per_feature`` and
-    ``compute_zscore_penalty`` which implement the Marxan sign convention
-    ``Z = (T − E)/sqrt(V)`` and ptarget-normalised shortfall.
+    scored by ``probability.score_features`` (one copy of the arithmetic, shared with
+    ``evaluate_solution_chance``, which this delegates to).
     """
     # Lazy import: keep solvers.utils free of scipy unless mode 3 is used.
-    from pymarxan.solvers.probability import (
-        compute_zscore_penalty,
-        compute_zscore_per_feature,
-    )
+    from pymarxan.solvers.probability import evaluate_solution_chance
 
-    prob_weight = float(problem.parameters.get("PROBABILITYWEIGHTING", 1.0))
-    if prob_weight == 0.0:
-        return 0.0
-
-    # Build per-feature expected and variance from selected PUs.
-    pu_ids = problem.planning_units["id"].values
-    selected_pu_ids = {int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]}
-    if not selected_pu_ids:
-        # Empty reserve: E=0, Var=0 -> sentinel Z; penalty zero anyway
-        # for features whose ptarget≤0, otherwise norm.sf(4) ≈ 0 < ptarget
-        # which produces a maximal shortfall. That's the right behaviour
-        # for an empty reserve under chance constraints.
-        pass
-
-    puvspr = problem.pu_vs_features
-    has_prob = "prob" in puvspr.columns
-
-    achieved_mean: dict[int, float] = {}
-    achieved_variance: dict[int, float] = {}
-    if len(puvspr) > 0:
-        pv_pu = puvspr["pu"].values
-        pv_sp = puvspr["species"].values
-        pv_am = puvspr["amount"].values
-        pv_pr = puvspr["prob"].values if has_prob else None
-        for k in range(len(pv_pu)):
-            pid = int(pv_pu[k])
-            if pid not in selected_pu_ids:
-                continue
-            fid = int(pv_sp[k])
-            amount = float(pv_am[k])
-            # PROB2D presence convention: p = P(present); default 1.0
-            # (deterministic) when no `prob` column. E[T] += amount * p,
-            # matching Marxan ComputeP_AllPUsSelected_2D.
-            p = float(pv_pr[k]) if pv_pr is not None else 1.0
-            achieved_mean[fid] = achieved_mean.get(fid, 0.0) + amount * p
-            achieved_variance[fid] = (
-                achieved_variance.get(fid, 0.0) + (amount ** 2) * p * (1.0 - p)
-            )
-
-    # Feature-side data
-    feat_ids = problem.features["id"].astype(int).values
-    feat_target = problem.features["target"].astype(float).values
-    if "ptarget" in problem.features.columns:
-        feat_ptarget = problem.features["ptarget"].astype(float).values
-    else:
-        # Legacy spec without ptarget -> all disabled
-        return 0.0
-
-    # Skip work entirely if every feature is disabled
-    if not any(pt > 0 for pt in feat_ptarget):
-        return 0.0
-
-    targets = {int(feat_ids[j]): float(feat_target[j]) for j in range(len(feat_ids))}
-    prob_targets = {
-        int(feat_ids[j]): float(feat_ptarget[j]) for j in range(len(feat_ids))
-    }
-
-    # Features absent from achieved_* (no selected PU contributed) get
-    # E=0, Var=0 -> Marxan sentinel Z=4 -> P≈0 -> max shortfall.
-    for fid in targets:
-        achieved_mean.setdefault(fid, 0.0)
-        achieved_variance.setdefault(fid, 0.0)
-
-    z_per_feat = compute_zscore_per_feature(achieved_mean, achieved_variance, targets)
-    return compute_zscore_penalty(z_per_feat, prob_targets, weight=prob_weight)
+    return evaluate_solution_chance(problem, selected, "2d")[1]
 
 
 def compute_objective_terms(
@@ -713,7 +716,7 @@ def build_solution(
     # via compute_probability_penalty.
     prob_shortfalls: dict[int, float] | None = None
     prob_penalty_val: float | None = None
-    if _probmode(problem) == 3:
+    if "2d" in _active_chance_terms(problem):
         from pymarxan.solvers.probability import evaluate_solution_chance
         prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
             problem, selected,
