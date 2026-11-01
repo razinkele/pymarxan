@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.1] — 2026-11-01
+
 ### Fixed
 
 - Iterative improvement no longer loops forever on a NaN objective. Its removal pass
@@ -1738,7 +1740,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.47.1...HEAD
+[0.47.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.1
 [0.47.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.0
 [0.46.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.46.0
 [0.45.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.45.0
