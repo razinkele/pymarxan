@@ -245,7 +245,10 @@ One function scores a feature from `(E, V, nonzero, target, ptarget, zero_var_ru
   misclassifies legitimate small variances). The running **values** are not exact (round 2,
   I-1): see the error-bounded recompute in §3.5.
 - zero variance under `PROBZEROVAR = 0` (default, Marxan): `Z = 4`, then the normal path;
-  under `PROBZEROVAR = 1`: penalty 0 and shortfall 0 ("met").
+  under `PROBZEROVAR = 1`: penalty 0 and shortfall 0 ("met", shipped in v0.47.0); under
+  `PROBZEROVAR = 2` (release B, B0; decision below): the exact limit — the amount is certain,
+  so P = 1 if E ≥ target − 1e-7·|target| (z = −inf, shortfall 0, penalty 0), else P = 0
+  (z = +inf, shortfall = ptarget, penalty 1).
 - otherwise `Z = (target − E)/√V`, `P = norm.sf(Z)`, penalty and shortfall as in §1.
 
 The core is `score_feature(E, V, nonzero, target, ptarget, zero_var_rule) -> FeatureChance`
@@ -268,7 +271,19 @@ is active. `terms["probability"]` in `compute_objective_terms` is the sum of the
 `write_mvbest` (`writers.py:219,239`) writes `Prob_Gap` when 2D is active and `Prob1D_Gap` when
 1D is active; `target_met.py` shows a probability column per active term.
 
-`PROBZEROVAR` is a new `input.dat` parameter (0 default, 1 opt-out). `read_input_dat` /
+`PROBZEROVAR` is a new `input.dat` parameter (0 default, 1 "met" opt-out, 2 exact from
+v0.48.0).
+
+**Decision (2026-11-01): the exact rule is `PROBZEROVAR 2`, not a redefinition of 1.** The
+user chose the exact rule on 2026-10-31 (plan review H1: "met" lets a certainly-short feature
+pay no chance penalty), but v0.47.0 shipped `PROBZEROVAR 1` = "met". Redefining a released
+value would silently change results for anyone who set it, while "met" still reproduces
+pymarxan's pre-v0.47 results; so 1 stays "met" and 2 adds the exact rule, non-breaking. Its
+implementation exists on the local prototype branch `proto/v0.47-a3` (`2cb618b`): the
+`_exact_threshold` tolerance (a prop = 1 total and E are float sums in different orders, so a
+fully held certain feature is otherwise scored short by an ulp), `ChanceState`'s knife-edge
+window (recompute a zero-variance feature whose E is within `(1 + F_j·eps)·BE +
+F_j·eps·max(|E|, Σ_col|e|)` of the threshold, strict), and their tests. `read_input_dat` /
 `write_input_dat` are generic, so its I/O needs no code; `validate()` reports values other than
 0 / 1; the manual documents it and the Shiny panel shows it.
 
@@ -502,7 +517,11 @@ The final review proposed an order that keeps the suite green between groups:
   the old dense delta, float residue would make the delta test flaky; `ChanceState`'s exact
   count removes that). The behavioural RED of A3 is only the bench (excluded from CI) and the new
   API; its regression guards are today's mode-3 delta / tracked tests.
-- **B — Probability 1D.** B1 I/O (`ptarget1d` / `ptarget2d`, whitelists). B2
+- **B — Probability 1D.** B0 `PROBZEROVAR 2`, the exact zero-variance rule (decision in
+  §3.4), ported from the prototype onto the shipped core: parser / `validate()` accept 2, the
+  scoring core and `ChanceState` carry the threshold and window, tests (the rule, the
+  tolerance with prop = 1 targets, knife edges incl. a target of 0 and a negative amount),
+  manual and CHANGELOG. B1 I/O (`ptarget1d` / `ptarget2d`, whitelists). B2
   `_loss_probability_vector` and the `validate()` checks. B3 explicit modes 4 / 5: evaluator and
   `Solution` fields, `ChanceState` 1d term, mvbest / target-met columns, MIP drop / raise,
   non-binary rejection. B4 implicit mode selection, `_probability_diagnostics`, the emitter and
