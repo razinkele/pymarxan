@@ -27,9 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count of uncertain cells and re-scores only the flipped unit's features, with an
   error-bounded recompute that keeps every delta equal to the full difference (1e-9).
   Measured per flip (delta, plus commit on an accepted flip) by `bench_prob.py` on a
-  Windows 11 laptop with MKL, one run on a loaded machine, ~5 feature cells per unit:
-  2.7× / 3.7× mode 0 at 2 000 × 20 and 3.7× / 5.4× at 10 000 × 50 (dense / sparse risk);
-  with ~30 cells per unit (dense risk), 6.7× and 5.4×. The plan measured 17× and 103× for
+  Windows 11 laptop with MKL, median of three runs with nothing else running, ~5 feature
+  cells per unit: 4.5× / 5.1× mode 0 at 2 000 × 20 and 4.7× / 5.8× at 10 000 × 50 (dense /
+  sparse risk); with ~30 cells per unit (dense risk), 4.2× and 5.9×. Single runs ranged
+  3.8–6.8×, because mode 0's own time varied by up to 1.6× between runs (44–72 µs).
+  The plan measured 17× and 103× for
   the dense-matrix code it replaced. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
   are removed, and `ProblemCache.compute_full_objective` / `compute_delta_objective` no
   longer include the chance term (SA and II add `ChanceState`'s; the evaluator and
