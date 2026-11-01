@@ -6,7 +6,10 @@ flip re-summed dense (n_pu, n_feat) expected / variance matrices (~300× mode 0)
 
 "Per flip" means the delta, plus the commit on an accepted flip, for mode 0 and mode 3
 alike. Budgets are comparative (mode 3 ≤ 6× mode 0 on the same machine), except the
-two small absolute smoke budgets kept from Phase 18.
+two small absolute smoke budgets kept from Phase 18. A ratio is the median of paired
+rounds (mode 0, then mode 3, back to back): timing them in separate best-of blocks let
+machine load move mode 0 alone by up to 1.6× between runs and fail a different case
+each run.
 
 Run via ``make bench`` / ``pytest tests/benchmarks/bench_prob.py -m bench``; not part
 of ``make check``.
@@ -26,6 +29,9 @@ from pymarxan.solvers.chance_state import ChanceState
 pytestmark = pytest.mark.bench
 
 RATIO_BOUND = 6.0
+# Paired rounds per ratio: each round times mode 0 then mode 3 back to back, so load that
+# slows one slows the other; the ratio is the median of the per-round ratios.
+ROUNDS = 5
 
 
 def _make_probmode3_problem(
@@ -72,29 +78,26 @@ def _per_flip_seconds(
     cache: ProblemCache, chance: bool, sel0: np.ndarray, idxs: np.ndarray,
     accept: np.ndarray,
 ) -> float:
-    """Mean per-flip time: the cache delta (+ ChanceState delta), and on an accepted flip
-    the held update (+ ChanceState commit). Best of 3 repeats."""
-    best = float("inf")
-    for _ in range(3):
-        sel = sel0.copy()
-        held = cache.compute_held(sel)
-        total_cost = float(cache.costs[sel].sum())
-        state = ChanceState.from_selection(cache, sel) if chance else None
-        t0 = time.perf_counter()
-        for i, acc in zip(idxs.tolist(), accept.tolist()):
-            adding = not sel[i]
-            cache.compute_delta_objective(i, sel, held, total_cost, 0.0)
+    """Mean per-flip time of one pass: the cache delta (+ ChanceState delta), and on an
+    accepted flip the held update (+ ChanceState commit)."""
+    sel = sel0.copy()
+    held = cache.compute_held(sel)
+    total_cost = float(cache.costs[sel].sum())
+    state = ChanceState.from_selection(cache, sel) if chance else None
+    t0 = time.perf_counter()
+    for i, acc in zip(idxs.tolist(), accept.tolist()):
+        adding = not sel[i]
+        cache.compute_delta_objective(i, sel, held, total_cost, 0.0)
+        if state is not None:
+            state.delta_penalty(cache, i, adding)
+        if acc:
+            sign = 1.0 if adding else -1.0
+            sel[i] = adding
+            cache.apply_flip_to_held(held, i, sign)
+            total_cost += sign * cache.costs[i]
             if state is not None:
-                state.delta_penalty(cache, i, adding)
-            if acc:
-                sign = 1.0 if adding else -1.0
-                sel[i] = adding
-                cache.apply_flip_to_held(held, i, sign)
-                total_cost += sign * cache.costs[i]
-                if state is not None:
-                    state.apply_flip(cache, i, adding)
-        best = min(best, (time.perf_counter() - t0) / len(idxs))
-    return best
+                state.apply_flip(cache, i, adding)
+    return (time.perf_counter() - t0) / len(idxs)
 
 
 def _check_ratio(
@@ -113,12 +116,17 @@ def _check_ratio(
     sel0 = rng.random(n_pu) < 0.5
     idxs = rng.integers(0, n_pu, 6000)
     accept = rng.random(6000) < 0.6
-    t0 = _per_flip_seconds(cache0, False, sel0, idxs, accept)
-    t3 = _per_flip_seconds(cache3, True, sel0, idxs, accept)
-    ratio = t3 / t0
+    pairs = []
+    for _ in range(ROUNDS):
+        t0 = _per_flip_seconds(cache0, False, sel0, idxs, accept)
+        t3 = _per_flip_seconds(cache3, True, sel0, idxs, accept)
+        pairs.append((t0, t3, t3 / t0))
+    t0, t3, ratio = sorted(pairs, key=lambda p: p[2])[ROUNDS // 2]
+    ratios = ", ".join(f"{p[2]:.2f}" for p in pairs)
     measured = (
         f"PROBMODE 3 per flip {t3 * 1e6:.1f} µs = {ratio:.2f}× mode 0 ({t0 * 1e6:.1f} µs) "
-        f"at {n_pu}×{n_feat}, {risk} risk, {cells.mean():.0f} cells per feature"
+        f"at {n_pu}×{n_feat}, {risk} risk, {cells.mean():.0f} cells per feature "
+        f"(median of paired rounds {ratios})"
     )
     print(f"\n{measured}")
     assert ratio <= RATIO_BOUND, f"{measured} (bound {RATIO_BOUND}×)."

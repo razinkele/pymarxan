@@ -27,11 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count of uncertain cells and re-scores only the flipped unit's features, with an
   error-bounded recompute that keeps every delta equal to the full difference (1e-9).
   Measured per flip (delta, plus commit on an accepted flip) by `bench_prob.py` on a
-  Windows 11 laptop with MKL, median of three runs with nothing else running, ~5 feature
-  cells per unit: 4.5× / 5.1× mode 0 at 2 000 × 20 and 4.7× / 5.8× at 10 000 × 50 (dense /
-  sparse risk); with ~30 cells per unit (dense risk), 4.2× and 5.9×. Single runs ranged
-  3.8–6.8×, because mode 0's own time varied by up to 1.6× between runs (44–72 µs).
-  The plan measured 17× and 103× for
+  Windows 11 laptop with MKL, as the median of five paired mode 0 / mode 3 rounds, ~5
+  feature cells per unit: 4.0–4.5× mode 0 at 2 000 × 20 and 4.2–4.5× at 10 000 × 50
+  (dense and sparse risk); with ~30 cells per unit (dense risk), 4.2–5.4× and 5.0–5.6×
+  (ranges over three runs). The plan measured 17× and 103× for
   the dense-matrix code it replaced. The dense `(n_pu, n_feat)` `ProblemCache.expected_matrix` / `var_matrix`
   are removed, and `ProblemCache.compute_full_objective` / `compute_delta_objective` no
   longer include the chance term (SA and II add `ChanceState`'s; the evaluator and
@@ -64,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker, about 2 × `max_workers` + 1, still finish), where every queued point used to be
   solved and thrown away before the error arrived; and the error raised is the
   lowest-index failing point's, as from `run_sweep`, not whichever failure finished first.
+- `add_connectivity_features` returns a copy of the problem (`copy_with`), keeping
+  `probability`, `connectivity`, `grid` and the subclass type, which its five-field rebuild
+  dropped. When puvspr has a `prob` column, the connectivity rows it adds get `prob` 1.0
+  (the metric is deterministic) instead of NaN, which PROBMODE 3 now rejects.
 - PROBMODE 3 with duplicate `(pu, species)` puvspr rows: simulated annealing and iterative
   improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as the evaluator,
   Marxan 3's objective (`ReturnProbabilityAmounts2D`) and its committed state
