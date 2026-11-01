@@ -47,8 +47,14 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
     - [SA Convergence](#sa-convergence)
     - [Scenario Comparison](#scenario-comparison)
     - [Export](#export)
-13. [Marxan Concepts Glossary](#marxan-concepts-glossary)
-14. [Troubleshooting](#troubleshooting)
+13. [pymarxan, Marxan and prioritizr](#pymarxan-marxan-and-prioritizr)
+    - [Relationship to Marxan](#relationship-to-marxan)
+    - [Relationship to prioritizr](#relationship-to-prioritizr)
+    - [Side by side](#side-by-side)
+    - [Which tool when](#which-tool-when)
+    - [Development plans](#development-plans)
+14. [Marxan Concepts Glossary](#marxan-concepts-glossary)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -702,6 +708,160 @@ Download results as CSV files:
 - **Target Summary CSV**: Feature ID, name, target, achieved amount, met status
 
 ---
+
+## pymarxan, Marxan and prioritizr
+
+pymarxan sits between the two tools most conservation planners know. It began as a Python
+reimplementation of **Marxan** (Ball, Possingham & Watts, 2009), the most widely used
+reserve-design program, and it keeps Marxan's files, parameters, objective and heuristic
+solvers so existing projects run unchanged. Over successive releases it has also taken on
+the exact-optimisation toolkit of **prioritizr** (Hanson et al., 2024), the R package that
+solves conservation planning problems with integer linear programming (ILP). The aim is one
+Python tool that can run a Marxan project as Marxan would, solve the same problem exactly,
+and offer the analyses that grew up around both.
+
+### Relationship to Marxan
+
+**What is the same.**
+
+- **Data and parameters.** pymarxan reads and writes Marxan's native project files
+  (`input.dat`, `pu.dat`, `spec.dat`, `puvspr.dat`, `bound.dat`, plus the zones files of
+  Marxan with Zones) and honours Marxan's parameters: BLM, SPF, MISSLEVEL, COSTTHRESH,
+  clumping (`target2`), separation (SEPDISTANCE / SEPNUM), HEURTYPE, ITIMPTYPE, RUNMODE and
+  NUMREPS. A project saved by Marxan loads as is, and pymarxan writes the same formats
+  (Marxan 3 also needs puvspr rows sorted by planning unit, which pymarxan does not yet
+  enforce).
+- **Objective.** Cost, plus BLM × boundary, plus SPF-weighted shortfall penalties: Marxan's
+  objective function, including its penalty curves and target rules.
+- **Solvers.** Simulated annealing with Marxan's cooling schedule, the greedy heuristics
+  (HEURTYPE 0–7), iterative improvement (ITIMPTYPE 0–3) and the RUNMODE 0–6 pipelines, for
+  plain and zoned problems (Marxan with Zones; Watts et al., 2009). `MarxanBinarySolver`
+  can still run the original executable on the same project.
+- **Outputs.** Best solution, run summaries, selection frequency and missing-values tables
+  in Marxan's formats.
+- **Probability.** PROBMODE 3 follows Marxan 3's Probability 2D: a Z-score chance penalty
+  from per-cell probabilities of presence (see [Probability (PROBMODE)](#probability-probmode)).
+
+**What pymarxan adds.**
+
+- **Exact solving.** A MIP solver (CBC, HiGHS or Gurobi through PuLP) finds the proven
+  optimum of the linear part of the problem, plain or zoned. On the bundled test project it
+  returns the hand-verified optimum (cost 35.0), the anchor every heuristic is checked
+  against (see [Validation](VALIDATION.md)). Exact solvers find better and more
+  compact plans than simulated annealing on large problems (Beyer et al., 2016; Teschke et
+  al., 2026).
+- **Speed for the non-linear terms.** Simulated annealing updates clumping, separation and
+  the probability chance term incrementally per flip, so these terms no longer make runs
+  orders of magnitude slower.
+- **An interactive web application** (this manual), and a Python API for scripts and
+  notebooks.
+- **Analyses beyond reserve selection:** connectivity metrics and circuit theory, river
+  connectivity and barrier removal, Zonation-style priority ranking, representation and
+  equity reporting, robustness across scenarios, restoration and space-adequacy measures.
+
+**Known differences.** pymarxan deliberately departs from Marxan where Marxan has a defect or
+a choice that cannot be reproduced exactly:
+
+- A proportional target is the larger of the stated target and `prop × total`; Marxan
+  replaces the target with `prop × total`.
+- Marxan's simulated annealing has known errors in its incremental probability update (it
+  reads one feature's target for another, skips features with clumping); pymarxan's
+  incremental values always equal a full recalculation.
+- PROBMODE 1 (a cost premium) and 2 (targets on expected amounts) are pymarxan extensions;
+  Marxan has no PROBMODE parameter. Marxan's Probability 1D (a loss probability per
+  planning unit) and its `ptarget1d` / `ptarget2d` column names arrive in v0.48.0; until
+  then the 2D target is read from `ptarget`.
+- Heuristic runs use their own random-number streams, so the same seed does not give the
+  same plan as Marxan; quality is compared through the exact optimum instead.
+
+### Relationship to prioritizr
+
+prioritizr builds a problem from parts — an objective, targets, constraints, penalties and
+decision types — and hands it to an exact ILP solver. pymarxan offers the same building
+blocks in Python, on the same mathematical footing, tracked against prioritizr's version 9:
+
+- **Objectives:** minimum set (cost, boundary), maximum coverage, maximum utility, minimum
+  shortfall and minimum largest shortfall, maximum (weighted) features.
+- **Targets:** absolute, relative and log-linear targets, and the published target-setting
+  methods prioritizr offers (Rodrigues, Jung, Polak, Ward and others), with explicit units.
+- **Constraints and penalties:** locked in / out, contiguity and feature contiguity,
+  minimum neighbours, linear constraints, budgets, boundary and (asymmetric) connectivity
+  penalties.
+- **Decisions:** binary, proportion and semi-continuous.
+- **Multiple objectives:** hierarchical and weighted-sum approaches with a non-dominated
+  filter.
+- **Evaluation:** replacement cost, rank importance and Ferrier irreplaceability; solution
+  portfolios through no-good cuts; presolve checks; writing the model to a file.
+- **Zones:** exact multi-zone problems with zone-specific costs, contributions and targets.
+
+The sections of this manual note where a result can differ from prioritizr's (for example
+in [Connectivity](#connectivity) and [Partial Selection](#partial-selection)).
+
+Where the two differ in scope: prioritizr formulates everything as a linear (integer)
+program, so terms that are not linear — Marxan's clumping, separation distance and the
+probability chance term — are outside it, while pymarxan keeps them through its heuristic
+solvers. prioritizr, in turn, has a larger user community, a CRAN release and a wider choice
+of commercial solver interfaces.
+
+### Side by side
+
+| | Marxan | prioritizr | pymarxan |
+|---|---|---|---|
+| Form | Stand-alone program, text files | R package | Python package and web application |
+| Solving | Simulated annealing, heuristics | Exact ILP | Both |
+| Optimality | Unknown quality | Proven (within a gap) | Proven for the MIP; heuristics checked against it |
+| Marxan project files | Native | Importable | Native, read and write |
+| Zones | Marxan with Zones (separate program) | Yes | Yes, exact and heuristic |
+| Clumping, separation | Yes | No (not linear) | Yes (heuristic solvers) |
+| Probability (chance) terms | Marxan 3: 1D and 2D | Not a built-in term | 2D now; 1D in v0.48.0 |
+| Interactive interface | Separate tools | Separate applications built on it | Built-in Shiny application |
+
+### Which tool when
+
+- **Re-running or extending an existing Marxan analysis:** pymarxan reproduces Marxan's
+  results and lets you check them against the exact optimum.
+- **A new, linear problem that needs a proven optimum:** pymarxan's MIP or prioritizr. Choose
+  by language and ecosystem: Python and a web interface, or R.
+- **Clumping, separation or chance constraints:** pymarxan (or Marxan); these terms need its
+  heuristic solvers.
+- **Large rasters and continuous priority maps:** pymarxan's Zonation-style ranking and
+  raster planning units.
+
+### Development plans
+
+pymarxan is released on GitHub (PyPI publication is planned). Next steps:
+
+- **v0.48.0 — Probability 1D.** Marxan's per-planning-unit loss probability with
+  `ptarget1d`, PROBMODE 4 (1D) and 5 (1D + 2D together), Marxan's column names,
+  diagnostics that explain which probability term is active, and a probability panel in
+  the application. It also adds `PROBZEROVAR 2`, the exact rule for features whose
+  amount is certain (met only if the amount reaches the target), beside Marxan's rule
+  (the default) and the current `PROBZEROVAR 1`.
+- **Zonation-style ranking:** per-feature benefit exponents (the power-benefit form) and
+  removal restricted to edge cells.
+- **Scale:** sparse data paths for clumping, zones and the iterative-improvement swap pass.
+- **Restoration:** connectivity indices (IIC, PC) and an optimiser for effective mesh size.
+- **Robustness:** validation of probability targets and planning-unit identifiers, and the
+  remaining edge cases found in review.
+
+References:
+
+- Ball, I. R., Possingham, H. P., & Watts, M. (2009). Marxan and relatives: software for
+  spatial conservation prioritisation. In A. Moilanen, K. A. Wilson, & H. P. Possingham
+  (Eds.), *Spatial conservation prioritisation: quantitative methods and computational
+  tools* (pp. 185–195). Oxford University Press.
+- Beyer, H. L., Dujardin, Y., Watts, M. E., & Possingham, H. P. (2016). Solving conservation
+  planning problems with integer linear programming. *Ecological Modelling*, 328, 14–22.
+  https://doi.org/10.1016/j.ecolmodel.2016.02.005
+- Hanson, J. O., Schuster, R., Strimas-Mackey, M., et al. (2024). Systematic conservation
+  prioritization with the prioritizr R package. *Conservation Biology*, 39(1).
+  https://doi.org/10.1111/cobi.14376
+- Teschke, K., Konijnenberg, R., Bellotto Trigo, F. C., et al. (2026). Conservation planning
+  in the Weddell Sea (Antarctica): a comparative analysis of decision-support tools.
+  *Conservation Science and Practice*, 8(6). https://doi.org/10.1111/csp2.70311
+- Watts, M. E., Ball, I. R., Stewart, R. S., et al. (2009). Marxan with Zones: software for
+  optimal conservation based land- and sea-use zoning. *Environmental Modelling & Software*,
+  24(12), 1513–1521. https://doi.org/10.1016/j.envsoft.2009.06.005
 
 ## Marxan Concepts Glossary
 
