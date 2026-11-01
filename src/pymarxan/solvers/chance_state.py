@@ -20,7 +20,10 @@ its cells (the CSC column) over the selection *after* the previewed flip when
 ``V ≤ 0`` while ``nonzero > 0``, or ``BV > τ·V``, or ``BE > max(τ·√V, 64·eps·|E|)``
 (τ = 1e-12); the ``64·eps·|E|`` floor keeps the E trigger from firing on every touch when
 the coefficient of variation is tiny (mostly-certain cells beside a few risky ones). After
-a recompute both bounds reset to ``4·eps·|value|``; ``from_selection`` counts as one. When
+a recompute both bounds reset to ``4·eps·|value|``; ``from_selection`` counts as one. The
+reset is starting slack, not a bound on the recompute's own summation error, which grows
+with the number of selected cells (past ~1000 it can exceed ``4·eps·|value|`` by a small
+factor); the per-update increments are true bounds. When
 ``nonzero`` reaches 0, ``E`` and ``V`` snap to the exact sums of the remaining
 zero-variance cells (``V = 0``). Zero variance itself is the exact count, never a
 tolerance on ``V``; the scorer also applies Marxan's ``V > 0`` test, which after the

@@ -72,11 +72,12 @@ from pymarxan.solvers.utils import (
 class ChanceCells:
     """Immutable per-cell contributions of one chance term (spec §3.5).
 
-    PU-major (CSR) arrays share ``held_csr``'s ``indptr`` / ``indices``, so row ``i``'s
-    cells are ``indptr[i]:indptr[i + 1]``. ``ev[0]`` (= ``e``) is each cell's
-    expected-amount term, ``ev[1]`` (= ``v``) its variance term — stacked so one fancy
-    index serves both on the hot path — ``abs_ev`` their absolute values (the error
-    bounds' increments), and ``pos`` is 1 where ``v > 0`` as computed in float, else 0.
+    PU-major (CSR) arrays have the same structure as ``held_csr``'s ``indptr`` /
+    ``indices`` (int64 copies, not shared), so row ``i``'s cells are
+    ``indptr[i]:indptr[i + 1]``. ``ev[0]`` (= ``e``) is each cell's expected-amount term,
+    ``ev[1]`` (= ``v``) its variance term — stacked so one fancy index serves both on the
+    hot path — ``abs_ev`` their absolute values (the error bounds' increments), and
+    ``pos`` is 1 where ``v > 0`` as computed in float, else 0.
     The feature-major (CSC) copy — ``c_indptr`` / ``c_rows`` / ``c_ev`` (rows ``c_e`` /
     ``c_v``, each C-contiguous), rows ascending within a feature — serves
     ``ChanceState``'s per-feature recompute. For the 2D term (puvspr ``prob`` = ``q``, the

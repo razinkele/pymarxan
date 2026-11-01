@@ -767,7 +767,12 @@ def long_column(seed: int, n_pu: int = 2000, n_feat: int = 2) -> ConservationPro
     "layout", ["mixed", "wide_amounts", "tiny_beside_big", "duplicated", "long_column"],
 )
 def test_recompute_equals_a_fresh_state_bit_for_bit(layout: str) -> None:
-    """A feature's recompute adds the selected cells as ``from_selection`` does.
+    """A feature's recompute sums in ``from_selection``'s order: bit for bit the same.
+
+    This pins the summation order only. On finite cells a whole-column sum with 0/1
+    weights is bit-identical to the selected-only sum, so this test cannot see whether
+    unselected cells are excluded; that is pinned by
+    ``test_an_infinite_cell_in_an_unselected_pu_stays_out_of_the_recompute``.
 
     v0.47.0 plan review: the masked BLAS matvec it replaced summed in another order on
     long columns (threaded MKL past ~800 cells, thread-count dependent), so a recompute

@@ -430,7 +430,11 @@ at p = 0.05 with the same expected amount count the same. Use it as a risk-disco
 representation target; for a stated confidence level use a chance formulation (Watts et al.
 2021). Until Probability 1D is implemented, it can be reproduced with PROBMODE 3 by writing
 `prob = 1 − p` (the unit's persistence) on every puvspr.dat row of that unit and setting
-`ptarget` (same mean, variance and zero-variance rule).
+`ptarget` (same mean, variance and zero-variance rule). One exception: for a tiny loss
+probability p, `q = 1 − p` rounds to 1 (in double precision below about 5.6e-17, and below
+about 1.1e-16 once written to puvspr.dat and read back), so the cell has zero variance, and a
+feature held only in such cells gets Marxan's zero-variance rule (Z = 4, under
+the default `PROBZEROVAR 0`), where Probability 1D would see a tiny positive variance.
 
 Under PROBMODE 2 some paths still use raw amounts: clumping occupancy (`target2`), separation
 occurrence and space-target weights (simulated annealing and iterative improvement warn when

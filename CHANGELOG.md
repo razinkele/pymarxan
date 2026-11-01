@@ -40,15 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `score_feature` / `score_features` / `FeatureChance` in `solvers/probability.py` are
   the one copy of the Z / P / penalty arithmetic every path uses.
 - PROBMODE 3 without a puvspr `prob` column leaves `Solution.prob_shortfalls` /
-  `prob_penalty` as None (they were all-zero), since the chance term is off.
+  `prob_penalty` as None (they were all-zero), since the chance term is off. So
+  `write_mvbest` then omits its `Prob_Gap` column, and the Shiny target-met table its
+  `ptarget` / `P(met)` / `prob_gap` columns (which showed every feature as met).
 
 ### Fixed
 
 - `write_puvspr` always writes a `prob` column that is present. It dropped an all-zero
-  one, and reloading turned presence 0 into presence 1 (a missing column reads as 1).
+  one, so a reload lost the column: that used to read as presence 1, and now it switches
+  PROBMODE 3's chance term off, where the all-zero column has zero variance and pays
+  Marxan's Z = 4 penalty.
 - `run_sweep_parallel` passes the whole problem to its workers. It rebuilt the problem
-  from five fields, dropping `probability`, `connectivity` and the subclass type, so e.g.
-  a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with `run_sweep`.
+  from five fields, dropping `probability`, `connectivity`, `grid` and the subclass type
+  and turning a GeoDataFrame `planning_units` into a plain DataFrame (no geometry, no
+  CRS), so e.g. a PROBMODE 1 sweep lost its risk premium in the workers and disagreed with
+  `run_sweep`, and separation and space terms lost the PU coordinates they need.
   Errors raised in a worker now reach the caller, as from `run_sweep`; only a point with
   no solutions is skipped. Every `ValueError` counted as an infeasible point, so e.g. a NaN
   in prob.dat silently dropped the sweep points that read it. On a worker's error the
@@ -57,11 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   solved and thrown away before the error arrived; and the error raised is the
   lowest-index failing point's, as from `run_sweep`, not whichever failure finished first.
 - PROBMODE 3 with duplicate `(pu, species)` puvspr rows: simulated annealing and iterative
-  improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as Marxan 3 and the
-  evaluator do. They put the last row's `prob` on the summed amount, so they optimised a
-  different chance term from the one they reported (and a certain last row hid the cell's
-  variance), and could return a plan worse than the reported optimum. This predates
-  v0.47.0: the dense chance matrices used the same rule.
+  improvement now add the rows up one by one (Σ a·q, Σ a²·q(1 − q)), as the evaluator,
+  Marxan 3's objective (`ReturnProbabilityAmounts2D`) and its committed state
+  (`doChange`) do. They put the last row's `prob` on the summed amount, so they optimised
+  a different chance term from the one they reported (and a certain last row hid the
+  cell's variance), and could return a plan worse than the reported optimum. This
+  predates v0.47.0: the dense chance matrices used the same rule. pymarxan's moves are
+  now exact (each delta is the difference of the score); Marxan 3's are not on such
+  files: its SA / II move delta (`ChangeProbability2D`) scores each row of the flipped
+  unit against the pre-flip totals, so it is a sum of single-row deltas and its running
+  total drifts from its score. SA / II runs on duplicate-row files can therefore differ
+  from Marxan 3's.
 - PROBMODE 3: a non-finite puvspr `amount` or `prob` (a blank field reads as NaN) raises
   `ValueError` naming the planning unit IDs, both where simulated annealing and iterative
   improvement build their chance cells and in the evaluator (every solver's reported
