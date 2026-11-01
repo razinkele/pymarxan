@@ -22,8 +22,9 @@ its cells (the CSC column) over the selection *after* the previewed flip when
 the coefficient of variation is tiny (mostly-certain cells beside a few risky ones). After
 a recompute both bounds reset to ``4·eps·|value|``; ``from_selection`` counts as one. The
 reset is starting slack, not a bound on the recompute's own summation error, which grows
-with the number of selected cells (past ~1000 it can exceed ``4·eps·|value|`` by a small
-factor); the per-update increments are true bounds. When
+with the number of selected cells (it can exceed ``4·eps·|value|`` by a factor that also
+grows with that number: about 2x at 10^3 cells, over 10x at 10^5); the per-update
+increments are true bounds. When
 ``nonzero`` reaches 0, ``E`` and ``V`` snap to the exact sums of the remaining
 zero-variance cells (``V = 0``). Zero variance itself is the exact count, never a
 tolerance on ``V``; the scorer also applies Marxan's ``V > 0`` test, which after the

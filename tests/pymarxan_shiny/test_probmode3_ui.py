@@ -42,6 +42,9 @@ def test_run_panel_shows_mip_drop_notice():
     assert "probmode3_mip_notice" in src
     assert "deterministic relaxation" in src
     assert "PROBMODE" in src
+    # The notice is gated on the *requested* term (spec §3.1), so it also shows for a
+    # PROBMODE 3 project without a puvspr prob column, whose Solution carries no gap.
+    assert "when the puvspr prob column is present" in src
 
 
 def test_help_content_documents_probmode3():

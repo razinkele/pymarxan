@@ -259,8 +259,9 @@ def run_panel_server(
             ui.tags.strong("PROBMODE 3 + MIP: "),
             "the chance-constraint term is dropped from the MIP objective "
             "(CBC can't solve √Σσ²·x). The MIP solves the deterministic "
-            "relaxation; the chance-constraint gap is reported post-hoc on "
-            "the Solution. For chance-constraint optimality, use SA, "
+            "relaxation; the chance-constraint gap ("
+            "when the puvspr prob column is present) is reported post-hoc "
+            "on the Solution. For chance-constraint optimality, use SA, "
             "heuristic, or iterative-improvement.",
             class_="alert alert-warning small",
             role="alert",
