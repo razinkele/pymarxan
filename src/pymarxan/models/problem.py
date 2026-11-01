@@ -24,6 +24,30 @@ STATUS_LOCKED_IN = 2
 STATUS_LOCKED_OUT = 3
 
 
+def _nonfinite_cells_error(puvspr: pd.DataFrame) -> str | None:
+    """The message for non-finite puvspr ``prob`` / ``amount`` values, or None.
+
+    These are the 2D chance term's cell data: under PROBMODE 3 with a ``prob`` column every
+    solver raises on them (``solvers.utils._check_finite_cells``) and ``validate()`` reports
+    them, with this one message. A blank field reads as NaN; a non-numeric token (``-``)
+    counts as non-finite too, as in the prob.dat check.
+    """
+    pids = puvspr["pu"].to_numpy()
+    found: list[str] = []
+    for column in ("prob", "amount"):
+        if column not in puvspr.columns:
+            continue
+        values = pd.to_numeric(puvspr[column], errors="coerce")
+        bad = ~np.isfinite(values.to_numpy(dtype=np.float64, na_value=np.nan))
+        if bad.any():
+            found.append(
+                f"{column} for planning unit IDs {sorted({int(u) for u in pids[bad]})}"
+            )
+    if not found:
+        return None
+    return "pu_vs_features has non-finite values (NaN or infinite): " + "; ".join(found)
+
+
 def _probzerovar_value(value: object) -> int | None:
     """``PROBZEROVAR`` as 0 / 1, or None when it is neither (``validate()`` reports it).
 
@@ -271,6 +295,15 @@ class ConservationProblem:
                     f"pu_vs_features references feature IDs not in "
                     f"features: {sorted(unknown_features)}"
                 )
+
+            # The 2D chance term's cells (PROBMODE 3 with a puvspr prob column): every
+            # solver raises on a non-finite one, so report the PU ids here.
+            default_mode = 1 if self.probability is not None else 0
+            probmode = self.parameters.get("PROBMODE", default_mode)
+            if "prob" in self.pu_vs_features.columns and str(probmode).strip() == "3":
+                cells_error = _nonfinite_cells_error(self.pu_vs_features)
+                if cells_error is not None:
+                    errors.append(cells_error)
 
         # --- Boundary columns ---
         if self.boundary is not None:

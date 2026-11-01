@@ -12,7 +12,11 @@ import numbers
 import numpy as np
 import pandas as pd
 
-from pymarxan.models.problem import ConservationProblem, _probzerovar_value
+from pymarxan.models.problem import (
+    ConservationProblem,
+    _nonfinite_cells_error,
+    _probzerovar_value,
+)
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 from pymarxan.solvers._tolerance import target_tol as target_tol
 from pymarxan.solvers.base import Solution
@@ -184,28 +188,17 @@ def _probability_vector(
 def _check_finite_cells(puvspr: pd.DataFrame) -> None:
     """``ValueError`` naming the PU ids when a puvspr ``amount`` or ``prob`` is non-finite.
 
-    These are the 2D chance term's cell data (a blank field reads as NaN). Both of its
-    readers check every row, selected or not, so they fail identically, as
-    ``_probability_map`` makes the prob.dat readers do: ``ProblemCache``'s chance cells
-    (SA / iterative improvement) and the evaluator (``probability._term_moments``: every
-    solver's reported objective). A non-finite cell gave NaN moments and a silent chance
-    penalty of 0. Finite values outside [0, 1] are used as given; a missing ``prob``
-    column is not checked.
+    These are the 2D chance term's cell data (a blank field reads as NaN, a non-numeric
+    token counts as non-finite). Both of its readers check every row, selected or not, so
+    they fail identically, as ``_probability_map`` makes the prob.dat readers do:
+    ``ProblemCache``'s chance cells (SA / iterative improvement) and the evaluator
+    (``probability._term_moments``: every solver's reported objective). ``validate()``
+    reports the same cells with the same message (``models.problem._nonfinite_cells_error``).
+    Finite values outside [0, 1] are used as given; a missing ``prob`` column is not checked.
     """
-    pids = puvspr["pu"].to_numpy()
-    found: list[str] = []
-    for column in ("prob", "amount"):
-        if column not in puvspr.columns:
-            continue
-        bad = ~np.isfinite(np.asarray(puvspr[column].to_numpy(), dtype=np.float64))
-        if bad.any():
-            found.append(
-                f"{column} for planning unit IDs {sorted({int(u) for u in pids[bad]})}"
-            )
-    if found:
-        raise ValueError(
-            "pu_vs_features has non-finite values (NaN or infinite): " + "; ".join(found)
-        )
+    message = _nonfinite_cells_error(puvspr)
+    if message is not None:
+        raise ValueError(message)
 
 
 def _compute_achieved(
@@ -605,7 +598,8 @@ def compute_objective_terms(
       - ``"boundary"``: BLM * total boundary length
       - ``"penalty"``: SPF * shortfall per feature
       - ``"cost_threshold"``: penalty for exceeding cost threshold
-      - ``"probability"``: Mode 1 risk premium (PROBABILITYWEIGHTING)
+      - ``"probability"``: the PROBMODE 1 risk premium, or the active PROBMODE 3
+        chance penalty (both weighted by PROBABILITYWEIGHTING)
       - ``"connectivity"``: connectivity penalty/bonus (CONNECTIVITY_WEIGHT)
 
     All terms use lower-is-better convention.  The ``"objective"`` key
@@ -641,7 +635,7 @@ def compute_objective_terms(
     else:
         terms["cost_threshold"] = 0.0
 
-    # Probability risk premium (Mode 1 only)
+    # Probability term: the PROBMODE 1 risk premium, or the active PROBMODE 3 chance penalty
     terms["probability"] = compute_probability_penalty(
         problem, selected, pu_index,
     )
