@@ -261,8 +261,9 @@ def run_panel_server(
             "(CBC can't solve √Σσ²·x). The MIP solves the deterministic "
             "relaxation; the chance-constraint gap ("
             "when the puvspr prob column is present) is reported post-hoc "
-            "on the Solution. For chance-constraint optimality, use SA, "
-            "heuristic, or iterative-improvement.",
+            "on the Solution. For chance-constraint optimality, use SA or "
+            "iterative improvement (the greedy heuristic ignores the chance "
+            "term while selecting).",
             class_="alert alert-warning small",
             role="alert",
         )

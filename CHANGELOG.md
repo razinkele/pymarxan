@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Iterative improvement no longer loops forever on a NaN objective. Its removal pass
+  (ITIMPTYPE 1) and removal-then-addition passes (ITIMPTYPE 2) stopped only when a pass
+  stopped improving, tested as `new >= current`, which is never true for NaN; a blank cost
+  or spf cell in the input files (which `validate()` accepts) made `IterativeImprovementSolver`
+  and RUNMODE 2, 3, 5 and 6 hang. A NaN objective now counts as not improving.
+- `ConservationProblem.validate()` reports a non-finite puvspr `amount` or `prob` under
+  PROBMODE 3 with a `prob` column, naming the planning units, with the message every solver
+  raises for it; it used to pass such a problem, which then failed in the solver (and
+  presolve could not flag it). A non-numeric `prob` token (e.g. `-`) is reported and raised
+  the same way instead of as numpy's "could not convert string to float".
+- The Shiny PROBMODE 3 + MIP notice recommended the greedy heuristic for chance-constraint
+  optimality; the heuristic ignores the chance term while selecting. It now names simulated
+  annealing and iterative improvement.
+
 ## [0.47.0] — 2026-11-01
 
 ### Changed
