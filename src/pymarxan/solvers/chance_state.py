@@ -116,10 +116,13 @@ class ChanceState:
             cells = cache.chance_cells[name]
             mask = sel[cells.c_rows]
             col = np.repeat(np.arange(n_feat), np.diff(cells.c_indptr))[mask]
+            # bincount of an empty index array is int64 even with float weights: a selection
+            # without a cell of the term would make EV int, and every apply_flip would then
+            # truncate the committed E and V (v0.47.0 review). B and pen follow EV; N is int.
             EV = np.vstack([
                 np.bincount(col, weights=cells.c_e[mask], minlength=n_feat),
                 np.bincount(col, weights=cells.c_v[mask], minlength=n_feat),
-            ])
+            ]).astype(np.float64, copy=False)
             N = np.bincount(col, weights=(cells.c_v[mask] > 0), minlength=n_feat)
             N = N.astype(np.int64)
             pen = score_features(

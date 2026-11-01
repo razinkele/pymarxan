@@ -13,6 +13,7 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.special import ndtr
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import SolverConfig
@@ -80,19 +81,21 @@ def _two_of_four_problem() -> ConservationProblem:
 
 
 def _duplicate_rows_problem() -> ConservationProblem:
-    """PU 1 (cost 1) lists the feature twice, (a = 3, q = 1) and (a = 2, q = 0.5); PU 2
+    """PU 1 (cost 1) lists the feature twice, (a = 3, q = 1) and (a = 2, q = 0.55); PU 2
     (cost 3) once, (a = 5, q = 0.95). Target 4, ptarget 0.6, weighting 10.
 
-    Row by row (Marxan 3 and the evaluator) PU 1 alone has E = 4, V = 1, P = 0.5, objective
-    1 + 10·(0.6 − 0.5)/0.6 ≈ 2.667: the optimum. PU 2 alone costs 3.0 (P ≈ 0.75 ≥ 0.6). With
-    the rows merged (summed amount, last q) PU 1 read as E = 2.5, V = 6.25 (≈ 6.43), so SA
-    returned PU 2.
+    Row by row (Marxan 3 and the evaluator) PU 1 alone has E = 4.1, V = 0.99, P ≈ 0.540,
+    objective 1 + 10·(0.6 − P)/0.6 ≈ 2.0 (``_DUPLICATE_ROWS_OPTIMUM``): the optimum. PU 2
+    alone costs 3.0 (E = 4.75, V = 1.1875, P ≈ 0.75 ≥ 0.6). With the rows merged (summed
+    amount, last q) PU 1 read as E = 2.75, V = 6.1875 (≈ 5.87), so SA returned PU 2. E and
+    V are not integral, so an int-truncated running state cannot pass for the true one
+    (v0.47.0 review: with q = 0.5, PU 1's E = 4 and V = 1 hid an int ``EV``).
     """
     pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 3.0], "status": [0, 0]})
     feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [4.0], "spf": [10.0],
                          "ptarget": [0.6]})
     pv = pd.DataFrame({"species": [1, 1, 1], "pu": [1, 1, 2], "amount": [3.0, 2.0, 5.0],
-                       "prob": [1.0, 0.5, 0.95]})
+                       "prob": [1.0, 0.55, 0.95]})
     return ConservationProblem(
         planning_units=pu, features=feat, pu_vs_features=pv,
         parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, "BLM": 0.0,
@@ -100,8 +103,63 @@ def _duplicate_rows_problem() -> ConservationProblem:
     )
 
 
+_DUPLICATE_ROWS_OPTIMUM = 1.0 + 10.0 * (0.6 - float(ndtr((4.1 - 4.0) / math.sqrt(0.99)))) / 0.6
+
+
 def _obj(problem: ConservationProblem, sel: np.ndarray) -> float:
     return build_solution(problem, sel, float(problem.parameters.get("BLM", 0.0))).objective
+
+
+def _check_each_commit(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Wrap ``ChanceState.apply_flip``: after each commit, record how far the state's E / V
+    and penalty are from a fresh ``from_selection`` on its selection (the solvers' own
+    states, along the run)."""
+    gaps: list[float] = []
+    apply_flip = ChanceState.apply_flip
+
+    def checked(self: ChanceState, cache: ProblemCache, idx: int, adding: bool) -> None:
+        apply_flip(self, cache, idx, adding)
+        fresh = ChanceState.from_selection(cache, self.selected)
+        gap = abs(self.penalty_total() - fresh.penalty_total())
+        for name, t in self.terms.items():
+            scale = np.maximum(np.abs(fresh.terms[name].EV), 1.0)
+            gap = max(gap, float(np.max(np.abs(t.EV - fresh.terms[name].EV) / scale)))
+        gaps.append(gap)
+
+    monkeypatch.setattr(ChanceState, "apply_flip", checked)
+    return gaps
+
+
+def _evaluator_pass(problem: ConservationProblem, sel: np.ndarray, *, adding: bool) -> np.ndarray:
+    """One II removal (addition) pass driven by the evaluator's objective: the same scan
+    order and acceptance rule (a move is kept when it lowers the objective)."""
+    sel = sel.copy()
+    cur = _obj(problem, sel)
+    improved = True
+    while improved:
+        improved = False
+        for i in range(len(sel)):
+            if sel[i] == adding:
+                continue
+            s2 = sel.copy()
+            s2[i] = adding
+            new = _obj(problem, s2)
+            if new < cur:
+                sel, cur, improved = s2, new, True
+    return sel
+
+
+def _evaluator_two_step(problem: ConservationProblem, sel: np.ndarray) -> np.ndarray:
+    """ITIMPTYPE 2 (removal then addition until no gain) on the evaluator's objective."""
+    cur, cur_obj = sel, _obj(problem, sel)
+    while True:
+        after = _evaluator_pass(
+            problem, _evaluator_pass(problem, cur, adding=False), adding=True,
+        )
+        new = _obj(problem, after)
+        if new >= cur_obj:
+            return cur
+        cur, cur_obj = after, new
 
 
 class TestSimulatedAnnealing:
@@ -144,9 +202,32 @@ class TestSimulatedAnnealing:
         (sol,) = SimulatedAnnealingSolver().solve(problem, SolverConfig(num_solutions=1, seed=1))
         assert sol.metadata["initial_temp"] == pytest.approx(-delta / math.log(0.5), abs=1e-4)
 
-    def test_duplicate_rows_tracked_as_reported(self) -> None:
+    @pytest.mark.parametrize("seed", [1, 2, 3])
+    def test_an_empty_start_is_tracked_as_reported(self, seed: int) -> None:
+        """PROP 0 starts SA from the empty selection, where ``from_selection`` built an int
+        ``EV`` (v0.47.0 review): every commit then truncated E and V, so the tracked best
+        objective left the reported one (``_random_problem``'s E / V are not integral)."""
+        base = _random_problem(seed)
+        problem = base.copy_with(
+            parameters={**base.parameters, "PROP": 0.0, "NUMITNS": 5000, "NUMTEMP": 50},
+        )
+        (sol,) = SimulatedAnnealingSolver().solve(
+            problem, SolverConfig(num_solutions=1, seed=seed),
+        )
+        assert sol.objective == pytest.approx(
+            sol.metadata["history"]["best_objective"][-1], abs=1e-9,
+        )
+        assert sol.metadata["best_objective"] == round(sol.objective, 4)
+
+    def test_duplicate_rows_tracked_as_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Duplicate (pu, species) rows: what SA tracks is what it reports, for every
-        selection, so SA finds the reported optimum (PU 1 alone, ≈ 2.667)."""
+        selection and along the flip path, so SA finds the reported optimum (PU 1 alone,
+        ≈ 2.0).
+
+        The chain walks all four selections from the empty one by ``delta_penalty`` /
+        ``apply_flip``. v0.47.0 review: the fresh states alone never ran the flip path, so
+        an int ``EV`` from the empty start (truncating E and V on every commit) passed.
+        """
         problem = _duplicate_rows_problem()
         cache = ProblemCache.from_problem(problem)
         for sel in itertools.product([False, True], repeat=2):
@@ -154,10 +235,26 @@ class TestSimulatedAnnealing:
             tracked = cache.compute_full_objective(x, cache.compute_held(x), blm=0.0)
             tracked += ChanceState.from_selection(cache, x).penalty_total()
             assert tracked == pytest.approx(_obj(problem, x), abs=1e-12)
+        x = np.zeros(2, dtype=bool)
+        cs = ChanceState.from_selection(cache, x)
+        for idx, adding in [(1, True), (0, True), (1, False), (0, False)]:
+            before = cs.penalty_total()
+            d = cs.delta_penalty(cache, idx, adding)
+            cs.apply_flip(cache, idx, adding)
+            x[idx] = adding
+            fresh = ChanceState.from_selection(cache, x)
+            assert cs.penalty_total() == pytest.approx(fresh.penalty_total(), abs=1e-12)
+            assert d == pytest.approx(fresh.penalty_total() - before, abs=1e-12)
+            np.testing.assert_allclose(cs.terms["2d"].EV, fresh.terms["2d"].EV, rtol=1e-12)
+        gaps = _check_each_commit(monkeypatch)
         sols = SimulatedAnnealingSolver().solve(problem, SolverConfig(num_solutions=3, seed=7))
+        assert gaps and max(gaps) <= 1e-12
         for sol in sols:
             assert sol.selected.tolist() == [True, False]
-            assert sol.objective == pytest.approx(1.0 + 10.0 * (0.6 - 0.5) / 0.6)
+            assert sol.objective == pytest.approx(_DUPLICATE_ROWS_OPTIMUM)
+            assert sol.objective == pytest.approx(
+                sol.metadata["history"]["best_objective"][-1], abs=1e-9,
+            )
 
     def test_term_off_without_data_matches_mode_0(self) -> None:
         """Mode 3 with no puvspr `prob`: the term is off (silently, in this release) and SA
@@ -228,6 +325,45 @@ class TestIterativeImprovement:
         sol = IterativeImprovementSolver()._addition_pass(problem, cache, 0.0, start, set())
         assert sol.selected.tolist() == [True, True, False, False]
         assert sol.objective == pytest.approx(2.0)
+
+    @pytest.mark.parametrize("seed", [10, 11, 12])
+    def test_passes_from_an_empty_start_are_evaluator_driven(self, seed: int) -> None:
+        """From the empty selection the addition pass, and ITIMPTYPE 2 (whose removal pass
+        leaves the start empty), make the evaluator-driven moves.
+
+        v0.47.0 review: the pass's fresh ``ChanceState`` had an int ``EV`` there, so each
+        accepted addition truncated E and V and later deltas scored a different chance
+        term (the reported objective is the evaluator's, so only the selection tells).
+        """
+        problem = _random_problem(seed)
+        blm = float(problem.parameters["BLM"])
+        empty = build_solution(problem, np.zeros(problem.n_planning_units, dtype=bool), blm)
+        cache = ProblemCache.from_problem(problem)
+        added = IterativeImprovementSolver()._addition_pass(problem, cache, blm, empty, set())
+        expected = _evaluator_pass(problem, empty.selected, adding=True)
+        assert added.selected.tolist() == expected.tolist()
+        sol = IterativeImprovementSolver(itimptype=2).improve(problem, empty)
+        assert sol.selected.tolist() == _evaluator_two_step(problem, empty.selected).tolist()
+
+    @pytest.mark.parametrize("itimptype", [None, 2])
+    def test_duplicate_rows_addition_from_an_empty_start(
+        self, itimptype: int | None, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Duplicate (pu, species) rows, from the empty selection: the addition pass (alone,
+        and in ITIMPTYPE 2) adds PU 1 and stops at the optimum, and every commit of the
+        pass's ``ChanceState`` equals a fresh state (v0.47.0 review: the int ``EV`` of an
+        empty start truncated PU 1's E 4.1, V 0.99 to 4, 0 without changing the result)."""
+        problem = _duplicate_rows_problem()
+        start = build_solution(problem, np.zeros(2, dtype=bool), 0.0)
+        gaps = _check_each_commit(monkeypatch)
+        if itimptype is None:
+            cache = ProblemCache.from_problem(problem)
+            sol = IterativeImprovementSolver()._addition_pass(problem, cache, 0.0, start, set())
+        else:
+            sol = IterativeImprovementSolver(itimptype=itimptype).improve(problem, start)
+        assert gaps and max(gaps) <= 1e-12
+        assert sol.selected.tolist() == [True, False]
+        assert sol.objective == pytest.approx(_DUPLICATE_ROWS_OPTIMUM)
 
     @pytest.mark.parametrize("seed", range(4))
     @pytest.mark.parametrize("itimptype", [1, 2])

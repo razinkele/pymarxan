@@ -316,6 +316,52 @@ def test_a_prob_outside_0_1_beside_an_uncertain_cell_follows_marxan3(q: float) -
     assert ChanceState.from_selection(ProblemCache.from_problem(met), both).penalty_total() == 0.0
 
 
+@pytest.mark.parametrize("probzerovar", [0, 1])
+@pytest.mark.parametrize("qs", [(1.5, 0.5), (0.5, 1.5)], ids=["q1.5_first", "q0.5_first"])
+def test_a_prob_outside_0_1_inside_a_duplicated_cell_follows_marxan3(
+    qs: tuple[float, float], probzerovar: int,
+) -> None:
+    """One PU names the feature twice, (a 1, q 1.5) and (a 1, q 0.5): E = 2, V = −0.5.
+
+    The evaluator counts one row with v > 0, the cell's summed v is −0.5 (nonzero 0);
+    Marxan 3 tests V > 0 either way, so Z = 4 and the penalty is 10·(0.5 − sf(4))/0.5 ≈
+    9.999367 under PROBZEROVAR 0, and 0 under PROBZEROVAR 1 (met), in both row orders and
+    on every path: the evaluator, ``from_selection`` and the hot path from the empty
+    selection. Before the zero mask took ``~(V > 0)`` the evaluator gave Z = NaN and 0
+    (v0.47.0 review); target 1, ptarget 0.5, weighting 10.
+    """
+    pu = pd.DataFrame({"id": [1], "cost": [1.0], "status": [0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [1.0], "spf": [1.0],
+                         "ptarget": [0.5]})
+    pv = pd.DataFrame({"species": [1, 1], "pu": [1, 1], "amount": [1.0, 1.0],
+                       "prob": list(qs)})
+    problem = ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, "PROBZEROVAR": probzerovar},
+    )
+    sel = np.array([True])
+    E, V, N = _term_moments(problem, sel, "2d", problem.features["id"].values)
+    assert (E[0], V[0], N[0]) == (2.0, -0.5, 1)
+    expected = 10.0 * (0.5 - SF4) / 0.5 if probzerovar == 0 else 0.0
+    if probzerovar == 0:
+        assert expected == pytest.approx(9.999367, abs=1e-6)
+        assert marxan3_probability2d(problem, sel)[1] == pytest.approx(expected, abs=1e-5)
+    assert evaluate_solution_chance(problem, sel)[1] == pytest.approx(expected, abs=1e-12)
+    cache = ProblemCache.from_problem(problem)
+    assert cache.chance_cells["2d"].pos.tolist() == [0]
+    assert ChanceState.from_selection(cache, sel).penalty_total() == pytest.approx(
+        expected, abs=1e-12,
+    )
+    cs = ChanceState.from_selection(cache, ~sel)  # nothing selected: zero variance too
+    assert cs.penalty_total() == pytest.approx(expected, abs=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert cs.delta_penalty(cache, 0, True) == pytest.approx(0.0, abs=1e-12)
+        cs.apply_flip(cache, 0, True)
+    assert cs.penalty_total() == pytest.approx(expected, abs=1e-12)
+    np.testing.assert_allclose(cs.terms["2d"].EV[:, 0], [2.0, -0.5], rtol=1e-15)
+
+
 # ------------------------------------------------------------------ parameter handling
 
 
