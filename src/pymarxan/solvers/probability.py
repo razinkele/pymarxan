@@ -84,6 +84,25 @@ _TERMS = ("1d", "2d")
 PTARGET_COLUMN = {"1d": "ptarget1d", "2d": "ptarget"}
 
 
+def _ptarget_array(features, column: str) -> np.ndarray:  # features: pd.DataFrame
+    """(n_feat,) float probability targets of ``column`` (``ptarget`` / ``ptarget1d``).
+
+    A missing column or a blank (NaN) value is −1, Marxan's "disabled"; a non-numeric
+    value raises ``ValueError`` naming the column and the feature ids (``validate()``
+    reports the same values). The one parser of the targets for the evaluator and
+    ``ProblemCache``, so both read the same numbers.
+    """
+    from pymarxan.models.problem import _ptarget_parse
+
+    if column not in features.columns:
+        return np.full(len(features), -1.0, dtype=np.float64)
+    vals, nonnumeric = _ptarget_parse(features[column])
+    if nonnumeric.any():
+        bad = sorted(int(f) for f in features["id"].to_numpy()[nonnumeric])
+        raise ValueError(f"features {column} has non-numeric values for feature IDs {bad}")
+    return cast(np.ndarray, np.asarray(vals, dtype=np.float64))
+
+
 @dataclass(frozen=True)
 class FeatureChance:
     """One feature's chance-term score (spec §3.4).
@@ -551,7 +570,7 @@ def evaluate_solution_chance(
             return {}, 0.0
         return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
     feat_target = problem.features["target"].astype(float).values
-    feat_ptarget = problem.features[pt_col].astype(float).fillna(-1.0).values
+    feat_ptarget = _ptarget_array(problem.features, pt_col)
 
     # Off without its data (spec §3.1), as ``utils._active_chance_terms`` makes it in the
     # solvers, or with no ptarget > 0.

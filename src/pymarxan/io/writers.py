@@ -33,9 +33,10 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     Optional Marxan columns are omitted from the output when every value
     is at its disabled default, so legacy projects round-trip byte-identical:
 
-    - ``ptarget2d`` (Marxan 3 PTARGET2D, default ``-1``), written from the in-memory
-      ``ptarget`` column and in its position (Phase 18; v0.48 writes Marxan's name, never
-      ``ptarget``, so a legacy project is re-written in Marxan-native form).
+    - ``ptarget2d`` (Marxan 3 PTARGET2D, default ``-1``; a NaN counts as ``-1``), written
+      from the in-memory ``ptarget`` column and in its position (Phase 18; v0.48 writes
+      Marxan's name, never ``ptarget``, so a legacy project is re-written in Marxan-native
+      form).
     - ``ptarget1d`` (Marxan 3 PTARGET1D, default ``-1``; a NaN, e.g. from concatenating
       feature tables, counts as ``-1``) — v0.48.
     - ``target2`` (Marxan TARGET2 minimum patch occupancy, default ``0``) — Phase 19.
@@ -50,11 +51,14 @@ def write_spec(df: pd.DataFrame, path: str | Path) -> None:
     path : str | Path
         Output file path.
     """
+    # A NaN target is written as -1, never as an empty field: Marxan's strtok reader
+    # collapses an empty field and shifts every column after it.
     if "ptarget1d" in df.columns:
         df = df.assign(ptarget1d=df["ptarget1d"].fillna(-1.0))
         if (df["ptarget1d"] == -1).all():
             df = df.drop(columns=["ptarget1d"])
     if "ptarget" in df.columns:
+        df = df.assign(ptarget=df["ptarget"].fillna(-1.0))
         if (df["ptarget"] == -1).all():
             df = df.drop(columns=["ptarget"])
         else:

@@ -158,6 +158,44 @@ def _range_error(name: str, ids: np.ndarray, values: pd.Series) -> list[str]:
     return errors
 
 
+def _ptarget_parse(values: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """A probability-target column (``ptarget`` / ``ptarget1d``) as floats, and the mask
+    of its non-numeric entries.
+
+    A blank (NaN / None) is no target, Marxan's −1; any value ≤ 0 is disabled too. A
+    token that is not a number (``"abc"``) is NaN in the floats and True in the mask: the
+    solvers raise on it (``solvers.probability._ptarget_array``) and ``validate()``
+    reports it, both naming the feature ids.
+    """
+    coerced = pd.to_numeric(values, errors="coerce")
+    nonnumeric = (coerced.isna() & values.notna()).to_numpy(dtype=bool)
+    vals = coerced.to_numpy(dtype=np.float64, na_value=np.nan)
+    return np.where(np.isnan(vals), -1.0, vals), nonnumeric
+
+
+def _ptarget_errors(features: pd.DataFrame, column: str) -> list[str]:
+    """``validate()`` messages for a probability-target column: non-numeric values, and
+    values above 1 (impossible to meet; ≤ 0 or blank means disabled), with the feature
+    ids."""
+    if column not in features.columns or "id" not in features.columns:
+        return []
+    vals, nonnumeric = _ptarget_parse(features[column])
+    ids = features["id"].to_numpy()
+    errors: list[str] = []
+    if nonnumeric.any():
+        errors.append(
+            f"features {column} has non-numeric values for feature IDs "
+            f"{sorted(int(f) for f in ids[nonnumeric])}"
+        )
+    over = vals > 1.0
+    if over.any():
+        errors.append(
+            f"features {column} values must be <= 0 (disabled) or in (0, 1] "
+            f"(feature IDs {sorted(int(f) for f in ids[over])})"
+        )
+    return errors
+
+
 def _probzerovar_value(value: object) -> int | None:
     """``PROBZEROVAR`` as 0 / 1 / 2, or None when it is none of them (``validate()``
     reports it).
@@ -411,12 +449,16 @@ class ConservationProblem:
 
             # The chance terms' cells: every solver raises on a non-finite one, so report
             # the PU ids here. The 2D term (PROBMODE 3 / 5 with a puvspr prob column)
-            # reads prob and amount; the 1D term (PROBMODE 4 / 5) amount only.
+            # reads prob and amount; the 1D term (PROBMODE 4 / 5 with a 1D source) amount
+            # only. A non-finite puvspr prob is reported only when 2D is requested (v0.47.1).
             requested = _requested_terms(_resolved_probmode(self))
             cell_cols: tuple[str, ...] = ()
             if "2d" in requested and "prob" in self.pu_vs_features.columns:
                 cell_cols = ("prob", "amount")
-            elif "1d" in requested:
+            elif "1d" in requested and (
+                "prob" in self.planning_units.columns or self.probability is not None
+            ):
+                # Without a 1D source the term is off and no solver reads the cells.
                 cell_cols = ("amount",)
             if cell_cols:
                 cells_error = _nonfinite_cells_error(self.pu_vs_features, cell_cols)
@@ -425,10 +467,22 @@ class ConservationProblem:
             # Presence probabilities in [0, 1], whatever the mode (finite values; the
             # non-finite ones are the chance terms' cell check above).
             if "prob" in self.pu_vs_features.columns:
-                pv_vals = pd.to_numeric(self.pu_vs_features["prob"], errors="coerce")
-                pv_fin = pv_vals[np.isfinite(pv_vals.to_numpy(dtype=np.float64))]
-                if ((pv_fin < 0.0) | (pv_fin > 1.0)).any():
-                    errors.append("pu_vs_features prob values must be in range [0, 1]")
+                pv = self.pu_vs_features
+                pv_vals = pd.to_numeric(pv["prob"], errors="coerce").to_numpy(
+                    dtype=np.float64, na_value=np.nan,
+                )
+                out = np.isfinite(pv_vals) & ((pv_vals < 0.0) | (pv_vals > 1.0))
+                if out.any():
+                    pairs = list(zip(
+                        pv["pu"].to_numpy()[out].tolist(),
+                        pv["species"].to_numpy()[out].tolist(),
+                    ))
+                    shown = ", ".join(f"({int(u)}, {int(f)})" for u, f in pairs[:5])
+                    more = ", ..." if len(pairs) > 5 else ""
+                    errors.append(
+                        "pu_vs_features prob values must be in range [0, 1] "
+                        f"((pu, species) pairs [{shown}{more}]; {len(pairs)} in all)"
+                    )
 
         # --- pu.dat prob: Probability 1D loss probability (Marxan 3 readPlanningUnits) ---
         # Reported whatever the mode, even when no mode reads it (spec §5).
@@ -437,6 +491,10 @@ class ConservationProblem:
                 "planning_units prob", self.planning_units["id"].to_numpy(),
                 self.planning_units["prob"],
             ))
+
+        # --- Probability targets: <= 0 / blank disabled (Marxan), else in (0, 1] ---
+        errors.extend(_ptarget_errors(self.features, "ptarget"))
+        errors.extend(_ptarget_errors(self.features, "ptarget1d"))
 
         # --- Boundary columns ---
         if self.boundary is not None:

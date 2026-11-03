@@ -189,3 +189,20 @@ def test_nan_ptarget1d_is_disabled_for_evaluator_and_cache_alike():
         assert state.terms["1d"].pen[0] == 0.0
         assert state.terms["1d"].pen[1] == pytest.approx(shortfalls[2] / 0.8, abs=1e-12)
         assert state.penalty_total() == pytest.approx(pen, abs=1e-12)
+
+
+# --- L-3: a non-numeric probability target names the column and the ids -------------------
+
+
+@pytest.mark.parametrize(("column", "mode"), [("ptarget1d", 4), ("ptarget", 3)])
+def test_non_numeric_probability_target_raises_naming_column_and_ids(column, mode):
+    problem = _pt1d_problem([0.5, 0.5], PROBMODE=mode)
+    features = problem.features.copy()
+    features[column] = ["abc", 0.5]
+    pv = problem.pu_vs_features.assign(prob=0.5)
+    problem = problem.copy_with(features=features, pu_vs_features=pv)
+    term = "1d" if column == "ptarget1d" else "2d"
+    with pytest.raises(ValueError, match=rf"features {column} .*feature IDs \[1\]"):
+        ProblemCache.from_problem(problem)
+    with pytest.raises(ValueError, match=rf"features {column} .*feature IDs \[1\]"):
+        evaluate_solution_chance(problem, np.ones(3, dtype=bool), term)

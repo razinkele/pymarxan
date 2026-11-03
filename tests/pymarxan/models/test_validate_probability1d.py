@@ -84,3 +84,74 @@ def test_mode_4_does_not_read_puvspr_prob_cells():
     # The 1D term reads puvspr amounts only: a NaN puvspr prob is the 2D term's data.
     errors = _problem(pu_prob=[0.1, 0.2], pv_prob=[np.nan, 0.5], PROBMODE=4).validate()
     assert not any("non-finite" in e for e in errors), errors
+
+
+def test_non_finite_amount_not_reported_without_a_1d_source():
+    # Review L-2: mode 4 without pu.dat prob or prob.dat has the 1D term off; no solver
+    # reads the amounts as chance cells, so validate() does not report them.
+    errors = _problem(amount=(np.nan, 1.0), PROBMODE=4).validate()
+    assert not any("non-finite" in e for e in errors), errors
+
+
+def test_non_finite_amount_reported_with_a_prob_dat_1d_source():
+    problem = _problem(amount=(np.nan, 1.0), PROBMODE=4).copy_with(
+        probability=pd.DataFrame({"pu": [1, 2], "probability": [0.1, 0.2]}),
+    )
+    errors = problem.validate()
+    assert any("amount for planning unit IDs [1]" in e for e in errors), errors
+
+
+def test_puvspr_prob_range_error_names_the_pairs():
+    # Review L-4: the offending (pu, species) pairs, the first few and the count.
+    errors = _problem(pv_prob=[0.5, -0.1]).validate()
+    (msg,) = [e for e in errors if "pu_vs_features prob" in e]
+    assert "[0, 1]" in msg and "(2, 1)" in msg and "1 in all" in msg
+
+
+def test_puvspr_prob_range_error_lists_the_first_five_pairs():
+    pu = pd.DataFrame({"id": range(1, 8), "cost": 1.0, "status": 0})
+    pv = pd.DataFrame({"species": [1] * 7, "pu": range(1, 8), "amount": 1.0,
+                       "prob": [1.5] * 7})
+    problem = ConservationProblem(
+        planning_units=pu,
+        features=pd.DataFrame({"id": [1], "name": ["a"], "target": [1.0], "spf": [1.0]}),
+        pu_vs_features=pv,
+    )
+    (msg,) = [e for e in problem.validate() if "pu_vs_features prob" in e]
+    assert "(5, 1)" in msg and "(6, 1)" not in msg and "7 in all" in msg
+
+
+def _with_ptargets(**cols) -> ConservationProblem:
+    problem = _problem(pu_prob=[0.1, 0.2], pv_prob=[0.5, 0.5])
+    features = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "target": [1.0, 1.0],
+                             "spf": [1.0, 1.0], **cols})
+    return problem.copy_with(features=features)
+
+
+@pytest.mark.parametrize("column", ["ptarget", "ptarget1d"])
+def test_probability_target_above_one_is_reported_with_the_ids(column):
+    # Review L-3: > 1 cannot be met; <= 0 (and blank) means disabled.
+    errors = _with_ptargets(**{column: [0.5, 1.5]}).validate()
+    (msg,) = [e for e in errors if f"features {column} " in e]
+    assert "(0, 1]" in msg and "feature IDs [2]" in msg
+
+
+@pytest.mark.parametrize("column", ["ptarget", "ptarget1d"])
+def test_probability_target_infinite_is_reported(column):
+    errors = _with_ptargets(**{column: [np.inf, 0.5]}).validate()
+    assert any(f"features {column} " in e and "feature IDs [1]" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("column", ["ptarget", "ptarget1d"])
+def test_probability_target_non_numeric_is_reported_with_the_ids(column):
+    errors = _with_ptargets(**{column: ["abc", 0.5]}).validate()
+    assert any(
+        f"features {column} " in e and "non-numeric" in e and "feature IDs [1]" in e
+        for e in errors
+    ), errors
+
+
+@pytest.mark.parametrize("column", ["ptarget", "ptarget1d"])
+def test_disabled_and_valid_probability_targets_are_not_reported(column):
+    for pair in ([-1.0, 0.0], [np.nan, -np.inf], [1e-9, 1.0], [-5.0, 0.95]):
+        assert _with_ptargets(**{column: pair}).validate() == [], pair

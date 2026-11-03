@@ -229,6 +229,10 @@ One helper `_loss_probability_vector(problem, pu_id_to_idx, n_pu)`:
   outside [0, 1] are reported by `validate()`.
 - `validate()` also checks `planning_units["prob"]` and `pu_vs_features["prob"]` (finite, in
   [0, 1]) when present.
+  *Note (v0.48.0 review L-2):* the `[0, 1]` range is checked whenever the column is present;
+  a non-finite puvspr `prob` is reported only when the 2D term is requested (PROBMODE 3 / 5),
+  keeping v0.47.1's behaviour (no solver reads it otherwise), and a non-finite `amount` under
+  PROBMODE 4 / 5 only when a 1D source exists.
 
 E and V for 1D are built **directly from p** with Marxan's expressions, `a(1 − p)` and
 `a²·p(1 − p)`, not by forming `q = 1 − p` first (round 1, I9: for p < 1.1e-16, `1 − p` rounds

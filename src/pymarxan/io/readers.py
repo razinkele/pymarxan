@@ -144,15 +144,11 @@ def read_spec(path: str | Path) -> pd.DataFrame:
         df["spf"] = 1.0
     if "name" not in df.columns:
         df["name"] = [f"Feature_{fid}" for fid in df["id"]]
-    if "ptarget" not in df.columns:
-        # -1 is Marxan's "no probability target" sentinel.
-        df["ptarget"] = -1.0
-    if "ptarget1d" not in df.columns:
-        # Probability 1D target (Marxan 3 ptarget1d); -1 disables it.
-        df["ptarget1d"] = -1.0
-    else:
-        # A blank field reads as NaN: it is no target, Marxan's -1.
-        df["ptarget1d"] = df["ptarget1d"].fillna(-1.0)
+    # The probability targets: ptarget (the 2D target, spec.dat ptarget2d) and ptarget1d
+    # (Marxan 3 ptarget1d). -1 is Marxan's "no probability target" sentinel, for a
+    # missing column and for a blank field (which reads as NaN) alike.
+    for col in ("ptarget", "ptarget1d"):
+        df[col] = df[col].fillna(-1.0) if col in df.columns else -1.0
     if "target2" not in df.columns:
         # 0 disables clumping for the feature (Marxan TARGET2 convention).
         df["target2"] = 0.0

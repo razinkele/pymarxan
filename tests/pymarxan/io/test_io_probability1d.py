@@ -72,6 +72,17 @@ class TestReadSpec:
         df = read_spec(path)
         assert df["ptarget1d"].tolist() == [0.7, -1.0]
 
+    @pytest.mark.parametrize("column", ["ptarget", "ptarget2d"])
+    def test_blank_2d_target_counts_as_disabled(self, tmp_path, column):
+        # Review L-5: as for ptarget1d, a blank field is Marxan's -1, not NaN.
+        path = _write(tmp_path, f"id,name,target,spf,{column}\n1,a,5,1,0.7\n2,b,3,1,\n")
+        df = read_spec(path)
+        assert df["ptarget"].tolist() == [0.7, -1.0]
+
+
+def _data_rows(path) -> list[list[str]]:
+    return [line.split(",") for line in path.read_text().splitlines()[1:]]
+
 
 class TestWriteSpec:
     def _features(self, **cols) -> pd.DataFrame:
@@ -110,6 +121,29 @@ class TestWriteSpec:
         assert read_spec(path)["ptarget1d"].tolist() == [0.8, -1.0]
         write_spec(self._features(ptarget1d=[np.nan, np.nan]), path)
         assert "ptarget1d" not in _header(path)
+
+    @pytest.mark.parametrize("column", ["ptarget", "ptarget1d"])
+    def test_never_writes_an_empty_probability_target_field(self, tmp_path, column):
+        # Review L-5: Marxan's strtok reader collapses an empty field and shifts the
+        # columns after it, so a NaN target is written as -1.
+        path = tmp_path / "spec.dat"
+        df = self._features(**{column: [np.nan, 0.8]})
+        df["prop"] = [0.1, 0.2]  # a column after the target
+        write_spec(df, path)
+        text = path.read_text()
+        assert ",," not in text and "nan" not in text.lower()
+        assert all(r[-1] != "" for r in _data_rows(path))
+        written = "ptarget2d" if column == "ptarget" else column
+        k = _header(path).index(written)
+        assert [float(r[k]) for r in _data_rows(path)] == [-1.0, 0.8]
+        back = read_spec(path)
+        assert back[column].tolist() == [-1.0, 0.8]
+        assert back["prop"].tolist() == [0.1, 0.2]
+
+    def test_all_nan_ptarget_is_dropped(self, tmp_path):
+        path = tmp_path / "spec.dat"
+        write_spec(self._features(ptarget=[np.nan, np.nan]), path)
+        assert not any(h.startswith("ptarget") for h in _header(path))
 
     def test_does_not_mutate_the_frame(self, tmp_path):
         df = self._features(ptarget=[0.9, -1.0], ptarget1d=[0.5, np.nan])

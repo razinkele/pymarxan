@@ -57,7 +57,7 @@ import numpy as np
 from scipy.sparse import coo_matrix, csr_matrix
 
 from pymarxan.models.problem import ConservationProblem
-from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE
+from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE, _ptarget_array
 from pymarxan.solvers.utils import (
     _active_chance_terms,
     _probability_vector,
@@ -416,17 +416,10 @@ class ProblemCache:
                 problem, pu_id_to_idx, feat_id_to_col, pu_feat_csr, term,
             )
 
-        # Per-feature probability targets; default -1 (disabled sentinel) for
-        # specs without the column (read_spec fills both; code-built problems may not).
-        def _ptarget_array(column: str) -> np.ndarray:
-            if column in feat_df.columns:
-                return np.asarray(
-                    feat_df[column].astype(float).fillna(-1.0).values, dtype=np.float64,
-                )
-            return np.full(n_feat, -1.0, dtype=np.float64)
-
-        feat_ptarget = _ptarget_array("ptarget")
-        feat_ptarget1d = _ptarget_array("ptarget1d")
+        # Per-feature probability targets: -1 (disabled) for a missing column or a blank
+        # value, as the evaluator reads them (the shared ``_ptarget_array``).
+        feat_ptarget = _ptarget_array(feat_df, "ptarget")
+        feat_ptarget1d = _ptarget_array(feat_df, "ptarget1d")
 
         # Phase 19 clumping precompute (target2, clumptype, baseline_penalty,
         # feat_uses_pu). Defaults match read_spec's legacy fill: target2=0
