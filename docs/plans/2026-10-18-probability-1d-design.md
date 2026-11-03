@@ -252,11 +252,13 @@ One function scores a feature from `(E, V, nonzero, target, ptarget, zero_var_ru
 - otherwise `Z = (target − E)/√V`, `P = norm.sf(Z)`, penalty and shortfall as in §1.
 
 The core is `score_feature(E, V, nonzero, target, ptarget, zero_var_rule) -> FeatureChance`
-(a frozen dataclass `z, p, shortfall, penalty`; `zero_var_rule` is `"marxan"` or `"met"`).
+(a frozen dataclass `z, p, shortfall, penalty`; `zero_var_rule` is `"marxan"`, `"met"` or, from v0.48.0, `"exact"`).
 Public signatures (final review, I-5): `compute_zscore_per_feature(mean, variance, targets)` is
 unchanged (V ≤ 0 → 4); `compute_zscore_penalty(zscore_per_feature, prob_targets, weight=1.0, *,
-zero_variance=frozenset(), zero_var_rule="marxan")` takes the ids of zero-variance features, so
-a real Z = 4 is told apart from the zero-variance one; `evaluate_solution_chance(problem,
+zero_variance=frozenset(), zero_var_rule="marxan", achieved_mean=None, targets=None)` takes the
+ids of zero-variance features, so a real Z = 4 is told apart from the zero-variance one (the
+`"exact"` rule cannot be applied from Z alone, so it needs `achieved_mean` and `targets` and
+raises `ValueError` without them); `evaluate_solution_chance(problem,
 selected, term="2d") -> tuple[dict[int, float], float]` (shortfalls, weighted penalty) for one
 term. `compute_zscore_penalty`, `evaluate_solution_chance` and the second copy of the E/V loop,
 `utils.py:_compute_probmode3_zscore_penalty` (≈501), are all rebuilt on `score_feature`. **All three current zero-variance skips go** (round 1, I3):
@@ -279,13 +281,21 @@ user chose the exact rule on 2026-10-31 (plan review H1: "met" lets a certainly-
 pay no chance penalty), but v0.47.0 shipped `PROBZEROVAR 1` = "met". Redefining a released
 value would silently change results for anyone who set it, while "met" still reproduces
 pymarxan's pre-v0.47 results; so 1 stays "met" and 2 adds the exact rule, non-breaking. Its
-implementation exists on the local prototype branch `proto/v0.47-a3` (`2cb618b`): the
-`_exact_threshold` tolerance (a prop = 1 total and E are float sums in different orders, so a
-fully held certain feature is otherwise scored short by an ulp), `ChanceState`'s knife-edge
-window (recompute a zero-variance feature whose E is within `(1 + F_j·eps)·BE +
-F_j·eps·max(|E|, Σ_col|e|)` of the threshold, strict), and their tests. `read_input_dat` /
-`write_input_dat` are generic, so its I/O needs no code; `validate()` reports values other than
-0 / 1; the manual documents it and the Shiny panel shows it.
+first implementation was on the local prototype branch `proto/v0.47-a3` (`2cb618b`); B0 was
+rebuilt on the shipped core as `proto/v0.48-b0` (2026-11-03): the `_exact_threshold` tolerance
+(a prop = 1 total and E are float sums in different orders, so a fully held certain feature is
+otherwise scored short by an ulp) and `ChanceState`'s knife-edge window. **Window (revised
+2026-11-03):** recompute a touched zero-variance feature when `|E − thr| < (1 + 8·eps)·BE +
+3·max(64, n_j)·eps·S_j` (strict), where `S_j = Σ|a·q|` over the feature's puvspr rows and `n_j`
+their count, both built once in `ChanceCells`. The older formula `(1 + F_j·eps)·BE +
+F_j·eps·max(|E|, S_j)` assumed the prototype's bounds, in which `BE` included the last fresh
+sum's error; the shipped `BE` does not, so the error of a fresh sum (up to `γ·S_j`), of the
+rounded cell floats (another `γ·S_j`) and of the evaluator's sum must all be covered, and an
+`|E|`-scaled term is unsound even for non-negative columns (a stale error can ride on a small
+`E`: mutation runs fail the dominant-cell and cancelling-amount tests). The derivation is in
+the `ChanceState` docstring. `read_input_dat` / `write_input_dat` are generic, so its I/O
+needs no code; `validate()` reports values other than 0 / 1 / 2; the manual documents it. The
+Shiny panel has no `PROBZEROVAR` control yet; it is added in B6.
 
 ### 3.5 Solvers
 
