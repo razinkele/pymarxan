@@ -147,7 +147,9 @@ pymarxan (three-layer monorepo)
     against `ptarget1d`); mode 5: both terms
   - With no PROBMODE set the data selects the mode, with a warning when it differs from
     v0.46's
-- Integrated in SA, heuristic, and MIP solvers
+- Modes 1 and 2 are used by every single-zone solver (MIP, SA, heuristics). Simulated
+  annealing and iterative improvement optimise the chance terms (PROBMODE 3–5);
+  the MIP drops them and reports the gap; the greedy heuristic and Zonation ignore them
 
 ### Modern conservation planning
 - 30×30 / GBF area-based **representation** reporting against a policy threshold

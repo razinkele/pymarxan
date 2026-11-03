@@ -871,7 +871,8 @@ HELP_CONTENT: dict[str, ui.TagList] = {
             "pu.dat prob (or prob.dat) is the probability that the planning unit is lost. "
             "It can also be read as the probability that the unit's contribution is lost, "
             "e.g. a restoration action fails or its funding ends: the amount counts only "
-            "if the action succeeds, so prob = 1 − P(success)."
+            "if the action succeeds and stays funded, so prob = 1 − P(succeeds and stays "
+            "funded)."
         ),
         _section("PROBZEROVAR"),
         _param_table([

@@ -44,3 +44,13 @@ def test_acknowledges_marxan_and_prioritizr_with_citations():
     assert "Hanson, J. O., Schuster, R., Strimas-Mackey, M., et al. (2024)" in html
     assert "https://doi.org/10.1111/cobi.14376" in html
     assert "not affiliated with" in html
+
+
+def test_comparison_rows_match_the_manuals_side_by_side_table():
+    """The About dialog mirrors docs/USER_MANUAL.md "Side by side"; keep them in step."""
+    from pathlib import Path
+
+    manual = (Path(__file__).resolve().parents[2] / "docs" / "USER_MANUAL.md").read_text()
+    table = manual[manual.index("### Side by side"):manual.index("### Which tool when")]
+    for row in COMPARISON_ROWS:
+        assert "| " + " | ".join(row) + " |" in table, row

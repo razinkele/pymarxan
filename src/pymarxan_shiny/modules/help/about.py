@@ -21,7 +21,7 @@ COMPARISON_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("Zones", "Marxan with Zones (separate program)", "Yes", "Yes, exact and heuristic"),
     ("Clumping, separation", "Yes", "No (not linear)", "Yes (heuristic solvers)"),
     ("Probability (chance) terms", "Marxan 3: 1D and 2D", "Not a built-in term",
-     "2D now; 1D in v0.48.0"),
+     "1D and 2D (PROBMODE 3–5)"),
     ("Interactive interface", "Separate tools", "Separate applications built on it",
      "Built-in Shiny application"),
 )

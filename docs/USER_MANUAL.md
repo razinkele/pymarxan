@@ -408,7 +408,7 @@ A `prob` column in `pu.dat` gives the same per-unit loss probability for Marxan'
 | PROBMODE | Meaning | Origin |
 |----------|---------|--------|
 | 0 | Probabilities ignored | — |
-| 1 (default with a table) | Risk premium `PROBABILITYWEIGHTING × Σ probability × cost` over selected units, added to the objective (not to the reported cost; off when the weighting is 0 or below) — the expected cost of protecting units that are then lost; it does not depend on the features a unit holds, and a zero-cost unit carries no premium | pymarxan extension |
+| 1 (default with a table when no chance target selects 3–5) | Risk premium `PROBABILITYWEIGHTING × Σ probability × cost` over selected units, added to the objective (not to the reported cost; off when the weighting is 0 or below) — the expected cost of protecting units that are then lost; it does not depend on the features a unit holds, and a zero-cost unit carries no premium | pymarxan extension |
 | 2 | Expected amounts: every feature amount counts as `amount × (1 − probability)`, and targets, shortfalls, penalties, representation and gap analysis are judged on them | pymarxan extension |
 | 3 | Z-score probability penalty (a soft chance target, not a hard constraint) from a per-cell probability of **presence** (a `prob` column in `puvspr.dat`) and a per-feature `ptarget2d` in spec.dat (`ptarget` in memory) | Marxan's Probability 2D (Marxan 3), including its zero-variance rule (below) |
 | 4 | The same Z-score penalty from a per-unit probability of **loss** (`pu.dat` `prob`, else `prob.dat`) and a per-feature `ptarget1d` | Marxan's Probability 1D (Marxan 3) |
@@ -421,8 +421,9 @@ met, the summary and target-met tables) uses them. A unit missing from the table
 a unit listed twice uses its last row. `validate()` reports duplicates, values outside [0, 1] and
 non-finite values (a blank cell reads as NaN) in every mode. Wherever the table is read — mode 1
 with `PROBABILITYWEIGHTING` above 0, and mode 2 — every single-zone solver and the evaluator raise
-`ValueError` on a non-finite probability; modes 0 and 3, and mode 1 with a weighting of 0 or below,
-ignore the table. The zone solvers ignore the probability table.
+`ValueError` on a non-finite probability; modes 4 and 5 read the table as the 1D loss
+probability when pu.dat has no `prob` column, and raise on it too. Modes 0 and 3, and mode 1
+with a weighting of 0 or below, ignore the table. The zone solvers ignore the probability table.
 
 **PROBMODE 3 and zero variance (`PROBZEROVAR`).** A feature's variance over the selection
 is zero when no selected cell of it is uncertain: nothing that holds it is selected, or every
@@ -491,7 +492,8 @@ writes `ptarget2d`, never `ptarget`.
 **Use in restoration / nature recovery.** The per-unit `prob` of Probability 1D need not be a
 habitat loss rate. In a restoration or recovery plan it can be the probability that the
 unit's contribution is lost: the restoration action fails, or the unit lapses when its funding
-ends. The amount in a unit counts only if the action succeeds, so `prob = 1 − P(success)`. For
+ends. The amount in a unit counts only if the action succeeds and stays funded, so
+`prob = P(action fails or funding lapses) = 1 − P(action succeeds and stays funded)`. For
 example, a wetland-restoration unit with a 70 % chance of establishing has `prob = 0.3`, a
 secured, already-protected unit `prob = 0`, and a unit whose management is funded for only part
 of the planning horizon a `prob` reflecting the chance funding is not renewed. `ptarget1d` then
@@ -589,7 +591,7 @@ shares (a binary selection counts as 1).
 **Differences and limits.**
 - Locked-in units (status 2) are fixed whole (`x = 1.0`) in every mode; `upper` and `lower`
   bound only the free units. prioritizr makes the model infeasible when `upper < 1`.
-- Non-binary decisions cannot be combined with PROBMODE 3, clumping (`target2`), separation,
+- Non-binary decisions cannot be combined with PROBMODE 3–5, clumping (`target2`), separation,
   space targets, no-good cuts or negative connectivity values; the solver raises `ValueError`.
 - Solver values are clipped to each unit's bounds and values at or below `1e-9` set to 0;
   semicontinuous values within `1e-6` below `lower` are raised to `lower`; a semicontinuous unit whose on/off
@@ -951,7 +953,7 @@ References:
 | **Irreplaceability** | How critical a PU is for meeting targets — PUs selected in nearly all solutions are highly irreplaceable |
 | **Connectivity** | Spatial connections between PUs — encourages selecting linked PUs to maintain ecological corridors |
 | **Probability** | Per-PU probability that the unit (and the features in it) is **lost** over the planning horizon (prob.dat, or a `prob` column in pu.dat for Probability 1D). Persistence is 1 − probability. PROBMODE 3 instead reads a per-(PU, feature) probability of **presence** from puvspr.dat |
-| **PROBMODE** | Probability mode (pymarxan extensions over `prob.dat`): 1 = risk premium in the objective (default with a probability table), 2 = expected (persistence-adjusted) amounts; 3 = Marxan's Probability 2D, 4 = Marxan's Probability 1D, 5 = both (Z-score chance penalties); with none set the data selects it — see [Probability (PROBMODE)](#probability-probmode) |
+| **PROBMODE** | Probability mode (pymarxan extensions over `prob.dat`): 1 = risk premium in the objective (default with a probability table when no chance target selects 3–5), 2 = expected (persistence-adjusted) amounts; 3 = Marxan's Probability 2D, 4 = Marxan's Probability 1D, 5 = both (Z-score chance penalties); with none set the data selects it — see [Probability (PROBMODE)](#probability-probmode) |
 | **Zone** | A management category (e.g. no-take, buffer, sustainable use) in multi-zone planning |
 | **Zone Contribution** | How much a PU in a given zone contributes to a feature's target (0–1 multiplier) |
 | **Zone Boundary Cost** | Cost per unit of shared boundary between adjacent PUs in a given pair of zones, including the same zone twice (`zone1 = zone2`); negative values reward that adjacency. Scaled by BLM, as in Marxan with Zones, so BLM = 0 switches zone boundary costs off. Unassigned PUs (zone 0) pay nothing |

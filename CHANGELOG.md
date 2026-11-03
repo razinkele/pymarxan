@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - spec.dat columns `ptarget1d` and `ptarget2d` (Marxan 3's names); `ptarget2d` is read into
   the in-memory 2D target `ptarget`, and a file with both `ptarget` and `ptarget2d` must
   agree. `ptarget1d` is overridable in scenarios.
-- Probability diagnostics (`_probability_diagnostics`): `load_project` and every top-level
+- Probability diagnostics: `load_project` and every top-level
   solve warn when the data-selected PROBMODE differs from v0.46's, when an explicit mode
   ignores the 1D or 2D targets, when a requested chance term has no data (it is then off),
   when pu.dat `prob` is present under PROBMODE 1 / 2 (which read prob.dat only), and when
@@ -34,13 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Marxan binary wrapper warns that the binary switches its own terms on from the files, and
   writes prob.dat loss probabilities into its temporary pu.dat when they are the 1D source.
 - `validate()` reports a PROBMODE outside 0–5, a pu.dat `prob` that is non-finite or
-  outside [0, 1] (whatever the mode), and a puvspr `prob` outside [0, 1].
+  outside [0, 1] (whatever the mode), and a puvspr `prob` outside [0, 1]; under PROBMODE 4 /
+  5 it and the solvers also report a non-finite puvspr `amount`, as under mode 3.
 - Shiny: the probability panel offers PROBMODE 0–5 and follows the project's mode in force,
   has a PROBZEROVAR control (0 / 1 / 2) and a help page; the feature table edits `ptarget`
   and `ptarget1d` (−1 or (0, 1]); project upload shows the probability diagnostics.
 - The manual describes using Probability 1D for restoration and nature-recovery plans
   (`prob` = the chance an action fails or its funding ends; Baker et al. 2025).
-
 - `PROBZEROVAR 2`, the exact zero-variance rule for the chance terms (PROBMODE 3–5). A feature whose selected
   cells carry no variance holds a certain amount: it is met outright (probability 1, no
   chance penalty) when that amount reaches its target within the deterministic targets'
@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **PROBMODE is selected from the data when unset** (in `_probmode`, so code-built and
+- **Breaking (PROBMODE default): PROBMODE is selected from the data when unset** (in `_probmode`, so code-built and
   `copy_with` problems get it too): a 1D source with any `ptarget1d > 0` → 4, a puvspr
   `prob` column with any `ptarget > 0` → 3, both → 5, otherwise v0.46's default (1 with
   prob.dat, else 0). Projects whose data now selects 3–5 change mode, with a warning naming
@@ -87,7 +87,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkout without installing it (Shiny Server) showed `0.0.0+unknown` in the About dialog,
   and a stale editable install could report an old version.
 - The Shiny probability panel's weight slider no longer rewrites PROBMODE to the radio's
-  default (1) when moved.
+  default (1) when moved, and it now starts from the project's PROBABILITYWEIGHTING (the
+  preview shows the weighting in force, not the slider).
+- The Shiny probability and connectivity panels changed the loaded problem in place and set
+  it again, which Shiny ignores (`reactive.Value.set` skips the object it already holds): a
+  new PROBMODE, PROBZEROVAR, weighting or prob.dat upload reached the solvers but the panel,
+  the data summary and the run panel's MIP notice did not update. They now set a copy.
+- A feature-table edit the validator rejects (e.g. `ptarget1d` = 1.5, a negative target) is
+  now refused instead of being stored.
 
 ## [0.47.2] — 2026-11-03
 
