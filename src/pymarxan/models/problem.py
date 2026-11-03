@@ -471,7 +471,7 @@ _OVERRIDABLE_FIELDS = {
     # Round-3 H11 / round-2 M2: Phase 18/19/20 constraint columns should
     # be overridable so ScenarioSet.clone_scenario can sweep over them
     # (e.g. {"sepnum": {1: 5}} for a separation-strictness study).
-    "ptarget", "target2", "clumptype", "sepdistance", "sepnum",
+    "ptarget", "ptarget1d", "target2", "clumptype", "sepdistance", "sepnum",
 }
 
 

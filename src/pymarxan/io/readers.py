@@ -6,18 +6,20 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import ConservationProblem
 
 # Whitelist of recognised columns on spec.dat across Phases 18 (ptarget),
-# 19 (target2, clumptype), and 20 (sepdistance, sepnum). Anything else is
+# 19 (target2, clumptype), 20 (sepdistance, sepnum) and v0.48 (Marxan 3's
+# ptarget1d / ptarget2d; ``input.c``). Anything else is
 # either a Marxan-classic column we don't support or — more likely — a typo
 # in the user's spec.dat that would silently default the real column to its
 # disabled sentinel. Round-3 H10 cross-phase observability fix.
 _KNOWN_SPEC_COLS: frozenset[str] = frozenset({
     "id", "name", "target", "prop", "spf",
-    "ptarget", "target2", "clumptype",
+    "ptarget", "ptarget1d", "ptarget2d", "target2", "clumptype",
     "sepdistance", "sepnum",
 })
 
@@ -76,6 +78,30 @@ def read_pu(path: str | Path) -> pd.DataFrame:
     return df
 
 
+def _fold_ptarget2d(df: pd.DataFrame) -> pd.DataFrame:
+    """Marxan 3's ``ptarget2d`` → the in-memory 2D target ``ptarget`` (spec §3.2).
+
+    pymarxan keeps the Probability 2D target in ``features["ptarget"]`` (Phase 18), so the
+    ``ptarget2d`` column is read into it and dropped: no stale twin is left for
+    ``copy_with``, scenario overrides or the Shiny editor. A file carrying both raises
+    ``ValueError`` when they differ anywhere (two blanks agree).
+    """
+    if "ptarget2d" not in df.columns:
+        return df
+    if "ptarget" in df.columns:
+        a = df["ptarget"].to_numpy(dtype=float)
+        b = df["ptarget2d"].to_numpy(dtype=float)
+        differ = ~((a == b) | (np.isnan(a) & np.isnan(b)))
+        if differ.any():
+            bad = df.loc[differ, "id"].tolist()
+            raise ValueError(
+                "spec.dat has both ptarget and ptarget2d (the Probability 2D target) and "
+                f"they differ for feature IDs {bad}; keep one of the two columns"
+            )
+        return df.drop(columns=["ptarget2d"])
+    return df.rename(columns={"ptarget2d": "ptarget"})
+
+
 def read_spec(path: str | Path) -> pd.DataFrame:
     """Read a species/features (spec.dat) file.
 
@@ -106,9 +132,12 @@ def read_spec(path: str | Path) -> pd.DataFrame:
         )
 
     df["id"] = df["id"].astype(int)
-    for col in ("target", "prop", "spf", "ptarget", "target2", "sepdistance"):
+    for col in (
+        "target", "prop", "spf", "ptarget", "ptarget1d", "ptarget2d", "target2", "sepdistance",
+    ):
         if col in df.columns:
             df[col] = df[col].astype(float)
+    df = _fold_ptarget2d(df)
     if "target" not in df.columns:
         df["target"] = 0.0
     if "spf" not in df.columns:
@@ -118,6 +147,12 @@ def read_spec(path: str | Path) -> pd.DataFrame:
     if "ptarget" not in df.columns:
         # -1 is Marxan's "no probability target" sentinel.
         df["ptarget"] = -1.0
+    if "ptarget1d" not in df.columns:
+        # Probability 1D target (Marxan 3 ptarget1d); -1 disables it.
+        df["ptarget1d"] = -1.0
+    else:
+        # A blank field reads as NaN: it is no target, Marxan's -1.
+        df["ptarget1d"] = df["ptarget1d"].fillna(-1.0)
     if "target2" not in df.columns:
         # 0 disables clumping for the feature (Marxan TARGET2 convention).
         df["target2"] = 0.0
