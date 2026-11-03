@@ -30,6 +30,13 @@ ACTION_NAMES: dict[int, str] = {
     ZONE_RESTORE_ACTIVE: "restore_active",
     ZONE_RESTORE_PASSIVE: "restore_passive",
 }
+# Scaled species penalty factor: SPF_SCALE x the dearest cost per unit of a feature any
+# (unit, action) supplies, so one unit of shortfall costs 10x more than buying it the most
+# expensive way. Integrality means no finite factor guarantees heuristics meet every target
+# (one missing 0.2 can need a whole unit), so solvers still report the shortfall; on the
+# anchors and random 7-8 unit instances SA + II met the targets in ~95 % of runs at 10
+# (50 % at 1, 67 % at 2) and always reached the MIP optimum when they did.
+SPF_SCALE = 10.0
 # Parameters copied from the base project; everything else is set by the builder.
 _COPIED_PARAMETERS = ("BLM", "NUMITNS", "NUMTEMP", "COOLING", "MIP_TIME_LIMIT", "MIP_GAP")
 
@@ -82,6 +89,29 @@ class RecoveryMapping:
 
     def action_names(self, assignment: np.ndarray) -> list[str]:
         return [self.zones[int(z)] for z in assignment]
+
+
+def scaled_spf(problem: ZonalProblem) -> dict[int, float]:
+    """Feature id -> ``SPF_SCALE × max_{unit, zone} zone_cost / (amount × contribution)``
+    over the (unit, zone) pairs that supply the feature; 1.0 for a feature nothing supplies.
+    """
+    zc = {(int(p), int(z)): float(c) for p, z, c in zip(
+        problem.zone_costs["pu"], problem.zone_costs["zone"], problem.zone_costs["cost"],
+        strict=True)}
+    contrib = problem.contribution_lookup()
+    zones = sorted(int(z) for z in problem.zone_ids)
+    dearest: dict[int, float] = {}
+    pv = problem.pu_vs_features
+    for f, u, a in zip(pv["species"], pv["pu"], pv["amount"], strict=True):
+        for z in zones:
+            supply = float(a) * contrib.get((int(f), z), 0.0)
+            if supply > 0:
+                ratio = zc.get((int(u), z), 0.0) / supply
+                dearest[int(f)] = max(dearest.get(int(f), 0.0), ratio)
+    return {
+        int(f): SPF_SCALE * dearest[int(f)] if dearest.get(int(f), 0.0) > 0 else 1.0
+        for f in problem.features["id"]
+    }
 
 
 def _pu_vs_features(inputs: RecoveryInputs) -> pd.DataFrame:
@@ -192,6 +222,9 @@ def _assemble(inputs: RecoveryInputs) -> tuple[ZonalProblem, RecoveryMapping]:
         pu_locks=pd.DataFrame(locks, columns=["pu", "zone"]) if locks else None,
         pu_zones=pd.DataFrame(restrict, columns=["pu", "zone"]) if restrict else None,
     )
+    if inputs.spf is None:
+        spf_of = scaled_spf(problem)
+        problem.features["spf"] = [spf_of[int(f)] for f in problem.features["id"]]
     potential_long = inputs.potential[["pu", "feature", "amount"]].rename(
         columns={"feature": "habitat"}
     ).astype({"pu": int, "habitat": int, "amount": float})

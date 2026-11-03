@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pymarxan.recovery.builder import (
     ACTION_NAMES,
+    SPF_SCALE,
     ZONE_NO_ACTION,
     ZONE_PROTECT,
     ZONE_RESTORE_ACTIVE,
@@ -20,11 +21,19 @@ from pymarxan.recovery.builder import (
     check_recovery_inputs,
     existing_feature_id,
     potential_feature_id,
+    scaled_spf,
 )
 from pymarxan.recovery.inputs import PassiveAction, RecoveryInputs
+from pymarxan.recovery.solve import (
+    RECOVERY_MIP_SIZE_WARNING,
+    RecoverySizeWarning,
+    solve_recovery,
+)
 
 __all__ = [
     "ACTION_NAMES",
+    "RECOVERY_MIP_SIZE_WARNING",
+    "SPF_SCALE",
     "ZONE_NO_ACTION",
     "ZONE_PROTECT",
     "ZONE_RESTORE_ACTIVE",
@@ -35,8 +44,11 @@ __all__ = [
     "RecoveryInputWarning",
     "RecoveryInputs",
     "RecoveryMapping",
+    "RecoverySizeWarning",
     "build_recovery_problem",
     "check_recovery_inputs",
     "existing_feature_id",
     "potential_feature_id",
+    "scaled_spf",
+    "solve_recovery",
 ]
