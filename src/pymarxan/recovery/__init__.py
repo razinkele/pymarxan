@@ -33,6 +33,13 @@ from pymarxan.recovery.evaluate import (
     success_sensitivity,
 )
 from pymarxan.recovery.inputs import PassiveAction, RecoveryInputs
+from pymarxan.recovery.io import (
+    RecoveryProject,
+    load_recovery_project,
+    read_recovery_inputs,
+    save_recovery_project,
+    write_recovery_inputs,
+)
 from pymarxan.recovery.solve import (
     RECOVERY_MIP_SIZE_WARNING,
     RecoverySizeWarning,
@@ -56,15 +63,20 @@ __all__ = [
     "RecoveryInputWarning",
     "RecoveryInputs",
     "RecoveryMapping",
+    "RecoveryProject",
     "RecoveryResult",
     "RecoverySizeWarning",
     "build_recovery_problem",
     "check_recovery_inputs",
     "evaluate_recovery",
     "existing_feature_id",
+    "load_recovery_project",
     "potential_feature_id",
+    "read_recovery_inputs",
     "recovery_caveat",
+    "save_recovery_project",
     "scaled_spf",
     "solve_recovery",
     "success_sensitivity",
+    "write_recovery_inputs",
 ]

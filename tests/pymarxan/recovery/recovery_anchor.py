@@ -6,7 +6,9 @@ expected potential is [0, 0, 4, 9.6] (max 13.6). protect_prop 0.5 -> existing ta
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 from typing import Any
 
 import numpy as np
@@ -54,3 +56,25 @@ def brute(problem: ZonalProblem) -> list[tuple[float, tuple[int, ...]]]:
         if all(check_overall_targets(problem, a).values()):
             out.append((round(float(compute_zone_cost(problem, a)), 9), combo))
     return sorted(out)
+
+
+def fingerprint(problem: ZonalProblem) -> str:
+    """Hash over every table sorted by its key columns (object identity excluded)."""
+    h = hashlib.sha256()
+    tables = {
+        "planning_units": (problem.planning_units, ["id"]),
+        "features": (problem.features, ["id"]),
+        "pu_vs_features": (problem.pu_vs_features, ["species", "pu"]),
+        "zones": (problem.zones, ["id"]),
+        "zone_costs": (problem.zone_costs, ["pu", "zone"]),
+        "zone_contributions": (problem.zone_contributions, ["feature", "zone"]),
+        "pu_locks": (problem.pu_locks, ["pu"]),
+        "pu_zones": (problem.pu_zones, ["pu", "zone"]),
+    }
+    for name, (df, keys) in tables.items():
+        h.update(name.encode())
+        if df is not None:
+            d = df.sort_values(keys).reset_index(drop=True)[sorted(df.columns)]
+            h.update(pd.util.hash_pandas_object(d, index=False).values.tobytes())
+    h.update(json.dumps(problem.parameters, sort_keys=True, default=str).encode())
+    return h.hexdigest()

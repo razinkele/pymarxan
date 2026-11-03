@@ -40,6 +40,7 @@ from pymarxan.zones.readers import (
 )
 from pymarxan.zones.solver import ZoneSASolver
 from pymarxan.zones.writers import (
+    save_zone_project,
     write_pu_lock,
     write_pu_zone,
     write_zone_boundary_costs,
@@ -81,6 +82,7 @@ __all__ = [
     "read_zone_targets",
     "read_zones",
     "resolve_zone_target_types",
+    "save_zone_project",
     "write_pu_lock",
     "write_pu_zone",
     "write_zone_boundary_costs",

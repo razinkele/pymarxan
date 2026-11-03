@@ -1,8 +1,6 @@
 """build_recovery_problem: tables, anchors (brute-force verified), status rules (R2)."""
 from __future__ import annotations
 
-import hashlib
-import json
 import warnings
 
 import pandas as pd
@@ -18,7 +16,7 @@ from pymarxan.recovery import (
 )
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones import ZonalProblem, ZoneMIPSolver
-from tests.pymarxan.recovery.recovery_anchor import anchor_inputs, brute
+from tests.pymarxan.recovery.recovery_anchor import anchor_inputs, brute, fingerprint
 
 
 def _mip(problem: ZonalProblem) -> tuple[list[int], float]:
@@ -190,28 +188,6 @@ def test_non_contiguous_habitat_ids() -> None:
     assert problem.validate() == []
 
 
-def _fingerprint(problem: ZonalProblem) -> str:
-    """Hash over every table sorted by its key columns (object identity excluded)."""
-    h = hashlib.sha256()
-    tables = {
-        "planning_units": (problem.planning_units, ["id"]),
-        "features": (problem.features, ["id"]),
-        "pu_vs_features": (problem.pu_vs_features, ["species", "pu"]),
-        "zones": (problem.zones, ["id"]),
-        "zone_costs": (problem.zone_costs, ["pu", "zone"]),
-        "zone_contributions": (problem.zone_contributions, ["feature", "zone"]),
-        "pu_locks": (problem.pu_locks, ["pu"]),
-        "pu_zones": (problem.pu_zones, ["pu", "zone"]),
-    }
-    for name, (df, keys) in tables.items():
-        h.update(name.encode())
-        if df is not None:
-            d = df.sort_values(keys).reset_index(drop=True)[sorted(df.columns)]
-            h.update(pd.util.hash_pandas_object(d, index=False).values.tobytes())
-    h.update(json.dumps(problem.parameters, sort_keys=True, default=str).encode())
-    return h.hexdigest()
-
-
 def test_build_is_deterministic_and_row_order_free() -> None:
     a, _ = build_recovery_problem(anchor_inputs(passive=PassiveAction()))
     b, _ = build_recovery_problem(anchor_inputs(passive=PassiveAction()))
@@ -220,4 +196,4 @@ def test_build_is_deterministic_and_row_order_free() -> None:
         potential=pd.DataFrame({"pu": [4, 3], "feature": [1, 1], "amount": [12.0, 8.0]}),
     )
     c, _ = build_recovery_problem(shuffled)
-    assert _fingerprint(a) == _fingerprint(b) == _fingerprint(c)
+    assert fingerprint(a) == fingerprint(b) == fingerprint(c)

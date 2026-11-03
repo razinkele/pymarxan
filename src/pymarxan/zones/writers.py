@@ -213,3 +213,49 @@ def write_pu_lock(df: pd.DataFrame, path: str | Path) -> None:
 def write_pu_zone(df: pd.DataFrame, path: str | Path) -> None:
     """Write ``pu_zones`` as MarZone ``puzone.dat`` (header ``puid,zoneid``)."""
     _write_pu_zone_pairs(df, path)
+
+
+# (parameter key, default file name, ZonalProblem attribute, writer)
+_ZONE_FILES = (
+    ("ZONESNAME", "zones.dat", "zones", write_zones),
+    ("ZONECOSTNAME", "zonecost.dat", "zone_costs", write_zone_costs),
+    ("ZONECONTRIBNAME", "zonecontrib.dat", "zone_contributions", write_zone_contributions),
+    ("ZONETARGETNAME", "zonetarget.dat", "zone_targets", write_zone_targets),
+    ("ZONEBOUNDCOSTNAME", "zoneboundcost.dat", "zone_boundary_costs",
+     write_zone_boundary_costs),
+    ("PULOCKNAME", "pulock.dat", "pu_locks", write_pu_lock),
+    ("PUZONENAME", "puzone.dat", "pu_zones", write_pu_zone),
+)
+
+
+def save_zone_project(problem: ZonalProblem, project_dir: str | Path) -> None:
+    """Save a ``ZonalProblem`` as a MarZone project directory ``load_zone_project`` reads
+    back (the inverse of the loader).
+
+    Writes the Marxan files via :func:`pymarxan.io.writers.save_project` plus
+    ``zones.dat``, ``zonecost.dat`` and, when present, ``zonecontrib.dat``,
+    ``zonetarget.dat``, ``zoneboundcost.dat``, ``pulock.dat`` and ``puzone.dat``, naming
+    each in ``input.dat`` (the loader reads pulock/puzone only when named). An absent
+    optional table removes a stale file of the same name from the input directory, and its
+    ``*NAME`` key from the written parameters, so the reload cannot pick up old data.
+    pymarxan's "unassigned" (no action) state has no MarZone C++ equivalent, so a saved
+    project is guaranteed to reproduce in pymarxan, not in MarZone.
+    """
+    from pymarxan.io.writers import save_project
+
+    project_dir = Path(project_dir)
+    params = dict(problem.parameters)
+    params.setdefault("INPUTDIR", "input")
+    for key, default, attr, _ in _ZONE_FILES:
+        if getattr(problem, attr) is not None:
+            params.setdefault(key, default)
+        elif key in params:
+            del params[key]
+    save_project(problem.copy_with(parameters=params), project_dir)
+    input_dir = project_dir / str(params["INPUTDIR"])
+    for key, default, attr, writer in _ZONE_FILES:
+        table = getattr(problem, attr)
+        if table is not None:
+            writer(table, input_dir / str(params[key]))
+        elif (input_dir / default).exists():
+            (input_dir / default).unlink()
