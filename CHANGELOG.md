@@ -13,13 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells carry no variance holds a certain amount: it is met outright (probability 1, no
   chance penalty) when that amount reaches its target within the deterministic targets'
   relative tolerance (amount ≥ target − 1e-7·|target|), and missed outright otherwise
-  (probability 0, shortfall `ptarget`, penalty `PROBABILITYWEIGHTING`). A target of 0 has
-  no tolerance. Marxan's rule (`PROBZEROVAR 0`, Z = 4) stays the default and
+  (probability 0, shortfall `ptarget`, the full per-feature penalty
+  `PROBABILITYWEIGHTING × (ptarget − 0)/ptarget`, i.e. `PROBABILITYWEIGHTING` for any
+  `ptarget` in (0, 1]). A target of 0 gets a float-noise tolerance instead (amount ≥
+  −n·eps·Σ|amounts|, over the feature's n puvspr rows), so an amount that is exactly 0 is
+  met in every row order while a genuinely negative one is short. Marxan's rule (`PROBZEROVAR 0`, Z = 4) stays the default and
   `PROBZEROVAR 1` ("met") is unchanged, so no existing result moves. The evaluator,
   `score_feature(s)`, simulated annealing and iterative improvement (`ChanceState`, which
-  recomputes a zero-variance feature from a fresh sum when its running amount is close
-  enough to the threshold for rounding to matter) and the MIP's post-hoc report all apply
-  it; `compute_zscore_penalty` takes `achieved_mean` / `targets` for it. `validate()`
+  takes a zero-variance feature's decision from a sum in the evaluator's own row order, at
+  the start and whenever its running amount is close enough to the threshold for rounding
+  to matter) and the MIP's post-hoc report all apply it, with the same threshold;
+  `compute_zscore_penalty` takes `achieved_mean` / `targets` (and `target_zero_tol`) for it
+  and raises `ValueError` naming a zero-variance feature missing from them. `validate()`
   accepts 0, 1 and 2.
 - The Shiny About dialog acknowledges Marxan and prioritizr, with the references to cite
   (Ball, Possingham & Watts 2009; Watts et al. 2009; Hanson et al. 2024) and a note that

@@ -434,10 +434,14 @@ met" (no chance penalty for that feature; a deterministic shortfall is still pen
 ordinary target penalty). `PROBZEROVAR 2` (since v0.48.0) is the exact rule: a feature with
 zero variance holds a certain amount, so its probability of meeting the target is 1 if that
 amount reaches the target and 0 if it does not — met with no chance penalty, or short with
-the full one (`PROBABILITYWEIGHTING × 1`, shortfall `ptarget`). "Reaches" allows the same
+the full one (`PROBABILITYWEIGHTING × (ptarget − 0)/ptarget`, i.e. the weighting for any
+`ptarget` up to 1; shortfall `ptarget`). "Reaches" allows the same
 relative tolerance as the deterministic targets, 1e-7 of the target (amount ≥ target −
 1e-7·|target|), so a fully held feature with a `prop = 1` target is not scored short by a
-rounding difference; a target of 0 has no tolerance, so a negative certain amount is short.
+rounding difference. A target of 0 gets a float-noise tolerance instead (amount ≥
+−n·eps·Σ|amounts| over the feature's n rows in puvspr.dat, eps ≈ 2.2e-16), so amounts that
+cancel to exactly 0 are met whatever the row order, while a genuinely negative certain amount
+is short.
 In the example above, holding the feature safely (in a certain amount that reaches the
 target) then scores 1.0, like the risky unit, and
 holding too little of it in certain cells pays the full penalty instead of none. `validate()`

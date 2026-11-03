@@ -32,44 +32,47 @@ recompute only decides when a ``q`` outside [0, 1] leaves ``V ≤ 0`` beside cou
 
 Exact rule's knife edge (``PROBZEROVAR 2``). Under Marxan's rule (0) and "met" (1) a
 zero-variance feature's penalty does not depend on ``E``. Under the exact rule it steps at
-the met threshold ``thr_j = T_j − 1e-7·|T_j|`` (``probability._exact_threshold``, computed
-once per feature): met iff ``E ≥ thr_j``. The decision must be the evaluator's
-(``probability._term_moments``), whose ``E_ev`` is its own float sum. Let ``Ê`` be the
-exact sum of the feature's terms (``a·q`` per puvspr row) over the selection, ``S_j`` the
-sum of ``|a·q|`` over the feature's whole column and ``n_j`` its number of terms
-(``ChanceCells.f_abs_e`` / ``f_terms``, computed once at build; ``S_j`` bounds ``Σ|terms|``
-over every selection, negative amounts included). With ``γ = γ_{n_j−1} ≈ (n_j − 1)·u``
-(u = eps/2), any float sum of the feature's terms is within ``γ·S_j`` of the exact sum:
+the met threshold ``thr_j`` (``probability._exact_threshold``, kept per term in
+``_TermState.thr``): ``T_j − 1e-7·|T_j|``, or ``−n_j·eps·S_j`` for a target of 0
+(``probability._zero_target_tol``); met iff ``E ≥ thr_j``. The decision must be the
+evaluator's (``probability._term_moments``), whose ``E_ev`` is its own float sum of the
+selected puvspr rows in **file order**. So whenever this state takes a zero-variance
+feature's decision from a fresh sum — at ``from_selection`` and at every recompute of a
+zero-variance feature — it sums the selected rows in that same order (``_row_sum`` over
+``ChanceCells.r_e``), which equals ``E_ev`` bit for bit, whatever the planning-unit order,
+the puvspr row order or repeated ``(pu, species)`` rows. (B0 review M-1: the column sum,
+in planning-unit order, disagreed with the evaluator at ``from_selection`` with descending
+PU ids.)
+
+Between fresh sums the running ``E`` drifts. Let ``Ê`` be the exact sum of the feature's
+terms over the selection, ``S_j`` the sum of ``|e|`` over the feature's whole column and
+``n_j`` its number of terms (``ChanceCells.f_abs_e`` / ``f_terms``; ``S_j`` bounds
+``Σ|terms|`` over every selection, negative amounts included). With
+``γ = γ_{n_j−1} ≈ (n_j − 1)·u`` (u = eps/2), any float sum of the feature's terms is within
+``γ·S_j`` of the exact sum:
 
 - the evaluator: ``|E_ev − Ê| ≤ γ·S_j``;
-- the running ``E``: its last fresh sum (``from_selection``, a recompute, the snap) was
-  within ``γ·S_j`` of the exact sum of the cell floats then selected (each cell float is
-  itself a rounded sum of its rows; adding and removing the same cell float cancels
-  exactly, so the cells' own rounding contributes at most another ``γ·S_j`` over the
-  current selection), and every update since added at most its increment to ``BE``
-  (the shipped increments are true bounds; the reset ``4·eps·|E|`` is extra slack). So
-  ``|E − Ê| ≤ BE + 2·γ·S_j``.
+- the running ``E``: its last fresh sum (row-order or column sum) was within ``γ·S_j`` of
+  the exact sum of the terms then selected (adding and removing the same cell float
+  cancels exactly, so the cells' own rounding contributes at most another ``γ·S_j`` over
+  the current selection), and every update since added at most its increment to ``BE``
+  (the reset ``4·eps·|E|`` is extra slack). So ``|E − Ê| ≤ BE + 2·γ·S_j``.
 
 Hence ``|E − E_ev| ≤ BE + 3·γ·S_j < BE + 1.5·n_j·eps·S_j``. A touched zero-variance
-feature is recomputed from a fresh sum when
+feature is recomputed when
 
     |E − thr_j| < W_j = (1 + 8·eps)·BE + 3·F_j·eps·S_j,     F_j = max(64, n_j)
 
-(strict): ``W_j`` is twice the evaluator-error term, and the ``8·eps`` and that factor 2
-absorb the rounding of computing ``|E − thr_j|`` and ``W_j`` themselves. Outside the
-window ``E`` and ``E_ev`` are strictly on the same side of ``thr_j`` (and so is ``Ê``),
-so the stored decision is the evaluator's and the exact truth's. Inside it, the fresh
-column sum decides; it equals the evaluator's sum bit for bit when, per feature, the puvspr
-rows are in ascending PU order and no PU names the feature twice (both then add the same
-floats in the same order, from 0.0); otherwise both are within ``γ·S_j`` of ``Ê`` and may
-straddle a threshold that close. The window is a property of the exact rule only: the
-shipped ``64·eps·|E|`` redo floor and every bound above are unchanged, so rules 0 / 1 are
-bit for bit as before. With a target of 0 there is no tolerance (``thr_j = 0``); a
-feature whose cells all have ``e = 0`` has ``E = BE = S_j = 0``, an empty window and no
-recompute. For a nonzero target the threshold is ``1e-7·|T_j|`` below it, so an ``E``
-landing exactly on its target (grid amounts) is outside the window unless
-``3·F_j·eps·S_j`` reaches ``1e-7·|T_j|`` (``n_j·S_j/|T_j| ≳ 5e7``) or ``BE`` grows by
-about 10^8 updates without a fresh sum.
+(strict; ``_knife_hit``): ``W_j`` is twice the evaluator-error term, and the ``8·eps`` and
+that factor 2 absorb the rounding of computing ``|E − thr_j|`` and ``W_j`` themselves.
+Outside the window ``E`` and ``E_ev`` are strictly on the same side of ``thr_j``; inside
+it the row-order sum, i.e. ``E_ev`` itself, decides. The window is a property of the exact
+rule only: the shipped ``64·eps·|E|`` redo floor and every bound above are unchanged, so
+rules 0 / 1 are bit for bit as before. A feature whose cells all have ``e = 0`` has
+``E = BE = S_j = 0`` and an empty window. For a nonzero target the threshold is
+``1e-7·|T_j|`` below it, so an ``E`` landing exactly on its target (grid amounts) is
+outside the window unless ``3·F_j·eps·S_j`` reaches ``1e-7·|T_j|``
+(``n_j·S_j/|T_j| ≳ 5e7``) or ``BE`` grows by about 10^8 updates without a fresh sum.
 """
 from __future__ import annotations
 
@@ -84,6 +87,7 @@ from pymarxan.solvers.probability import (
     _chance_penalty,
     _exact_threshold,
     _ptarget_den,
+    _zero_target_tol,
     score_features,
 )
 
@@ -106,7 +110,8 @@ class _TermState:
     unweighted penalties; ``ptarget`` / ``ptarget_den``: the term's probability targets
     (2D ``ptarget``, 1D ``ptarget1d``) and penalty denominators; ``knife``: under the exact
     rule, each feature's evaluator-error term of the knife-edge window,
-    ``3·max(64, n_j)·eps·S_j`` (else None).
+    ``3·max(64, n_j)·eps·S_j``, and ``thr`` its met thresholds
+    (``probability._exact_threshold`` with the term's zero-target tolerance) (else None).
     """
 
     cells: ChanceCells
@@ -117,6 +122,7 @@ class _TermState:
     ptarget: np.ndarray
     ptarget_den: np.ndarray
     knife: np.ndarray | None = None
+    thr: np.ndarray | None = None
 
     @property
     def E(self) -> np.ndarray:
@@ -146,6 +152,26 @@ def term_ptarget(cache, name: str) -> np.ndarray:
 _Payload = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
+def _row_sum(
+    c: ChanceCells, j: int, selected: np.ndarray, idx: int = -1, adding: bool = False,
+) -> float:
+    """Feature ``j``'s ``E`` over ``selected``, summed as the evaluator sums it.
+
+    ``probability._term_moments`` adds the selected puvspr rows' terms to ``E[j]`` one by
+    one in file order, from 0.0; ``np.cumsum`` is sequential and the row terms are the same
+    floats (``ChanceCells.r_e``), so the result equals the evaluator's ``E`` bit for bit
+    (up to the sign of a zero). A planning unit named by several rows contributes each.
+    ``idx`` / ``adding``: read PU ``idx`` as flipped to ``adding`` (a previewed flip).
+    """
+    a, b = int(c.r_indptr[j]), int(c.r_indptr[j + 1])
+    rows = c.r_rows[a:b]
+    m = selected[rows]  # fancy index: a copy
+    if idx >= 0:
+        m[rows == idx] = adding
+    vals = c.r_e[a:b][m]
+    return float(np.cumsum(vals)[-1]) if len(vals) else 0.0
+
+
 class ChanceState:
     """Mutable chance-term companion to ``ProblemCache`` (see the module docstring)."""
 
@@ -164,8 +190,6 @@ class ChanceState:
         self.zero_var_rule = zero_var_rule
         self._met = zero_var_rule == "met"
         self._exact = zero_var_rule == "exact"
-        # The exact rule's met thresholds (target − 1e-7·|target|), once per feature.
-        self._thresholds = _exact_threshold(targets) if self._exact else None
         self.targets = targets
         self.n_recompute = 0
         self._preview: tuple[int, bool, float, list[_Payload]] | None = None
@@ -194,16 +218,22 @@ class ChanceState:
             N = np.bincount(col, weights=(cells.c_v[mask] > 0), minlength=n_feat)
             N = N.astype(np.int64)
             ptarget = term_ptarget(cache, name)
-            pen = score_features(
-                EV[0], EV[1], N, cache.feat_targets, ptarget, cache.zero_var_rule,
-            )[3]
-            knife = None
+            knife = thr = zero_tol = None
             if cache.zero_var_rule == "exact":
                 n_terms = np.maximum(_KNIFE_MIN_TERMS, cells.f_terms)
                 knife = 3.0 * n_terms * EPS * cells.f_abs_e
+                zero_tol = _zero_target_tol(cells.f_abs_e, cells.f_terms)
+                thr = _exact_threshold(cache.feat_targets, zero_tol)
+                # The decision of a zero-variance feature comes from the evaluator's own
+                # float sum (its puvspr rows in file order), not the column sum.
+                for j in np.flatnonzero((N == 0) | ~(EV[1] > 0)):
+                    EV[0, j] = _row_sum(cells, int(j), sel)
+            pen = score_features(
+                EV[0], EV[1], N, cache.feat_targets, ptarget, cache.zero_var_rule, zero_tol,
+            )[3]
             terms[name] = _TermState(
                 cells=cells, EV=EV, B=_RESET * np.abs(EV), N=N, pen=pen,
-                ptarget=ptarget, ptarget_den=_ptarget_den(ptarget), knife=knife,
+                ptarget=ptarget, ptarget_den=_ptarget_den(ptarget), knife=knife, thr=thr,
             )
         return cls(
             selected=sel, terms=terms, weight=float(cache.prob_weight),
@@ -291,14 +321,17 @@ class ChanceState:
         if self._exact:
             # Knife edge: a zero-variance feature this close to its met threshold may sit
             # on the other side from the evaluator's sum; recompute it (module docstring).
-            assert self._thresholds is not None
-            thr = self._thresholds[cols]
-            fix = fix | (~live & (np.abs(E2 - thr) < self._knife_window(t, cols, B2[0])))
+            assert t.thr is not None
+            thr = t.thr[cols]
+            fix = fix | (~live & self._knife_hit(t, cols, E2, thr, B2[0]))
         if fix.any():
             for k in np.flatnonzero(fix):
                 ee, vv = self._column_sums(c, int(cols[k]), idx, adding)
                 if snap[k]:
                     vv = 0.0
+                if self._exact and not live[k]:
+                    # The exact rule decides from the evaluator's float sum (row order).
+                    ee = _row_sum(c, int(cols[k]), self.selected, idx, adding)
                 EV2[0, k] = ee
                 EV2[1, k] = vv
                 B2[0, k] = _RESET * abs(ee)
@@ -309,6 +342,13 @@ class ChanceState:
             t.ptarget_den[cols], self._met, self._exact, thr,
         )
         return cols, EV2, B2, N2, pen2
+
+    @staticmethod
+    def _knife_hit(
+        t: _TermState, cols: np.ndarray, E: np.ndarray, thr: np.ndarray, BE: np.ndarray,
+    ) -> np.ndarray:
+        """True where ``|E − thr|`` is strictly inside the knife-edge window."""
+        return cast(np.ndarray, np.abs(E - thr) < ChanceState._knife_window(t, cols, BE))
 
     @staticmethod
     def _knife_window(t: _TermState, cols: np.ndarray, BE: np.ndarray) -> np.ndarray:

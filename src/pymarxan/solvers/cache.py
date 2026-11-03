@@ -60,8 +60,6 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE
 from pymarxan.solvers.utils import (
     _active_chance_terms,
-    _check_finite_cells,
-    _loss_probability_vector,
     _probability_vector,
     _probmode,
     _zero_var_rule,
@@ -86,12 +84,18 @@ class ChanceCells:
     loss probability ``p``, Marxan 3 ``ReturnProbabilityAmounts1D``): ``e = a·(1 − p)``,
     ``v = a·a·p·(1 − p)``, built from ``p`` directly.
 
-    Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|e|`` over the feature's puvspr rows
-    (and ``|e|`` of any cell no row names), and ``f_terms`` = ``n_j``, the number of those
+    Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|e|`` over the feature's puvspr rows,
+    and ``f_terms`` = ``n_j``, the number of those
     terms. Any float sum of the feature's terms over any selection — the evaluator's
     row-by-row sum, a fresh column sum of the cells — is within
     ``γ_{n_j−1}·S_j ≈ (n_j − 1)·u·S_j`` of the exact sum; ``ChanceState``'s exact-rule
     knife-edge window is built on it.
+
+    Row order (PROBZEROVAR 2): ``r_indptr`` / ``r_rows`` / ``r_e`` list each feature's
+    puvspr rows in **file order** (the planning-unit position and the row's ``e``), so
+    ``ChanceState`` can sum a zero-variance feature's selected rows exactly as the
+    evaluator (``probability._term_moments``) does and take the exact rule's decision
+    from the evaluator's own float sum.
     """
 
     indptr: np.ndarray
@@ -104,6 +108,9 @@ class ChanceCells:
     c_ev: np.ndarray
     f_abs_e: np.ndarray
     f_terms: np.ndarray
+    r_indptr: np.ndarray
+    r_rows: np.ndarray
+    r_e: np.ndarray
 
     @property
     def c_e(self) -> np.ndarray:
@@ -972,63 +979,29 @@ def _build_chance_cells(
     per row, not ``(Σa)²``. A cell's variance is > 0 exactly when one of its rows' is (for
     q or p in [0, 1] every term is ≥ 0). A non-finite cell value raises ``ValueError``
     naming the PU ids (``_check_finite_cells`` / ``_loss_probability_vector``, as the
-    evaluator does). Rows with an unknown id are skipped; a cell no row names keeps its CSR
-    amount as one term of its own (2D: ``q = 1``; 1D: its PU's ``p``).
+    evaluator does). Rows with an unknown id are skipped (``probability._term_rows``).
     """
-    pv = problem.pu_vs_features
-    _check_finite_cells(pv, ("prob", "amount") if term == "2d" else ("amount",))
+    from pymarxan.solvers.probability import _term_rows
+
+    rows, cols, row_e, row_v = _term_rows(problem, term, pu_id_to_idx, feat_id_to_col)
     csr = pu_feat_csr
     n_pu, n_feat = csr.shape
-    loss = _loss_probability_vector(problem, pu_id_to_idx, n_pu) if term == "1d" else None
     indptr = np.asarray(csr.indptr, dtype=np.int64)
     indices = np.asarray(csr.indices, dtype=np.int64)
-    amt = np.asarray(csr.data, dtype=np.float64)
     cell_row = np.repeat(np.arange(n_pu, dtype=np.int64), np.diff(indptr))
     cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
-
-    if loss is None:
-        e = amt.copy()
-        v = np.zeros(len(amt), dtype=np.float64)
-    else:
-        pc = loss[cell_row]
-        e = amt * (1.0 - pc)
-        v = amt * amt * pc * (1.0 - pc)
-    named = np.zeros(len(amt), dtype=bool)
-    f_abs_e = np.zeros(n_feat, dtype=np.float64)
-    f_terms = np.zeros(n_feat, dtype=np.int64)
-    if len(pv) and len(amt):
-        rows = np.fromiter((pu_id_to_idx.get(int(u), -1) for u in pv["pu"].values),
-                           np.int64, len(pv))
-        cols = np.fromiter((feat_id_to_col.get(int(f), -1) for f in pv["species"].values),
-                           np.int64, len(pv))
-        a = np.asarray(pv["amount"].values, dtype=np.float64)
-        ok = (rows >= 0) & (cols >= 0)
-        keys = rows[ok] * n_feat + cols[ok]
-        a = a[ok]
-        if loss is None:
-            pr = np.asarray(pv["prob"].values, dtype=np.float64)[ok]
-        else:
-            pr = loss[rows[ok]]
-        pos = np.searchsorted(cell_key, keys)
-        hit = (pos < len(cell_key)) & (cell_key[np.minimum(pos, len(cell_key) - 1)] == keys)
-        pos, a, pr = pos[hit], a[hit], pr[hit]
-        # Operand order as in _term_moments (bit-equal cell terms).
-        if loss is None:
-            row_e = a * pr
-            row_v = a * a * pr * (1.0 - pr)
-        else:
-            row_e = a * (1.0 - pr)
-            row_v = a * a * pr * (1.0 - pr)
-        e[pos] = 0.0  # named cells are the sums of their rows
-        v[pos] = 0.0
-        np.add.at(e, pos, row_e)
-        np.add.at(v, pos, row_v)
-        named[pos] = True
-        f_abs_e += np.bincount(indices[pos], weights=np.abs(row_e), minlength=n_feat)
-        f_terms += np.bincount(indices[pos], minlength=n_feat)
-    # A cell no row names is one term of its own.
-    f_abs_e += np.bincount(indices[~named], weights=np.abs(e[~named]), minlength=n_feat)
-    f_terms += np.bincount(indices[~named], minlength=n_feat)
+    # Every cell is named by a row (build_pu_feature_csr builds the cells from the same
+    # known-id rows and keeps explicit zeros), so each cell is the sum of its rows.
+    pos = np.searchsorted(cell_key, rows * n_feat + cols)
+    e = np.zeros(len(cell_key), dtype=np.float64)
+    v = np.zeros(len(cell_key), dtype=np.float64)
+    np.add.at(e, pos, row_e)
+    np.add.at(v, pos, row_v)
+    f_abs_e = np.bincount(cols, weights=np.abs(row_e), minlength=n_feat).astype(np.float64)
+    f_terms = np.bincount(cols, minlength=n_feat).astype(np.int64)
+    r_order = np.argsort(cols, kind="stable")  # feature-major, file order within
+    r_indptr = np.zeros(n_feat + 1, dtype=np.int64)
+    np.cumsum(f_terms, out=r_indptr[1:])
 
     ev = np.vstack([e, v])
     flag = (v > 0).astype(np.int64)
@@ -1039,6 +1012,7 @@ def _build_chance_cells(
         indptr=indptr, indices=indices, ev=ev, abs_ev=np.abs(ev), pos=flag,
         c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev.take(order, axis=1),
         f_abs_e=f_abs_e, f_terms=f_terms,
+        r_indptr=r_indptr, r_rows=rows[r_order], r_e=row_e[r_order],
     )
 
 
