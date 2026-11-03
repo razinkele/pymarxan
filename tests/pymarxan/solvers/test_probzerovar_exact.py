@@ -636,3 +636,54 @@ def test_a_dominant_cell_leaving_keeps_the_fresh_sums_error_in_the_window() -> N
     _flip(cs, cache, cur, 0)
     assert evaluate_solution_chance(problem, cur)[1] == 0.0
     assert cs.penalty_total() == 0.0 and cs.n_recompute == 1
+
+
+# ------------------------------------------------------- documented examples (T3)
+
+
+def _safe_vs_risky(safe_amount: float, **params) -> ConservationProblem:
+    """The manual's example: target 10, ptarget 0.9, weighting 10, two PUs costing 1. PU 1
+    risky (amount 20, q = 0.9: E = 18, V = 36, Z = −4/3, P ≈ 0.909 ≥ 0.9), PU 2 safe
+    (``safe_amount`` at q = 1)."""
+    pu = pd.DataFrame({"id": [1, 2], "cost": [1.0, 1.0], "status": [0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f"], "target": [10.0], "spf": [1.0],
+                         "ptarget": [0.9]})
+    pv = pd.DataFrame({"species": [1, 1], "pu": [1, 2], "amount": [20.0, safe_amount],
+                       "prob": [0.9, 1.0]})
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=pv,
+        parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0, "BLM": 0.0, **params},
+    )
+
+
+def test_the_manuals_safe_vs_risky_example() -> None:
+    """USER_MANUAL "PROBMODE 3 and zero variance": holding the feature safely scores
+    10.9996 under PROBZEROVAR 0, 1.0 under 1 and 2; the risky unit scores 1.0 under all
+    three; too little in certain cells (8 < 10) pays nothing under 1 and the full
+    weighting under 2."""
+    risky, safe = np.array([True, False]), np.array([False, True])
+    for zv, safe_score in ((0, 1 + 10 * (0.9 - SF4) / 0.9), (1, 1.0), (2, 1.0)):
+        p = _safe_vs_risky(12.0, PROBZEROVAR=zv)
+        assert build_solution(p, safe, 0.0).objective == pytest.approx(safe_score, abs=1e-12)
+        assert build_solution(p, risky, 0.0).objective == pytest.approx(1.0, abs=1e-12)
+    assert round(1 + 10 * (0.9 - SF4) / 0.9, 4) == 10.9996
+    short = np.array([False, True])
+    assert build_solution(_safe_vs_risky(8.0, PROBZEROVAR=1), short, 0.0).prob_penalty == 0.0
+    assert build_solution(_safe_vs_risky(8.0, PROBZEROVAR=2), short, 0.0).prob_penalty == 10.0
+
+
+def test_iterative_improvement_prefers_the_cheaper_safe_unit_under_the_exact_rule() -> None:
+    """Under PROBZEROVAR 2 the safe unit's certain 12 ≥ 10 is met: with the safe unit
+    cheaper, iterative improvement started on the risky unit swaps to it (under Marxan's
+    rule it stays, the safe unit paying ≈ the full weighting)."""
+    from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+
+    def problem(**params):
+        p = _safe_vs_risky(12.0, **params)
+        return p.copy_with(planning_units=p.planning_units.assign(cost=[1.0, 0.5]))
+
+    risky = np.array([True, False])
+    for zv, expected in ((0, [True, False]), (2, [False, True])):
+        p = problem(PROBZEROVAR=zv)
+        sol = IterativeImprovementSolver(itimptype=3).improve(p, build_solution(p, risky, 0.0))
+        assert sol.selected.tolist() == expected

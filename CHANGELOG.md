@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `PROBZEROVAR 2`, the exact zero-variance rule for PROBMODE 3. A feature whose selected
+  cells carry no variance holds a certain amount: it is met outright (probability 1, no
+  chance penalty) when that amount reaches its target within the deterministic targets'
+  relative tolerance (amount ≥ target − 1e-7·|target|), and missed outright otherwise
+  (probability 0, shortfall `ptarget`, penalty `PROBABILITYWEIGHTING`). A target of 0 has
+  no tolerance. Marxan's rule (`PROBZEROVAR 0`, Z = 4) stays the default and
+  `PROBZEROVAR 1` ("met") is unchanged, so no existing result moves. The evaluator,
+  `score_feature(s)`, simulated annealing and iterative improvement (`ChanceState`, which
+  recomputes a zero-variance feature from a fresh sum when its running amount is close
+  enough to the threshold for rounding to matter) and the MIP's post-hoc report all apply
+  it; `compute_zscore_penalty` takes `achieved_mean` / `targets` for it. `validate()`
+  accepts 0, 1 and 2.
 - The Shiny About dialog acknowledges Marxan and prioritizr, with the references to cite
   (Ball, Possingham & Watts 2009; Watts et al. 2009; Hanson et al. 2024) and a note that
   pymarxan is independent of both projects.

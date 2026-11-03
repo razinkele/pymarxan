@@ -66,7 +66,8 @@ def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
     presence) is always written when present, whatever its values: without the
     column PROBMODE 3's 2D chance term is off (``_active_chance_terms``), while
     an all-0 or all-1 column has zero variance and pays Marxan's Z = 4 penalty
-    (unless ``PROBZEROVAR 1``); Marxan 3 also switches its 2D term on from a
+    (under ``PROBZEROVAR 1`` it counts as met; under ``PROBZEROVAR 2`` its certain
+    amount meets or misses the target outright); Marxan 3 also switches its 2D term on from a
     ``prob`` header. A frame without ``prob`` is written without one.
 
     Parameters

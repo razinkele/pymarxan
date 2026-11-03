@@ -431,8 +431,18 @@ uses a slightly risky cell — with target 10, `ptarget` 0.9, weighting 10 and p
 holding the feature safely scores 10.9996 and holding it in a risky unit 1.0. `PROBZEROVAR 1` in input.dat
 (or `parameters["PROBZEROVAR"] = 1`) restores the pre-v0.47 rule, "zero variance counts as
 met" (no chance penalty for that feature; a deterministic shortfall is still penalised by the
-ordinary target penalty). `validate()` reports any other value. With PROBMODE 3 but no `prob`
-column in puvspr.dat the chance term is off (penalty 0), whatever `PROBZEROVAR` says.
+ordinary target penalty). `PROBZEROVAR 2` (since v0.48.0) is the exact rule: a feature with
+zero variance holds a certain amount, so its probability of meeting the target is 1 if that
+amount reaches the target and 0 if it does not — met with no chance penalty, or short with
+the full one (`PROBABILITYWEIGHTING × 1`, shortfall `ptarget`). "Reaches" allows the same
+relative tolerance as the deterministic targets, 1e-7 of the target (amount ≥ target −
+1e-7·|target|), so a fully held feature with a `prop = 1` target is not scored short by a
+rounding difference; a target of 0 has no tolerance, so a negative certain amount is short.
+In the example above, holding the feature safely (in a certain amount that reaches the
+target) then scores 1.0, like the risky unit, and
+holding too little of it in certain cells pays the full penalty instead of none. `validate()`
+reports any value other than 0, 1 or 2. With PROBMODE 3 but no `prob` column in puvspr.dat
+the chance term is off (penalty 0), whatever `PROBZEROVAR` says.
 
 Marxan's own **Probability 1D** (a `prob` column in `pu.dat`, a Z-score on the expected
 amount `Σ amount × (1 − p)` with variance `Σ amount² × p × (1 − p)` against `ptarget1d`) is
