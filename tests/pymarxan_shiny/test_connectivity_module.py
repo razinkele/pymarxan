@@ -14,3 +14,15 @@ def test_metrics_viz_ui_returns_tag():
 
 def test_metrics_viz_server_callable():
     assert callable(metrics_viz_server)
+
+
+def test_connectivity_weight_sets_a_new_problem_not_the_same_object():
+    """reactive.Value.set ignores the object it already holds, so editing the problem in
+    place and setting it again notified nothing (found in the v0.48.0 review)."""
+    from pathlib import Path
+
+    import pymarxan_shiny.modules.connectivity.connectivity_config as cc
+
+    src = Path(cc.__file__).read_text()
+    assert 'p.parameters["CONNECTIVITY_WEIGHT"] =' not in src
+    assert "copy_with(" in src

@@ -72,6 +72,23 @@ def validate_feature_edit(column: str, value: str) -> float | int | None:
     return None
 
 
+_VALIDATED_COLUMNS = (
+    _PROBABILITY_TARGET_COLUMNS + _EDITABLE_FLOAT_COLUMNS + _EDITABLE_INT_COLUMNS
+)
+
+
+def patched_value(column: str, value: object) -> object:
+    """The value a grid edit stores: the validated value, or ``ValueError`` (Shiny then
+    rejects the edit and marks the cell) when ``validate_feature_edit`` rejects it.
+    Columns without a validator (id, name) pass through; ``_save`` ignores them."""
+    if column not in _VALIDATED_COLUMNS:
+        return value
+    validated = validate_feature_edit(column, str(value))
+    if validated is None:
+        raise ValueError(f"Invalid value {value!r} for {column}")
+    return validated
+
+
 @module.ui
 def feature_table_ui():
     return ui.card(
@@ -148,10 +165,7 @@ def feature_table_server(
             if opt in p.features.columns:
                 cols.append(opt)
         col = cols[col_idx] if col_idx < len(cols) else ""
-        validated = validate_feature_edit(col, str(patch["value"]))
-        if validated is not None:
-            return validated
-        return patch["value"]
+        return patched_value(col, patch["value"])
 
     @reactive.effect
     @reactive.event(input.save_changes)

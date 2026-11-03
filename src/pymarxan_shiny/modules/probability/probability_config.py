@@ -8,8 +8,13 @@ The panel's decisions are pure helpers (unit-tested; there is no module-session
 harness): Shiny cannot tell a user's radio change from ``ui.update_radio_buttons``, so
 the radios are initialised from the problem (``initial_mode_choice`` /
 ``initial_zero_var_choice``) and an effect writes a parameter only when the radio differs
-from the value in force (``mode_to_write`` / ``zero_var_to_write``). The weight slider has
-its own effect, which writes only ``PROBABILITYWEIGHTING``.
+from the value in force (``mode_to_write`` / ``zero_var_to_write``). The weight slider
+follows the project the same way (``initial_weight`` / ``weight_to_write``) and has its own
+effect, which writes only ``PROBABILITYWEIGHTING``.
+
+Every write builds a new problem (``with_parameter`` / ``with_probability``): Shiny's
+``reactive.Value.set`` ignores the object it already holds, so editing the problem in place
+and setting it again would notify nothing that reads it.
 """
 from __future__ import annotations
 
@@ -33,6 +38,33 @@ ZERO_VAR_CHOICES: dict[str, str] = {
     "1": "1 — Counts as met",
     "2": "2 — Exact (certain amount)",
 }
+
+
+DEFAULT_WEIGHT = 1.0  # the solvers' default PROBABILITYWEIGHTING
+
+
+def with_parameter(
+    problem: ConservationProblem, key: str, value: object
+) -> ConservationProblem:
+    """A copy of ``problem`` with ``parameters[key] = value``; ``problem`` is unchanged."""
+    return problem.copy_with(parameters={**problem.parameters, key: value})
+
+
+def with_probability(problem: ConservationProblem, probability) -> ConservationProblem:
+    """A copy of ``problem`` with the prob.dat table replaced; ``problem`` is unchanged."""
+    return problem.copy_with(probability=probability)
+
+
+def initial_weight(problem: ConservationProblem) -> float:
+    """The weight slider's value: PROBABILITYWEIGHTING in force (the solvers' default 1.0
+    when unset)."""
+    return float(problem.parameters.get("PROBABILITYWEIGHTING", DEFAULT_WEIGHT))
+
+
+def weight_to_write(problem: ConservationProblem, slider: float) -> float | None:
+    """The PROBABILITYWEIGHTING to write for ``slider``, or None when it is in force."""
+    value = float(slider)
+    return None if value == initial_weight(problem) else value
 
 
 def initial_mode_choice(problem: ConservationProblem) -> str:
@@ -161,6 +193,7 @@ def probability_config_server(
             return
         ui.update_radio_buttons("prob_mode", selected=initial_mode_choice(p))
         ui.update_radio_buttons("prob_zero_var", selected=initial_zero_var_choice(p))
+        ui.update_slider("prob_weight", value=initial_weight(p))
 
     @reactive.effect
     @reactive.event(input.prob_file)
@@ -182,9 +215,7 @@ def probability_config_server(
             from pymarxan.io.readers import read_probability
 
             prob_df = read_probability(path)
-            # Attach to the problem
-            p.probability = prob_df
-            problem.set(p)
+            problem.set(with_probability(p, prob_df))
             ui.notification_show(
                 f"Loaded probability data for {len(prob_df)} planning units.",
                 type="message",
@@ -201,8 +232,7 @@ def probability_config_server(
         mode = mode_to_write(p, input.prob_mode())
         if mode is None:
             return
-        p.parameters["PROBMODE"] = mode
-        problem.set(p)
+        problem.set(with_parameter(p, "PROBMODE", mode))
 
     @reactive.effect
     @reactive.event(input.prob_zero_var)
@@ -213,8 +243,7 @@ def probability_config_server(
         value = zero_var_to_write(p, input.prob_zero_var())
         if value is None:
             return
-        p.parameters["PROBZEROVAR"] = value
-        problem.set(p)
+        problem.set(with_parameter(p, "PROBZEROVAR", value))
 
     @reactive.effect
     @reactive.event(input.prob_weight)
@@ -222,8 +251,10 @@ def probability_config_server(
         p = problem()
         if p is None:
             return
-        p.parameters["PROBABILITYWEIGHTING"] = float(input.prob_weight())
-        problem.set(p)
+        value = weight_to_write(p, input.prob_weight())
+        if value is None:
+            return
+        problem.set(with_parameter(p, "PROBABILITYWEIGHTING", value))
 
     @render.text
     def prob_preview():
@@ -252,6 +283,6 @@ def probability_config_server(
             f"PROBMODE in force: {_probmode(p)}"
             + ("" if "PROBMODE" in p.parameters else " (selected from the data)"),
             f"PROBZEROVAR: {initial_zero_var_choice(p)}",
-            f"PROBABILITYWEIGHTING: {input.prob_weight()}",
+            f"PROBABILITYWEIGHTING: {initial_weight(p)}",
         ]
         return "\n".join(lines)

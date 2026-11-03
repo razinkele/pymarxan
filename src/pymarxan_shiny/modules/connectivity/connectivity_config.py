@@ -200,8 +200,10 @@ def connectivity_config_server(
         p = problem()
         if p is None:
             return
-        p.parameters["CONNECTIVITY_WEIGHT"] = float(input.connectivity_weight())
-        problem.set(p)
+        # A new problem: reactive.Value.set ignores the object it already holds.
+        problem.set(p.copy_with(parameters={
+            **p.parameters, "CONNECTIVITY_WEIGHT": float(input.connectivity_weight()),
+        }))
 
     @render.text
     def conn_config_summary():

@@ -71,7 +71,7 @@ def test_mode_effect_uses_mode_to_write_and_slider_writes_only_the_weight():
     src = src[src.index("def probability_config_server"):]
     mode_block = src[src.index("def _update_mode"):src.index("def _update_weight")]
     weight_block = src[src.index("def _update_weight"):]
-    weight_block = weight_block[:weight_block.index("problem.set")]
+    weight_block = weight_block[:weight_block.index("@render.text")]
     assert "mode_to_write(" in mode_block
     assert "PROBABILITYWEIGHTING" in weight_block and "PROBMODE" not in weight_block
     assert "zero_var_to_write(" in src
@@ -104,3 +104,74 @@ def test_help_documents_probability_1d():
     for needle in ("PROBMODE 4", "PROBMODE 5", "ptarget1d", "PROBZEROVAR", "restoration"):
         assert needle in text
     assert "Probability 1D" in str(HELP_CONTENT["target_met"])
+
+
+class TestPanelWritesANewProblem:
+    """Review (2026-11-03, HIGH): the handlers edited ``p`` in place and called
+    ``problem.set(p)``; Shiny's ``Value.set`` ignores the same object, so nothing that
+    reads ``problem()`` re-ran (the preview, the radios, the run panel's MIP notice)."""
+
+    def test_with_parameter_returns_a_new_problem_and_leaves_the_old_one(self):
+        p = _problem({"PROBMODE": 0})
+        q = pc.with_parameter(p, "PROBMODE", 4)
+        assert q is not p
+        assert q.parameters["PROBMODE"] == 4
+        assert p.parameters["PROBMODE"] == 0
+        assert q.parameters is not p.parameters
+
+    def test_with_probability_returns_a_new_problem(self):
+        p = _problem()
+        df = pd.DataFrame({"pu": [1, 2], "probability": [0.1, 0.2]})
+        q = pc.with_probability(p, df)
+        assert q is not p
+        assert q.probability is df
+        assert p.probability is None
+
+    def test_handlers_do_not_mutate_the_problem_in_place(self):
+        src = Path(pc.__file__).read_text()
+        assert "p.parameters[" not in src
+        assert "p.probability =" not in src
+
+
+class TestWeightFollowsTheProject:
+    """Review (MEDIUM): the slider started at 1.0 whatever the project said, and the
+    preview printed the slider rather than the weighting in force."""
+
+    def test_initial_weight_reads_the_parameter_with_the_solvers_default(self):
+        assert pc.initial_weight(_problem()) == 1.0
+        assert pc.initial_weight(_problem({"PROBABILITYWEIGHTING": 10})) == 10.0
+
+    def test_weight_to_write_is_none_when_already_in_force(self):
+        p = _problem({"PROBABILITYWEIGHTING": 10})
+        assert pc.weight_to_write(p, 10.0) is None
+        assert pc.weight_to_write(p, 2.5) == 2.5
+        assert pc.weight_to_write(_problem(), 1.0) is None
+
+    def test_preview_reports_the_weighting_in_force_not_the_slider(self):
+        src = Path(pc.__file__).read_text()
+        assert 'f"PROBABILITYWEIGHTING: {input.prob_weight()}"' not in src
+        assert "update_slider" in src
+
+
+class TestFeatureEditsAreEnforced:
+    """Review (MEDIUM): an edit the validator rejected was stored anyway."""
+
+    def test_rejected_probability_target_raises(self):
+        from pymarxan_shiny.modules.data.feature_table import patched_value
+
+        with pytest.raises(ValueError, match="ptarget1d"):
+            patched_value("ptarget1d", "1.5")
+        with pytest.raises(ValueError, match="target"):
+            patched_value("target", "-3")
+
+    def test_accepted_edits_return_the_validated_value(self):
+        from pymarxan_shiny.modules.data.feature_table import patched_value
+
+        assert patched_value("ptarget1d", "-1") == -1.0
+        assert patched_value("ptarget", "0.95") == 0.95
+        assert patched_value("target", "12") == 12.0
+
+    def test_unvalidated_columns_pass_through(self):
+        from pymarxan_shiny.modules.data.feature_table import patched_value
+
+        assert patched_value("name", "renamed") == "renamed"
