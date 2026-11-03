@@ -6,18 +6,26 @@ code path keeps its exact comparisons (spec §5.3).
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 import numbers
+import warnings
+from collections.abc import Iterable, Iterator
 
 import numpy as np
 import pandas as pd
 
 from pymarxan.models.problem import (
     ConservationProblem,
+    _legacy_probmode,
     _nonfinite_cells_error,
+    _probmode_value,
     _probzerovar_value,
     _requested_terms,
     _resolved_probmode,
+    _wants_1d,
+    _wants_2d,
 )
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 from pymarxan.solvers._tolerance import target_tol as target_tol
@@ -99,10 +107,14 @@ def _total_cost(costs: np.ndarray, selected: np.ndarray) -> float:
 
 
 def _probmode(problem: ConservationProblem) -> int:
-    """``PROBMODE``; default 1 with a probability table, 0 without (v0.45 §3).
+    """``PROBMODE`` in force: an explicit value, else selected from the data (spec §3.1).
 
-    An explicit value outside 0–5 means 0 here (``validate()`` reports it). The rule lives
-    in ``models.problem._resolved_probmode`` so ``validate()`` shares it. Pure.
+    With none given: Probability 1D wanted (a pu.dat ``prob`` column or prob.dat, and any
+    ``ptarget1d > 0``) and 2D wanted (a puvspr ``prob`` column and any ``ptarget > 0``) →
+    5; 1D only → 4; 2D only → 3; neither → v0.46's default (1 with a probability table,
+    else 0). An explicit value outside 0–5 means 0 (``validate()`` reports it). The rule
+    lives in ``models.problem._resolved_probmode`` so ``validate()`` shares it. Pure;
+    never warns.
     """
     return _resolved_probmode(problem)
 
@@ -237,6 +249,134 @@ def _loss_probability_vector(
         if k is not None:
             p[k] = val
     return p
+
+
+# --- Probability diagnostics (spec §3.1): advisory messages, never in validate() -------
+
+# True while a top-level solve runs in this context: a solve nested in it (RunModePipeline's
+# inner solves, II, replacement cost...) emits nothing. Set with a token, reset in finally.
+_IN_SOLVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "pymarxan_in_solve", default=False,
+)
+
+
+def _in_top_level_solve() -> bool:
+    """True inside a ``_solve_scope`` in this context (a nested solve)."""
+    return _IN_SOLVE.get()
+
+
+def _loss_sources_disagree(problem: ConservationProblem) -> bool:
+    """Both 1D sources exist and some PU's loss probability differs (a PU absent from
+    prob.dat counts as 0); non-numeric values are left to ``validate()``."""
+    if "prob" not in problem.planning_units.columns or problem.probability is None:
+        return False
+    pu = problem.planning_units
+    idx = {int(u): i for i, u in enumerate(pu["id"])}
+    try:
+        table = _probability_vector(problem, idx, len(pu))
+    except ValueError:
+        return False
+    col = pd.to_numeric(pu["prob"], errors="coerce").to_numpy(dtype=np.float64, na_value=np.nan)
+    return bool((col != table).any())
+
+
+def _probability_diagnostics(problem: ConservationProblem) -> list[str]:
+    """Every advisory probability message for ``problem`` (spec §3.1). Pure; never warns.
+
+    ``_emit_probability_diagnostics`` issues them; ``load_project`` and every top-level
+    solve call it. ``validate()`` stays errors-only (an entry there disables presolve).
+    Solver-specific messages (greedy / Zonation / zone solvers ignore chance terms, the
+    Marxan binary switches its own terms on) are each solver's ``_probability_messages``.
+    """
+    msgs: list[str] = []
+    params = problem.parameters
+    explicit = "PROBMODE" in params and _probmode_value(params["PROBMODE"]) is not None
+    mode = _probmode(problem)
+    one, two = _wants_1d(problem), _wants_2d(problem)
+    if "PROBMODE" not in params:
+        legacy = _legacy_probmode(problem)
+        if mode != legacy:
+            msgs.append(
+                f"No PROBMODE is set and the data selects PROBMODE {mode} "
+                f"({_MODE_NAMES[mode]}); this differs from v0.46's PROBMODE {legacy} "
+                f"({_MODE_NAMES[legacy]}). PROBMODEs 3-5 carry no PROBMODE 1 cost premium "
+                "and use raw held amounts. To keep the old mode set PROBMODE "
+                f"{legacy} in input.dat, or parameters[\"PROBMODE\"] = {legacy} in code."
+            )
+    if explicit:
+        if one and mode in (1, 2, 3):
+            msgs.append(
+                f"PROBMODE {mode} is set, so the Probability 1D targets (ptarget1d > 0) are "
+                "ignored; PROBMODE 4 or 5 uses them."
+            )
+        if two and mode in (1, 2, 4):
+            msgs.append(
+                f"PROBMODE {mode} is set, so the Probability 2D targets (ptarget > 0, "
+                "spec.dat ptarget2d) are ignored; PROBMODE 3 or 5 uses them."
+            )
+        if (mode in (1, 2) and "prob" in problem.planning_units.columns
+                and problem.probability is None):
+            msgs.append(
+                f"PROBMODE {mode} reads prob.dat, which this project lacks; the pu.dat prob "
+                "column is used by Probability 1D only (PROBMODE 4 or 5)."
+            )
+    requested = _chance_terms(problem)
+    if "2d" in requested and "prob" not in problem.pu_vs_features.columns:
+        msgs.append(
+            f"PROBMODE {mode} requests the Probability 2D chance term but puvspr has no "
+            "prob column; the 2D term is off (penalty 0)."
+        )
+    if "1d" in requested and not _has_1d_data(problem):
+        msgs.append(
+            f"PROBMODE {mode} requests the Probability 1D chance term but there is no 1D "
+            "source (no pu.dat prob column and no prob.dat); the 1D term is off (penalty 0)."
+        )
+    if "1d" in _active_chance_terms(problem) and _loss_sources_disagree(problem):
+        msgs.append(
+            "The Probability 1D loss probabilities in pu.dat (prob column) and prob.dat "
+            "disagree for some planning units; pu.dat is used."
+        )
+    return msgs
+
+
+_MODE_NAMES = {
+    0: "no probability", 1: "cost premium", 2: "expected amounts", 3: "Probability 2D",
+    4: "Probability 1D", 5: "Probability 1D and 2D",
+}
+
+
+def _emit_probability_diagnostics(
+    problem: ConservationProblem, extra: Iterable[str] = (), stacklevel: int = 3,
+) -> None:
+    """Issue each diagnostic (and ``extra``, solver-specific ones) as a ``UserWarning``,
+    unless a solve is already running in this context (``_solve_scope``), so a nested
+    solve stays silent. ``stacklevel`` 3 reports the caller of the ``solve`` (or
+    ``load_project``) that calls this directly.
+
+    Called first in every solver's ``solve`` and by ``load_project``. A plain call adds no
+    frame to ``solve``, so the solvers' own caller-frame warnings keep their stacklevels.
+    """
+    if _IN_SOLVE.get():
+        return
+    for message in [*_probability_diagnostics(problem), *extra]:
+        warnings.warn(message, UserWarning, stacklevel=stacklevel)
+
+
+@contextlib.contextmanager
+def _solve_scope() -> Iterator[None]:
+    """Mark this context as inside a solve: ``_emit_probability_diagnostics`` stays silent.
+
+    A solver that runs inner solves (``RunModePipeline``) wraps them in it. The var is set
+    with a token and reset in ``finally``, so an exception cannot leave it set.
+    ``asyncio.to_thread`` and ``copy_context().run`` inherit the mark; a
+    ``threading.Thread`` / ``ThreadPoolExecutor`` starts a fresh context, so inner solves
+    on threads must run under ``contextvars.copy_context().run``.
+    """
+    token = _IN_SOLVE.set(True)
+    try:
+        yield
+    finally:
+        _IN_SOLVE.reset(token)
 
 
 def _check_finite_cells(

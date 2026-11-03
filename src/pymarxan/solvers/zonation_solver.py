@@ -9,7 +9,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
 from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
@@ -60,6 +60,7 @@ class ZonationSolver(Solver):
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         result = rank_removal(
             problem,
             rule=self.rule,

@@ -21,7 +21,7 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig, require_binary
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.chance_state import ChanceState
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
 
 _VALID_ITIMPTYPES = frozenset(range(4))
 
@@ -73,6 +73,7 @@ class IterativeImprovementSolver(Solver):
         config: SolverConfig | None = None,
     ) -> list[Solution]:
         """Solve by starting from all-selected, then improving."""
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if config is None:
             config = SolverConfig(num_solutions=1)
 

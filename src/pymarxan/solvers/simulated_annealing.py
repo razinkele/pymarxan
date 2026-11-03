@@ -17,7 +17,7 @@ from pymarxan.models.problem import (
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cache import ProblemCache
 from pymarxan.solvers.cooling import CoolingSchedule
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
 
 HISTORY_SAMPLE_INTERVAL = 1000
 
@@ -53,6 +53,7 @@ class SimulatedAnnealingSolver(Solver):
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if config is None:
             config = SolverConfig()
 

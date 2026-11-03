@@ -59,9 +59,14 @@ def test_invalid_modes_request_nothing(mode: int) -> None:
 
 
 def test_default_mode_follows_probmode_rule() -> None:
-    """No PROBMODE: the v0.45 default (1 with a table, else 0) — no chance term."""
-    assert _chance_terms(_problem({})) == frozenset()
-    assert _chance_terms(_problem({}, table=True)) == frozenset()
+    """No PROBMODE: rewritten (v0.48.0) for the implicit rule (spec §3.1). The fixture
+    has a puvspr prob column and ptarget 0.9 > 0, so the data selects PROBMODE 3; without
+    the prob column it is v0.46's default (1 with a table, else 0) — no chance term.
+    (test_probability_diagnostics.py covers every row of the rule.)"""
+    assert _chance_terms(_problem({})) == {"2d"}
+    assert _chance_terms(_problem({}, table=True)) == {"2d"}
+    assert _chance_terms(_problem({}, prob_column=False)) == frozenset()
+    assert _chance_terms(_problem({}, prob_column=False, table=True)) == frozenset()
 
 
 def test_helpers_return_frozensets() -> None:

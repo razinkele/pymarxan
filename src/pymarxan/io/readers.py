@@ -383,7 +383,7 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
 
     features = _resolve_prop_targets(features, pu_vs_features)
 
-    return ConservationProblem(
+    problem = ConservationProblem(
         planning_units=planning_units,
         features=features,
         pu_vs_features=pu_vs_features,
@@ -391,6 +391,12 @@ def load_project(project_dir: str | Path) -> ConservationProblem:
         parameters=params,
         probability=probability,
     )
+    # Advisory probability messages (implicit PROBMODE, ignored targets, ...): spec §3.1.
+    from pymarxan.solvers.utils import _emit_probability_diagnostics
+
+    _emit_probability_diagnostics(problem)
+    return problem
+
 
 
 def read_mvbest(path: str | Path) -> pd.DataFrame:

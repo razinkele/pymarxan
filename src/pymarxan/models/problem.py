@@ -75,17 +75,62 @@ def _probmode_value(value: object) -> int | None:
     return None
 
 
-def _resolved_probmode(problem: ConservationProblem) -> int:
-    """The ``PROBMODE`` in force: an explicit valid value, else the default (pure).
+def _any_positive(features: pd.DataFrame, column: str) -> bool:
+    """Any ``column > 0`` (a missing column counts as all −1, Marxan's "disabled")."""
+    if column not in features.columns:
+        return False
+    vals = pd.to_numeric(features[column], errors="coerce").to_numpy(
+        dtype=np.float64, na_value=np.nan,
+    )
+    return bool((vals > 0).any())
 
-    The default is 1 with a probability table, else 0. An explicit invalid value means
-    0 (no probability) here and is reported by ``validate()``.
+
+def _wants_1d(problem: ConservationProblem) -> bool:
+    """Probability 1D wanted: a 1D source (pu.dat ``prob`` or prob.dat) and any
+    ``ptarget1d > 0`` (spec §3.1)."""
+    has_source = "prob" in problem.planning_units.columns or problem.probability is not None
+    return has_source and _any_positive(problem.features, "ptarget1d")
+
+
+def _wants_2d(problem: ConservationProblem) -> bool:
+    """Probability 2D wanted: a puvspr ``prob`` column and any ``ptarget > 0`` (the
+    in-memory 2D target, spec.dat ``ptarget2d``)."""
+    return "prob" in problem.pu_vs_features.columns and _any_positive(
+        problem.features, "ptarget",
+    )
+
+
+def _legacy_probmode(problem: ConservationProblem) -> int:
+    """v0.46's default PROBMODE: 1 with a probability table, else 0."""
+    return 1 if problem.probability is not None else 0
+
+
+def _implicit_probmode(problem: ConservationProblem) -> int:
+    """The PROBMODE selected from the data when none is given (spec §3.1): 1D and 2D
+    wanted → 5, 1D only → 4, 2D only → 3, neither → v0.46's default. Pure."""
+    one, two = _wants_1d(problem), _wants_2d(problem)
+    if one and two:
+        return 5
+    if one:
+        return 4
+    if two:
+        return 3
+    return _legacy_probmode(problem)
+
+
+def _resolved_probmode(problem: ConservationProblem) -> int:
+    """The ``PROBMODE`` in force: an explicit valid value, else :func:`_implicit_probmode`.
+
+    An explicit value always wins; an invalid one means 0 (no probability) here and is
+    reported by ``validate()``. The default lives here, not in ``load_project``, so
+    problems built in code, made by ``copy_with`` or edited in Shiny get it too. Pure;
+    never warns (it runs many times per solve).
     """
     params = problem.parameters
     if "PROBMODE" in params:
         value = _probmode_value(params["PROBMODE"])
         return 0 if value is None else value
-    return 1 if problem.probability is not None else 0
+    return _implicit_probmode(problem)
 
 
 def _requested_terms(mode: int) -> frozenset[str]:

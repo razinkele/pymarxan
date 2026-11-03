@@ -13,7 +13,7 @@ import numpy as np
 from pymarxan.io.writers import save_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
 
 _BINARY_NAMES = ["Marxan_x64", "marxan", "Marxan", "marxan_x64"]
 
@@ -38,6 +38,7 @@ class MarxanBinarySolver(Solver):
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if config is None:
             config = SolverConfig()
 

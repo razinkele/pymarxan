@@ -112,7 +112,18 @@ class SolverConfig:
 
 
 class Solver(ABC):
-    """Abstract base class for conservation planning solvers."""
+    """Abstract base class for conservation planning solvers.
+
+    Every ``solve`` starts with
+    ``_emit_probability_diagnostics(problem, self._probability_messages(problem))``
+    (``solvers.utils``): a top-level solve emits the probability diagnostics once, and
+    a solve nested in another's ``_solve_scope()`` stays silent. A solver adds its own
+    messages by overriding :meth:`_probability_messages`.
+    """
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """Solver-specific probability messages for ``problem`` (default none)."""
+        return []
 
     @abstractmethod
     def solve(

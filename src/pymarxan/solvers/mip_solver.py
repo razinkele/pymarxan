@@ -59,6 +59,7 @@ from pymarxan.solvers.presolve import (
 )
 from pymarxan.solvers.utils import (
     _chance_terms,
+    _emit_probability_diagnostics,
     _nonbinary_conflicts,
     _probability_map,
     _probmode,
@@ -809,6 +810,7 @@ class MIPSolver(Solver):
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if config is None:
             config = SolverConfig()
         # S3b: heads-up before building the model when the MILP is likely too large.

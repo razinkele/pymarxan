@@ -15,6 +15,7 @@ from typing import Any
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.utils import _emit_probability_diagnostics, _solve_scope
 
 _VALID_RUNMODES = frozenset(range(7))
 
@@ -47,6 +48,7 @@ class RunModePipeline(Solver):
         problem: ConservationProblem,
         config: SolverConfig | None = None,
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         # Lazy imports to avoid circular imports
         from pymarxan.solvers.heuristic import HeuristicSolver
         from pymarxan.solvers.iterative_improvement import (
@@ -98,14 +100,16 @@ class RunModePipeline(Solver):
                 metadata=config.metadata,
             )
 
-            sol = self._run_pipeline(
-                problem=problem,
-                runmode=effective_runmode,
-                config=single_config,
-                heuristic_cls=heuristic_cls,
-                sa_cls=sa_cls,
-                ii_cls=ii_cls,
-            )
+            # Inner solves are nested: they emit no probability diagnostics.
+            with _solve_scope():
+                sol = self._run_pipeline(
+                    problem=problem,
+                    runmode=effective_runmode,
+                    config=single_config,
+                    heuristic_cls=heuristic_cls,
+                    sa_cls=sa_cls,
+                    ii_cls=ii_cls,
+                )
             solutions.append(sol)
 
         return solutions

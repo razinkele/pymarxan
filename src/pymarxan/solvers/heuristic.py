@@ -11,7 +11,12 @@ import numpy as np
 from pymarxan.adequacy.model import SpaceSpec
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import _probability_map, _probmode, build_solution
+from pymarxan.solvers.utils import (
+    _emit_probability_diagnostics,
+    _probability_map,
+    _probmode,
+    build_solution,
+)
 
 _VALID_HEURTYPES = range(8)
 
@@ -56,6 +61,7 @@ class HeuristicSolver(Solver):
         problem: ConservationProblem,
         config: SolverConfig | None = None,
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if config is None:
             config = SolverConfig(num_solutions=1)
 

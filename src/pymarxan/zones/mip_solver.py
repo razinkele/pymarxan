@@ -24,6 +24,7 @@ from pymarxan.solvers.presolve import (
     _presolve_data,
     _validate_presolve_flag,
 )
+from pymarxan.solvers.utils import _emit_probability_diagnostics
 from pymarxan.zones.diagnostics import (
     ZoneMIPNoSolutionWarning,
     _feature_groups,
@@ -278,6 +279,7 @@ class ZoneMIPSolver(Solver):
     def solve(  # type: ignore[override]
         self, problem: ZonalProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         problem = self._check(problem)
         warn_zone_input_issues(problem, "ZoneMIPSolver")
         self._warn_boundary_ignored(problem)

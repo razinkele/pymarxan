@@ -45,7 +45,7 @@ from pymarxan.solvers._mip_objectives import (
 from pymarxan.solvers.base import Solution, SolverConfig
 from pymarxan.solvers.mip_solver import MIPSolver, _mip_solver_for, _warn_if_large_mip
 from pymarxan.solvers.presolve import _emit_presolve, _presolve_data
-from pymarxan.solvers.utils import build_solution
+from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
 
 __all__ = [
     "Hierarchical",
@@ -557,6 +557,7 @@ class MultiObjectiveMIP:
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem)
         if config is None:
             config = SolverConfig()
         self._check(problem)

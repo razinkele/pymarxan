@@ -6,6 +6,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
+from pymarxan.solvers.utils import _emit_probability_diagnostics
 from pymarxan.zones.model import (
     PUZoneRule,
     ZonalProblem,
@@ -39,6 +40,7 @@ class ZoneHeuristicSolver(Solver):
         problem: ConservationProblem,
         config: SolverConfig | None = None,
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if not isinstance(problem, ZonalProblem):
             raise TypeError("ZoneHeuristicSolver requires a ZonalProblem")
         from pymarxan.solvers.separation import raise_if_separation_active

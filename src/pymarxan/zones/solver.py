@@ -9,6 +9,7 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
+from pymarxan.solvers.utils import _emit_probability_diagnostics
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues
 from pymarxan.zones.objective import build_zone_solution
@@ -56,6 +57,7 @@ class ZoneSASolver(Solver):
         problem: ConservationProblem,
         config: SolverConfig | None = None,
     ) -> list[Solution]:
+        _emit_probability_diagnostics(problem, self._probability_messages(problem))
         if not isinstance(problem, ZonalProblem):
             raise TypeError(
                 "ZoneSASolver requires a ZonalProblem instance"
