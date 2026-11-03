@@ -82,6 +82,13 @@ class ChanceCells:
     ``c_v``, each C-contiguous), rows ascending within a feature — serves
     ``ChanceState``'s per-feature recompute. For the 2D term (puvspr ``prob`` = ``q``, the
     probability of presence): ``e = a·q``, ``v = a²·q·(1 − q)``.
+
+    Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|a·q|`` over the feature's puvspr rows
+    (and ``|e|`` of any cell no row names), and ``f_terms`` = ``n_j``, the number of those
+    terms. Any float sum of the feature's terms over any selection — the evaluator's
+    row-by-row sum, a fresh column sum of the cells — is within
+    ``γ_{n_j−1}·S_j ≈ (n_j − 1)·u·S_j`` of the exact sum; ``ChanceState``'s exact-rule
+    knife-edge window is built on it.
     """
 
     indptr: np.ndarray
@@ -92,6 +99,8 @@ class ChanceCells:
     c_indptr: np.ndarray
     c_rows: np.ndarray
     c_ev: np.ndarray
+    f_abs_e: np.ndarray
+    f_terms: np.ndarray
 
     @property
     def c_e(self) -> np.ndarray:
@@ -961,6 +970,9 @@ def _build_chance_cells_2d(
 
     e = amt.copy()
     v = np.zeros(len(amt), dtype=np.float64)
+    named = np.zeros(len(amt), dtype=bool)
+    f_abs_e = np.zeros(n_feat, dtype=np.float64)
+    f_terms = np.zeros(n_feat, dtype=np.int64)
     if len(pv) and len(amt):
         rows = np.fromiter((pu_id_to_idx.get(int(u), -1) for u in pv["pu"].values),
                            np.int64, len(pv))
@@ -977,6 +989,12 @@ def _build_chance_cells_2d(
         e[pos] = 0.0  # named cells are the sums of their rows
         np.add.at(e, pos, a * q)
         np.add.at(v, pos, a * a * q * (1.0 - q))  # operand order as in _term_moments
+        named[pos] = True
+        f_abs_e += np.bincount(indices[pos], weights=np.abs(a * q), minlength=n_feat)
+        f_terms += np.bincount(indices[pos], minlength=n_feat)
+    # A cell no row names is one term of its own (its CSR amount, q = 1).
+    f_abs_e += np.bincount(indices[~named], weights=np.abs(e[~named]), minlength=n_feat)
+    f_terms += np.bincount(indices[~named], minlength=n_feat)
 
     ev = np.vstack([e, v])
     flag = (v > 0).astype(np.int64)
@@ -986,6 +1004,7 @@ def _build_chance_cells_2d(
     return ChanceCells(
         indptr=indptr, indices=indices, ev=ev, abs_ev=np.abs(ev), pos=flag,
         c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev.take(order, axis=1),
+        f_abs_e=f_abs_e, f_terms=f_terms,
     )
 
 

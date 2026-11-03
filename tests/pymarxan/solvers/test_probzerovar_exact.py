@@ -286,3 +286,353 @@ def test_round_trips_through_input_dat(tmp_path) -> None:
     loaded = load_project(tmp_path)
     assert loaded.parameters["PROBZEROVAR"] == 2
     assert _zero_var_rule(loaded) == "exact"
+
+
+# ------------------------------------------- ChanceState: the knife-edge window (T2)
+#
+# Every fixture below has its puvspr rows in ascending PU order within each feature and
+# no PU naming a feature twice: then ChanceState's fresh column sum (a bincount over the
+# cells in ascending PU order) and the evaluator's (``_term_moments``: puvspr rows in file
+# order) add the same floats in the same order, so a recompute reproduces the evaluator's
+# E and its met / short decision bit for bit, and the penalties can be compared with ``==``.
+
+
+def _target_with_threshold(value: float) -> float:
+    """A target whose exact-rule met threshold (``_exact_threshold``) is exactly
+    ``value``: a certain amount of ``value`` is met by 0 ulps, one ulp less is missed."""
+    from pymarxan.solvers.probability import _exact_threshold
+
+    t = value / (1.0 - TARGET_REL_TOL)
+    for _ in range(200):
+        thr = float(_exact_threshold(np.array([t]))[0])
+        if thr == value:
+            return t
+        t = float(np.nextafter(t, np.inf if thr < value else -np.inf))
+    raise AssertionError(f"no target has the threshold {value!r}")
+
+
+def _flip(cs: ChanceState, cache: ProblemCache, cur: np.ndarray, i: int) -> None:
+    add = not cur[i]
+    cs.delta_penalty(cache, int(i), add)
+    cs.apply_flip(cache, int(i), add)
+    cur[i] = add
+
+
+def _certain_feature_problem(n: int = 40, seed: int = 0) -> ConservationProblem:
+    """One all-certain feature whose met threshold is exactly the evaluator's E with every
+    PU selected: met by 0 ulps, one ulp less is missed."""
+    rng = np.random.default_rng(seed)
+    amounts = rng.uniform(0.1, 3.0, n).tolist()
+    problem = _one_feature(amounts, 0.0, PROBABILITYWEIGHTING=5.0)
+    E, _, _ = _term_moments(problem, np.ones(n, dtype=bool), "2d", np.array([1]))
+    return problem.copy_with(
+        features=problem.features.assign(target=[_target_with_threshold(float(E[0]))]),
+    )
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_knife_edge_matches_the_evaluator(seed: int) -> None:
+    """Remove / re-add random subsets of an all-certain feature whose met threshold equals
+    its total: every time all PUs are back, ChanceState and the evaluator agree it is met,
+    although the running E took another summation path (it can end an ulp below the
+    threshold: only the knife-edge recompute makes them agree). Checked after every flip."""
+    problem = _certain_feature_problem(seed=seed)
+    n = len(problem.planning_units)
+    assert evaluate_solution_chance(problem, np.ones(n, dtype=bool))[1] == 0.0
+    cache = ProblemCache.from_problem(problem)
+    assert cache.zero_var_rule == "exact"
+    cur = np.zeros(n, dtype=bool)
+    cs = ChanceState.from_selection(cache, cur)
+    rng = np.random.default_rng(42 + seed)
+    for idx in rng.permutation(n):
+        _flip(cs, cache, cur, int(idx))
+        assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+    for _ in range(60):
+        out = rng.choice(n, int(rng.integers(1, n)), replace=False)
+        for i in list(out) + list(rng.permutation(out)):
+            _flip(cs, cache, cur, int(i))
+            assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+        assert cur.all() and cs.penalty_total() == 0.0
+    assert cs.n_recompute > 0
+
+
+def test_the_window_covers_the_evaluators_own_rounding() -> None:
+    """One all-certain feature: a 1.0 cell at PU 1, then 400 cells of 2^-53. The evaluator
+    sums from PU 1 and loses every tiny cell (E = 1.0; the exact sum is 1 + 200 ulps); the
+    state, built by adding the tiny cells first, holds 1 + 200 ulps. With the met
+    threshold at 1 + 100 ulps, between the two, the evaluator says short while the
+    running E says met: a window of BE alone (or BE + 64·eps·|E|) misses that; the
+    evaluator-error term 3·max(64, n_j)·eps·S_j covers it, and the recompute reproduces
+    the evaluator's E and decision."""
+    n = 400
+    ulp = 2.0 ** -52
+    problem = _one_feature([1.0] + [2.0 ** -53] * n, _target_with_threshold(1.0 + 100 * ulp))
+    cache = ProblemCache.from_problem(problem)
+    cur = np.zeros(n + 1, dtype=bool)
+    cs = ChanceState.from_selection(cache, cur)
+    for i in list(range(1, n + 1)) + [0]:  # the tiny cells first, the 1.0 last
+        _flip(cs, cache, cur, i)
+        assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+    assert evaluate_solution_chance(problem, cur)[1] == 10.0  # short, by the evaluator's E
+    assert cs.terms["2d"].E[0] == 1.0  # recomputed in the evaluator's order
+
+
+def _grid_problem(case: str, seed: int = 0) -> tuple[ConservationProblem, np.ndarray]:
+    """All-certain features with amounts and targets on one grid, and a start selection
+    that holds each target exactly (in exact arithmetic): ``"integer"`` (2000 PUs, 5
+    features, amounts 1-3), ``"two_decimals"`` (amounts 0.01-3.00), ``"integer_long"``
+    (one feature in each of 130 000 PUs)."""
+    rng = np.random.default_rng(seed)
+    if case == "integer_long":
+        n_pu, n_feat = 130_000, 1
+        r, c = np.arange(n_pu), np.zeros(n_pu, dtype=int)
+    else:
+        n_pu, n_feat = 2000, 5
+        r, c = np.nonzero(rng.random((n_pu, n_feat)) < 0.6)
+    k = rng.integers(1, 301, len(r)) if case == "two_decimals" else rng.integers(1, 4, len(r))
+    scale = 100 if case == "two_decimals" else 1
+    pv = pd.DataFrame({"species": c + 1, "pu": r + 1, "amount": k / scale, "prob": 1.0})
+    sel = rng.random(n_pu) < 0.5
+    held_k = np.bincount(c[sel[r]], weights=k[sel[r]], minlength=n_feat)  # exact integers
+    feat = pd.DataFrame({"id": np.arange(1, n_feat + 1),
+                         "name": [f"f{j}" for j in range(n_feat)],
+                         "target": held_k / scale, "spf": 1.0, "ptarget": 0.9})
+    pu = pd.DataFrame({"id": np.arange(1, n_pu + 1), "cost": 1.0, "status": 0})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 5.0,
+                                              "PROBZEROVAR": 2})
+    return problem, sel
+
+
+@pytest.mark.parametrize("case", [
+    "integer", "two_decimals", pytest.param("integer_long", marks=pytest.mark.slow),
+])
+def test_grid_amounts_at_grid_targets_do_not_recompute(case: str) -> None:
+    """Amounts and targets on one grid (counts, presence/absence, 2-decimal data): each
+    time a chain of removals is re-added, every certain amount lands on its target again.
+    The window is centred on the met threshold, 1e-7·|target| below the target, and is far
+    narrower than that (under 1/500 of it on the 130 000-cell column), so the landings
+    are not recomputed; ChanceState's penalty equals the evaluator's after every flip."""
+    problem, sel = _grid_problem(case)
+    cache = ProblemCache.from_problem(problem)
+    assert cache.zero_var_rule == "exact"
+    target = cache.feat_targets
+    thr = target - TARGET_REL_TOL * np.abs(target)
+    cs = ChanceState.from_selection(cache, sel)
+    t = cs.terms["2d"]
+    cur = sel.copy()
+    rng = np.random.default_rng(7)
+    for _ in range(30):
+        out = rng.choice(np.flatnonzero(cur), int(rng.integers(1, 21)), replace=False)
+        for i in list(out) + list(rng.permutation(out)):
+            _flip(cs, cache, cur, int(i))
+            if case != "integer_long":
+                assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+        assert np.array_equal(cur, sel) and cs.penalty_total() == 0.0
+        assert np.all(np.abs(t.E - target) <= 1e-12 * target)
+        window = cs._knife_window(t, np.arange(cache.n_feat), t.BE)
+        assert np.all(window < 1e-2 * np.abs(t.E - thr))  # well clear of the tolerance
+    assert cs.n_recompute == 0
+    assert evaluate_solution_chance(problem, cur)[1] == 0.0
+
+
+def test_a_zero_target_without_expected_amount_does_not_recompute() -> None:
+    """A target of 0 has no tolerance (threshold 0). A zero-variance feature whose cells
+    all have e = 0 (prob 0) has E = BE = 0 and S_j = 0, so its window is 0 and the strict
+    comparison never recomputes it, although every flip touches it (it is in every PU);
+    the evaluator's sum of those zeros is 0 too (met)."""
+    rng = np.random.default_rng(3)
+    n_pu = 300
+    r, c = np.nonzero(rng.random((n_pu, 2)) < 0.6)
+    pv = pd.DataFrame({"species": c + 1, "pu": r + 1,
+                       "amount": rng.uniform(0.5, 3.0, len(r)), "prob": 1.0})
+    zero = pd.DataFrame({"species": 3, "pu": np.arange(1, n_pu + 1), "amount": 1.0,
+                         "prob": 0.0})
+    pv = pd.concat([pv, zero]).sort_values(["pu", "species"]).reset_index(drop=True)
+    totals = pv.groupby("species")["amount"].sum().to_numpy()
+    feat = pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "z"],
+                         "target": [0.5 * totals[0], 0.5 * totals[1], 0.0],
+                         "spf": 1.0, "ptarget": 0.9})
+    pu = pd.DataFrame({"id": np.arange(1, n_pu + 1), "cost": 1.0, "status": 0})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 10.0,
+                                              "PROBZEROVAR": 2})
+    assert problem.validate() == []
+    cache = ProblemCache.from_problem(problem)
+    cur = rng.random(n_pu) < 0.5
+    cs = ChanceState.from_selection(cache, cur)
+    t = cs.terms["2d"]
+    seen = set()
+    for _ in range(300):
+        _flip(cs, cache, cur, int(rng.integers(n_pu)))
+        assert t.E[2] == 0.0 and t.BE[2] == 0.0 and t.pen[2] == 0.0
+        assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+        seen.add(cs.penalty_total())
+    assert seen == {0.0, 10.0, 20.0}  # the walk meets and misses features a and b
+    assert cs.n_recompute == 0
+
+
+def test_a_zero_target_recomputes_the_residue_left_by_its_last_cell() -> None:
+    """Removing every PU of an all-certain target-0 feature can leave the running E a
+    rounding residue around 0 (here negative: short of the threshold 0, the full
+    weighting) while the evaluator's sum over no cells is 0, met. That flip is inside the
+    window and recomputed, so ChanceState agrees after every flip."""
+    rng = np.random.default_rng(0)
+    n = 30
+    amounts = rng.uniform(0.1, 3.0, n)
+    problem = _one_feature(amounts.tolist(), 0.0)
+    order = rng.permutation(n)
+    cache = ProblemCache.from_problem(problem)
+    cur = np.ones(n, dtype=bool)
+    cs = ChanceState.from_selection(cache, cur)
+    t = cs.terms["2d"]
+    for k, i in enumerate(order):
+        if k == n - 1:  # the layout needs the recompute: a negative residue
+            assert t.E[0] - amounts[i] < 0.0
+        _flip(cs, cache, cur, int(i))
+        assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+    assert not cur.any() and t.E[0] == 0.0 and cs.penalty_total() == 0.0
+    assert cs.n_recompute >= 1
+
+
+_CANCELLING_GROUPS = {"plus": [0], "ones": list(range(1, 11)), "minus": [11]}
+
+
+@pytest.mark.parametrize("order", [
+    "plus-ones-minus", "plus-minus-ones", "ones-plus-minus", "ones-minus-plus",
+    "minus-plus-ones", "minus-ones-plus",
+])
+@pytest.mark.parametrize("probzerovar", [0, 2])
+def test_a_negative_amount_keeps_the_knife_edge_decision_the_evaluators(
+    probzerovar: int, order: str,
+) -> None:
+    """One all-certain feature: +1e16 at PU 1, ten 1.0 at PUs 2–11, −1e16 at PU 12;
+    target 2. The exact sum over all twelve is 10 (met) but the evaluator's sum in PU order
+    is 0 (each 1.0 is lost beside 1e16): short. The evaluator's rounding is up to
+    (m − 1)·u·Σ|e|, far above any multiple of eps·|E| when large terms cancel, so the
+    window's evaluator term uses S_j = Σ|e| over the feature's whole column. In every order
+    of the three groups ChanceState's penalty is the evaluator's after every flip, under
+    PROBZEROVAR 2 and under 0 (whose zero-variance penalty does not depend on E)."""
+    problem = _one_feature([1e16] + [1.0] * 10 + [-1e16], 2.0, PROBZEROVAR=probzerovar)
+    cache = ProblemCache.from_problem(problem)
+    assert cache.zero_var_rule == ("exact" if probzerovar else "marxan")
+    n = len(problem.planning_units)
+    cur = np.zeros(n, dtype=bool)
+    cs = ChanceState.from_selection(cache, cur)
+    for group in order.split("-"):
+        for i in _CANCELLING_GROUPS[group]:
+            _flip(cs, cache, cur, i)
+            assert cs.penalty_total() == evaluate_solution_chance(problem, cur)[1]
+    assert cur.all()
+    if probzerovar:  # the evaluator's sum, 0, is short of the threshold: the full weighting
+        assert cs.penalty_total() == 10.0
+
+
+def _mixed_problem(seed: int) -> ConservationProblem:
+    """60 PUs × 6 features: features 1-3 all certain (targets near half their totals, one
+    exactly at a knife edge), features 4-6 with some uncertain cells (q ∈ {0, 1} for
+    most, so they go in and out of zero variance); PU-major rows."""
+    rng = np.random.default_rng(seed)
+    n_pu, n_feat = 60, 6
+    r, c = np.nonzero(rng.random((n_pu, n_feat)) < 0.5)
+    q = np.where(c < 3, 1.0, rng.choice([0.0, 1.0, 1.0, 0.6], len(r)))
+    pv = pd.DataFrame({"species": c + 1, "pu": r + 1,
+                       "amount": rng.uniform(0.1, 5.0, len(r)), "prob": q})
+    totals = pv.assign(e=pv.amount * pv.prob).groupby("species")["e"].sum().to_numpy()
+    target = 0.5 * totals
+    feat = pd.DataFrame({"id": np.arange(1, n_feat + 1),
+                         "name": [f"f{j}" for j in range(n_feat)], "target": target,
+                         "spf": 1.0, "ptarget": [0.9, 0.5, 0.7, 0.9, 0.5, 0.8]})
+    pu = pd.DataFrame({"id": np.arange(1, n_pu + 1), "cost": rng.uniform(1, 3, n_pu),
+                       "status": 0})
+    problem = ConservationProblem(planning_units=pu, features=feat, pu_vs_features=pv,
+                                  parameters={"PROBMODE": 3, "PROBABILITYWEIGHTING": 4.0,
+                                              "PROBZEROVAR": 2, "BLM": 0.0})
+    half = rng.random(n_pu) < 0.5
+    E, _, _ = _term_moments(problem, half, "2d", np.array([1]))
+    target[0] = _target_with_threshold(float(E[0]))  # f1 on the knife edge at ``half``
+    return problem.copy_with(features=feat.assign(target=target))
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_tracked_penalty_and_deltas_equal_the_evaluator_after_every_flip(seed: int) -> None:
+    """A random walk with previews that are committed (70 %) or rejected: the tracked
+    total equals a fresh evaluation after every commit — exactly for the zero-variance
+    features' met / short decisions, to 1e-12 for the features with variance (running
+    sums) — and every delta equals the difference of fresh evaluations."""
+    problem = _mixed_problem(seed)
+    cache = ProblemCache.from_problem(problem)
+    n = len(problem.planning_units)
+    rng = np.random.default_rng(100 + seed)
+    cur = rng.random(n) < 0.5
+    cs = ChanceState.from_selection(cache, cur)
+    before = evaluate_solution_chance(problem, cur)[1]
+    for _ in range(400):
+        i = int(rng.integers(n))
+        add = not cur[i]
+        after_sel = cur.copy()
+        after_sel[i] = add
+        after = evaluate_solution_chance(problem, after_sel)[1]
+        d = cs.delta_penalty(cache, i, add)
+        assert d == pytest.approx(after - before, abs=1e-12)
+        if rng.random() < 0.7:
+            cs.apply_flip(cache, i, add)
+            cur = after_sel
+            before = after
+        assert cs.penalty_total() == pytest.approx(before, abs=1e-12)
+        # the zero-variance decisions are exact: compare the per-feature penalties
+        sf, _ = evaluate_solution_chance(problem, cur)
+        zero = cs.terms["2d"].N == 0
+        pt = cache.feat_ptarget
+        ev_pen = np.array([sf[int(f)] for f in problem.features["id"]]) / pt
+        assert np.array_equal(cs.terms["2d"].pen[zero], ev_pen[zero])
+
+
+@pytest.mark.parametrize("seed", range(2))
+def test_annealing_and_iterative_improvement_report_the_evaluators_objective(
+    seed: int,
+) -> None:
+    """Under PROBZEROVAR 2, simulated annealing and iterative improvement (driven by
+    ChanceState's deltas) end on solutions whose reported objective (``build_solution``,
+    the evaluator) equals a fresh rebuild; each solver's own tracked objective agrees."""
+    from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+
+    problem = _mixed_problem(seed)
+    sols = SimulatedAnnealingSolver(num_iterations=4000, num_temp_steps=40).solve(
+        problem, SolverConfig(num_solutions=2, seed=seed),
+    )
+    for s in sols:
+        fresh = build_solution(problem, s.selected, 0.0)
+        assert s.objective == pytest.approx(fresh.objective, abs=1e-9)
+        assert s.prob_penalty == fresh.prob_penalty
+        improved = IterativeImprovementSolver(itimptype=1).improve(problem, s)
+        again = build_solution(problem, improved.selected, 0.0)
+        assert improved.objective == pytest.approx(again.objective, abs=1e-9)
+        assert improved.objective <= s.objective + 1e-9
+
+
+def test_a_dominant_cell_leaving_keeps_the_fresh_sums_error_in_the_window() -> None:
+    """All amounts non-negative, yet the window's evaluator term must scale with S_j (the
+    column's Σ|e|), not with the current |E|: the fresh sum over 5e6 + 2·10^4 × 0.1 is off
+    by about 7e-6, and removing the 5e6 cell (an exact subtraction) leaves that error on
+    E ≈ 2000, where 3·F_j·eps·|E| is only about 3e-8 and BE about 3e-9. The met threshold
+    sits at the evaluator's own sum without PU 1, so only the S_j-scaled term makes that
+    removal recompute; the evaluator says met, and so must ChanceState."""
+    n = 20_000
+    base = _one_feature([5e6] + [0.1] * n, 0.0)
+    full = np.ones(n + 1, dtype=bool)
+    without = full.copy()
+    without[0] = False
+    E_without = float(_term_moments(base, without, "2d", np.array([1]))[0][0])
+    problem = base.copy_with(
+        features=base.features.assign(target=[_target_with_threshold(E_without)]),
+    )
+    cache = ProblemCache.from_problem(problem)
+    cs = ChanceState.from_selection(cache, full)
+    stale = cs.terms["2d"].E[0] - 5e6
+    assert abs(stale - E_without) > 1e-6  # the fresh sum's error, carried by the removal
+    assert abs(stale - E_without) > 3 * max(64, n + 1) * np.finfo(float).eps * abs(stale)
+    cur = full.copy()
+    _flip(cs, cache, cur, 0)
+    assert evaluate_solution_chance(problem, cur)[1] == 0.0
+    assert cs.penalty_total() == 0.0 and cs.n_recompute == 1
