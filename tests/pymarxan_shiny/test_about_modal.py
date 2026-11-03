@@ -32,3 +32,15 @@ def test_every_comparison_row_is_rendered_with_four_cells():
         assert len(row) == 4
         for cell in row:
             assert cell in html
+
+
+def test_acknowledges_marxan_and_prioritizr_with_citations():
+    html = _html()
+    assert "Acknowledgements" in html
+    # Marxan: Ball, Possingham & Watts (2009); Marxan with Zones: Watts et al. (2009)
+    assert "Ball, I. R., Possingham, H. P., &amp; Watts, M. (2009)" in html
+    assert "https://doi.org/10.1016/j.envsoft.2009.06.005" in html
+    # prioritizr: Hanson et al. (2024)
+    assert "Hanson, J. O., Schuster, R., Strimas-Mackey, M., et al. (2024)" in html
+    assert "https://doi.org/10.1111/cobi.14376" in html
+    assert "not affiliated with" in html

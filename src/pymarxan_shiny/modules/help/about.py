@@ -53,6 +53,52 @@ def _comparison_table() -> ui.Tag:
     )
 
 
+# (text before the link, DOI URL) — the User Manual's reference list, same wording.
+ACKNOWLEDGED_WORKS: tuple[tuple[str, str], ...] = (
+    ("Ball, I. R., Possingham, H. P., & Watts, M. (2009). Marxan and relatives: software for "
+     "spatial conservation prioritisation. In A. Moilanen, K. A. Wilson, & H. P. Possingham "
+     "(Eds.), Spatial conservation prioritisation: quantitative methods and computational "
+     "tools (pp. 185–195). Oxford University Press.", ""),
+    ("Watts, M. E., Ball, I. R., Stewart, R. S., et al. (2009). Marxan with Zones: software "
+     "for optimal conservation based land- and sea-use zoning. Environmental Modelling & "
+     "Software, 24(12), 1513–1521.", "https://doi.org/10.1016/j.envsoft.2009.06.005"),
+    ("Hanson, J. O., Schuster, R., Strimas-Mackey, M., et al. (2024). Systematic conservation "
+     "prioritization with the prioritizr R package. Conservation Biology, 39(1).",
+     "https://doi.org/10.1111/cobi.14376"),
+)
+
+
+def _acknowledgements() -> ui.Tag:
+    items = [
+        ui.tags.li(
+            text,
+            *((" ", ui.tags.a(doi, href=doi, target="_blank", rel="noopener")) if doi else ()),
+        )
+        for text, doi in ACKNOWLEDGED_WORKS
+    ]
+    return ui.div(
+        ui.tags.h6("Acknowledgements", style="margin-top: 1rem; font-weight: 600;"),
+        ui.tags.p(
+            "pymarxan stands on two bodies of work. Marxan, by Ian Ball, Hugh Possingham, "
+            "Matthew Watts and colleagues, defined the problem formulation, file formats and "
+            "algorithms that pymarxan reproduces. prioritizr, by Jeffrey O. Hanson, Richard "
+            "Schuster, Matthew Strimas-Mackey and colleagues, showed how to solve these "
+            "problems exactly with integer programming; pymarxan's exact solvers, objectives "
+            "and target methods follow it. We thank their authors. If pymarxan helps your "
+            "work, please cite them too:",
+            style=f"line-height: 1.6; {_MUTED}",
+        ),
+        ui.tags.ul(*items, style=f"{_MUTED} font-size: 0.85rem; padding-left: 1.2rem;"),
+        ui.tags.p(
+            ui.tags.small(
+                "pymarxan is an independent project, not affiliated with or endorsed by the "
+                "Marxan or prioritizr developers."
+            ),
+            style=f"{_MUTED} opacity: 0.8;",
+        ),
+    )
+
+
 def about_modal(version: str) -> ui.Tag:
     """Build the About dialog for pymarxan ``version``."""
     return ui.modal(
@@ -86,6 +132,7 @@ def about_modal(version: str) -> ui.Tag:
                 ),
                 style=f"{_MUTED} opacity: 0.8; margin-top: 0.5rem;",
             ),
+            _acknowledgements(),
             _RULE,
             ui.tags.p(
                 ui.tags.small(

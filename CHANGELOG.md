@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Shiny About dialog acknowledges Marxan and prioritizr, with the references to cite
+  (Ball, Possingham & Watts 2009; Watts et al. 2009; Hanson et al. 2024) and a note that
+  pymarxan is independent of both projects.
+
 ### Fixed
 
 - `pymarxan.__version__` is read from the checkout's `pyproject.toml` when pymarxan runs from a
