@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.2] — 2026-11-03
+
 ### Added
 
 - The Shiny About dialog shows the version, the author (Artūras Razinkovas-Baziukas, Marine
@@ -1748,7 +1750,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.47.1...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.47.2...HEAD
+[0.47.2]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.2
 [0.47.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.1
 [0.47.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.0
 [0.46.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.46.0
