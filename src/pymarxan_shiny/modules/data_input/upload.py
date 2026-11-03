@@ -8,6 +8,7 @@ from pathlib import Path
 from shiny import module, reactive, render, ui
 
 from pymarxan.io.readers import load_project
+from pymarxan.solvers.utils import _probability_diagnostics
 from pymarxan_shiny.modules.data_input.directory_browser import (
     directory_browser_server,
     directory_browser_ui,
@@ -78,6 +79,9 @@ def upload_server(input, output, session, problem: reactive.Value):
                 if errors:
                     msg = f"Validation warnings: {'; '.join(errors)}"
                     ui.notification_show(msg, type="warning")
+                # Advisory probability messages (implicit PROBMODE, ignored targets...).
+                for note in _probability_diagnostics(loaded):
+                    ui.notification_show(note, type="message", duration=15)
                 problem.set(loaded)
                 ui.notification_show("Project loaded successfully!", type="message")
             except Exception as e:
@@ -105,6 +109,9 @@ def upload_server(input, output, session, problem: reactive.Value):
             if errors:
                 msg = f"Validation warnings: {'; '.join(errors)}"
                 ui.notification_show(msg, type="warning")
+            # Advisory probability messages (implicit PROBMODE, ignored targets...).
+            for note in _probability_diagnostics(loaded):
+                ui.notification_show(note, type="message", duration=15)
             problem.set(loaded)
             ui.notification_show("Project loaded successfully!", type="message")
         except Exception as e:

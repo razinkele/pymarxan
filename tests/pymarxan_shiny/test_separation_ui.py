@@ -27,8 +27,12 @@ def test_feature_table_offers_separation_columns():
     assert "_COLUMN_ORDER" in src
     # Per-column int validator override exists (round-3 H9)
     assert "_INT_VALIDATORS" in src
-    # The shared optional-columns tuple appears with sepdistance + sepnum
-    assert '("ptarget", "target2", "clumptype", "sepdistance", "sepnum")' in src
+    # The shared optional-columns tuple appears with sepdistance + sepnum (v0.48: one
+    # named tuple, with the Probability 1D target ptarget1d)
+    assert (
+        '_OPTIONAL_COLUMNS = ("ptarget", "ptarget1d", "target2", "clumptype", '
+        '"sepdistance", "sepnum")'
+    ) in src
 
 
 def test_validate_feature_edit_accepts_sepnum_above_two():

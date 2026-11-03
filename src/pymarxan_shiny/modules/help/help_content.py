@@ -843,6 +843,49 @@ HELP_CONTENT: dict[str, ui.TagList] = {
     ),
 
     # -----------------------------------------------------------------
+    "probability_config": ui.TagList(
+        ui.p(
+            "Configure how per-unit and per-cell probabilities enter the objective. "
+            "PROBMODE is initialised from the project: an explicit value in input.dat, "
+            "or the mode its data selects."
+        ),
+        _section("PROBMODE"),
+        _param_table([
+            ("PROBMODE 0", "No probability term."),
+            ("PROBMODE 1", "pymarxan extension: risk premium probability × cost × PROBABILITYWEIGHTING (prob.dat)."),
+            ("PROBMODE 2", "pymarxan extension: amounts count as amount × (1 − probability) (prob.dat)."),
+            ("PROBMODE 3", "Marxan Probability 2D: per-cell presence probability (puvspr.dat prob) and per-feature ptarget (spec.dat ptarget2d)."),
+            ("PROBMODE 4", "Marxan Probability 1D: per-unit loss probability (pu.dat prob, else prob.dat) and per-feature ptarget1d."),
+            ("PROBMODE 5", "Probability 1D and 2D together; their penalties add, as in Marxan 3."),
+        ]),
+        ui.p(
+            "With no PROBMODE set, a project with a 1D source and any ptarget1d > 0 "
+            "runs as 4, one with a puvspr prob column and any ptarget > 0 as 3, both as "
+            "5; otherwise 1 with prob.dat, else 0. PROBMODEs 3–5 carry no cost premium. "
+            "Each chance term scores a feature by Z = (target − E)/√V over the selected "
+            "units and penalises PROBABILITYWEIGHTING × (ptarget − P)/ptarget when the "
+            "probability P of meeting the target falls short."
+        ),
+        _section("Probability 1D input"),
+        ui.p(
+            "pu.dat prob (or prob.dat) is the probability that the planning unit is lost. "
+            "It can also be read as the probability that the unit's contribution is lost, "
+            "e.g. a restoration action fails or its funding ends: the amount counts only "
+            "if the action succeeds, so prob = 1 − P(success)."
+        ),
+        _section("PROBZEROVAR"),
+        _param_table([
+            ("0", "Marxan: a feature with no variance gets Z = 4 and fails any ptarget above ~3.2e-5."),
+            ("1", "Zero variance counts as met (pymarxan before v0.47)."),
+            ("2", "Exact: the certain amount meets the target (no penalty) or misses it (full penalty)."),
+        ]),
+        _tip(
+            "Simulated annealing and iterative improvement optimise the chance terms; "
+            "the greedy heuristic and Zonation ignore them while selecting; MIP drops "
+            "them and reports the gaps post-hoc (Game 2008, Tulloch 2013)."
+        ),
+    ),
+
     "target_met": ui.TagList(
         _section("Overview"),
         ui.p(
@@ -862,16 +905,26 @@ HELP_CONTENT: dict[str, ui.TagList] = {
             "that are hardest to meet. These may need higher SPF values "
             "or revised targets."
         ),
-        _section("PROBMODE 3 columns"),
+        _section("PROBMODE 3 / 4 / 5 columns (chance terms)"),
         ui.p(
-            "When the active problem has PROBMODE=3 and the current "
-            "Solution carries a Z-score evaluation, three additional "
+            "When the active problem has PROBMODE=3 (Probability 2D) or 5 and the "
+            "current Solution carries a Z-score evaluation, three additional "
             "columns appear:"
         ),
         _param_table([
             ("ptarget", "Required probability of meeting the deterministic target (set on spec.dat)."),
             ("P(met)", "Actual probability the reserve meets the target, computed from per-cell Bernoulli variance via the Marxan Z-score formulation (Game 2008, Tulloch 2013)."),
             ("prob_gap", "ptarget − P(met), clamped at 0. Non-zero means the reserve falls short of the chance constraint; the solver objective penalises this."),
+        ]),
+        ui.p(
+            "With PROBMODE 4 (Probability 1D) or 5 the same three columns appear for "
+            "the 1D term, from each planning unit's probability of loss (pu.dat prob "
+            "or prob.dat):"
+        ),
+        _param_table([
+            ("ptarget1d", "Required probability of meeting the target under per-unit loss (spec.dat ptarget1d)."),
+            ("P1D(met)", "Probability the reserve meets the target when each selected unit is lost with its own probability (Marxan 3 Probability 1D)."),
+            ("prob1d_gap", "ptarget1d − P1D(met), clamped at 0."),
         ]),
         _tip(
             "If MIP was the solver, ptarget / P(met) / prob_gap are "

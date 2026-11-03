@@ -1,13 +1,63 @@
 """Probability data upload and configuration Shiny module.
 
-Allows users to upload a prob.dat file, set PROBABILITYWEIGHTING and PROBMODE,
-and preview loaded probability data.
+Allows users to upload a prob.dat file, set PROBABILITYWEIGHTING, PROBMODE (0–5) and
+PROBZEROVAR, and preview the loaded probability data (prob.dat and the pu.dat ``prob``
+column of Probability 1D).
+
+The panel's decisions are pure helpers (unit-tested; there is no module-session
+harness): Shiny cannot tell a user's radio change from ``ui.update_radio_buttons``, so
+the radios are initialised from the problem (``initial_mode_choice`` /
+``initial_zero_var_choice``) and an effect writes a parameter only when the radio differs
+from the value in force (``mode_to_write`` / ``zero_var_to_write``). The weight slider has
+its own effect, which writes only ``PROBABILITYWEIGHTING``.
 """
 from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan.models.problem import ConservationProblem, _probzerovar_value
+from pymarxan.solvers.utils import _probmode
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
+
+MODE_CHOICES: dict[str, str] = {
+    "0": "Mode 0 — None",
+    "1": "Mode 1 — Risk premium on cost (prob.dat)",
+    "2": "Mode 2 — Expected (persistence-adjusted) amounts (prob.dat)",
+    "3": "Mode 3 — Probability 2D (puvspr prob, ptarget)",
+    "4": "Mode 4 — Probability 1D (pu.dat prob or prob.dat, ptarget1d)",
+    "5": "Mode 5 — Probability 1D + 2D",
+}
+
+ZERO_VAR_CHOICES: dict[str, str] = {
+    "0": "0 — Marxan (Z = 4)",
+    "1": "1 — Counts as met",
+    "2": "2 — Exact (certain amount)",
+}
+
+
+def initial_mode_choice(problem: ConservationProblem) -> str:
+    """The PROBMODE radio's value for ``problem``: the mode in force (explicit, or
+    selected from the data, ``_probmode``)."""
+    return str(_probmode(problem))
+
+
+def mode_to_write(problem: ConservationProblem, radio: str) -> int | None:
+    """The PROBMODE to write for radio value ``radio``, or None to write nothing (the
+    radio already shows the mode in force, e.g. after ``update_radio_buttons``)."""
+    mode = int(radio)
+    return None if mode == _probmode(problem) else mode
+
+
+def initial_zero_var_choice(problem: ConservationProblem) -> str:
+    """The PROBZEROVAR radio's value: the parameter's value (0 when unset or invalid)."""
+    value = _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0))
+    return str(value if value is not None else 0)
+
+
+def zero_var_to_write(problem: ConservationProblem, radio: str) -> int | None:
+    """The PROBZEROVAR to write for ``radio``, or None when it is already in force."""
+    value = int(radio)
+    return None if radio == initial_zero_var_choice(problem) else value
 
 
 @module.ui
@@ -15,11 +65,11 @@ def probability_config_ui():
     return ui.card(
         help_card_header("Probability Configuration"),
         ui.p(
-            "Upload a prob.dat file containing per-planning-unit probability "
-            "values (columns: pu, probability). These represent the likelihood "
-            "of each planning unit persisting in a viable state. Marxan uses "
-            "these values with the PROBABILITYWEIGHTING parameter to incorporate "
-            "risk into the objective function.",
+            "Per-planning-unit probabilities of loss come from a prob.dat upload "
+            "(columns: pu, probability) or from a 'prob' column in pu.dat (Marxan's "
+            "Probability 1D). Per-cell probabilities of presence come from a 'prob' "
+            "column in puvspr.dat (Probability 2D). PROBMODE chooses how they enter "
+            "the objective; PROBABILITYWEIGHTING scales the penalty.",
             class_="text-muted small mb-3",
         ),
         ui.layout_sidebar(
@@ -32,7 +82,10 @@ def probability_config_ui():
                     ),
                     "Columns 'pu' and 'probability': the chance (0–1) that the "
                     "planning unit is lost (not that it persists). CSV, TSV, or "
-                    "Marxan .dat format.",
+                    "Marxan .dat format. A 'prob' column in pu.dat takes precedence "
+                    "for Probability 1D. The probability can also be read as the chance "
+                    "that the unit's contribution is lost, e.g. a restoration action "
+                    "fails or its funding ends.",
                 ),
                 ui.hr(),
                 ui.h5("Parameters"),
@@ -46,36 +99,42 @@ def probability_config_ui():
                         step=0.1,
                     ),
                     "Weight on the PROBMODE 1 risk premium (probability of loss × "
-                    "cost) and on the PROBMODE 3 probability shortfall. Not used by "
-                    "PROBMODE 2.",
+                    "cost) and on the chance-term penalties of PROBMODE 3–5. Not used "
+                    "by PROBMODE 2.",
                 ),
                 ui.tooltip(
                     ui.input_radio_buttons(
                         "prob_mode",
                         "PROBMODE",
-                        choices={
-                            "1": "Mode 1 — Risk premium on cost (expected cost lost)",
-                            "2": "Mode 2 — Expected (persistence-adjusted) amounts",
-                            "3": "Mode 3 — Z-score probability penalty (soft chance "
-                            "target, based on Marxan's Probability 2D)",
-                        },
-                        selected="1",
+                        choices=MODE_CHOICES,
+                        selected="0",
                     ),
-                    "Modes 1 and 2 are pymarxan extensions over per-PU "
-                    "probabilities (prob.dat); Marxan's Probability 1D is not yet "
-                    "implemented. Mode 1 (the default with a probability table): "
-                    "adds a risk premium probability × cost × weight to the "
-                    "objective. Mode 2: each amount counts as amount × (1 − "
-                    "probability), and targets are judged on these expected "
-                    "amounts by every single-zone solver and report. This is an average, not a "
-                    "guarantee: a target met on expected amounts has roughly even "
-                    "odds of being met. "
-                    "Mode 3: per-(PU, feature) probability of presence via the "
-                    "optional `prob` column on puvspr.dat and a per-feature "
-                    "`ptarget` on spec.dat (Marxan's column is `ptarget2d`); a soft "
-                    "penalty on the probability shortfall, not a hard constraint. "
-                    "SA / heuristic / iterative-improvement optimise it, MIP drops "
-                    "the term and reports the gap post-hoc.",
+                    "Initialised from the project: an explicit PROBMODE, or the mode its "
+                    "data selects (pu.dat prob or prob.dat with ptarget1d > 0 → 4; "
+                    "puvspr prob with ptarget > 0 → 3; both → 5). "
+                    "Modes 1 and 2 are pymarxan extensions over prob.dat. Mode 1 adds a "
+                    "risk premium probability × cost × weight. Mode 2 counts each "
+                    "amount as amount × (1 − probability) — an average, not a "
+                    "guarantee. Modes 3–5 are Marxan's Z-score chance terms, a soft "
+                    "penalty on the probability shortfall per feature, with no cost "
+                    "premium and raw amounts: 3 = Probability 2D (per-cell presence, "
+                    "spec ptarget2d), 4 = Probability 1D (per-unit loss probability, "
+                    "spec ptarget1d), 5 = both. Simulated annealing and iterative "
+                    "improvement optimise them; the greedy heuristic and Zonation "
+                    "ignore them while selecting; MIP drops them and reports the gap "
+                    "post-hoc.",
+                ),
+                ui.tooltip(
+                    ui.input_radio_buttons(
+                        "prob_zero_var",
+                        "PROBZEROVAR",
+                        choices=ZERO_VAR_CHOICES,
+                        selected="0",
+                    ),
+                    "How the chance terms score a feature whose selected cells carry no "
+                    "variance. 0 (Marxan): Z = 4, so it fails any ptarget above "
+                    "3.2e-5. 1: counts as met. 2: exact — its certain amount meets the "
+                    "target (no penalty) or misses it (full penalty).",
                 ),
                 width=350,
             ),
@@ -92,6 +151,16 @@ def probability_config_server(
     problem: reactive.Value,
 ):
     help_server_setup(input, "probability_config")
+
+    @reactive.effect
+    def _sync_radios():
+        # Follow the loaded problem. The resulting input change reaches _update_mode /
+        # _update_zero_var, which write nothing because the value is already in force.
+        p = problem()
+        if p is None:
+            return
+        ui.update_radio_buttons("prob_mode", selected=initial_mode_choice(p))
+        ui.update_radio_buttons("prob_zero_var", selected=initial_zero_var_choice(p))
 
     @reactive.effect
     @reactive.event(input.prob_file)
@@ -124,28 +193,65 @@ def probability_config_server(
             ui.notification_show(f"Error reading prob.dat: {exc}", type="error")
 
     @reactive.effect
-    @reactive.event(input.prob_weight, input.prob_mode)
-    def _update_params():
+    @reactive.event(input.prob_mode)
+    def _update_mode():
+        p = problem()
+        if p is None:
+            return
+        mode = mode_to_write(p, input.prob_mode())
+        if mode is None:
+            return
+        p.parameters["PROBMODE"] = mode
+        problem.set(p)
+
+    @reactive.effect
+    @reactive.event(input.prob_zero_var)
+    def _update_zero_var():
+        p = problem()
+        if p is None:
+            return
+        value = zero_var_to_write(p, input.prob_zero_var())
+        if value is None:
+            return
+        p.parameters["PROBZEROVAR"] = value
+        problem.set(p)
+
+    @reactive.effect
+    @reactive.event(input.prob_weight)
+    def _update_weight():
         p = problem()
         if p is None:
             return
         p.parameters["PROBABILITYWEIGHTING"] = float(input.prob_weight())
-        p.parameters["PROBMODE"] = int(input.prob_mode())
         problem.set(p)
 
     @render.text
     def prob_preview():
         p = problem()
-        if p is None or p.probability is None:
-            return "No probability data loaded."
-        df = p.probability
-        n = len(df)
-        prob_vals = df["probability"]
-        return (
-            f"Planning units with probability data: {n}\n"
-            f"Min probability:  {prob_vals.min():.4f}\n"
-            f"Max probability:  {prob_vals.max():.4f}\n"
-            f"Mean probability: {prob_vals.mean():.4f}\n"
-            f"\nPROBMODE: {input.prob_mode()}\n"
-            f"PROBABILITYWEIGHTING: {input.prob_weight()}"
-        )
+        if p is None:
+            return "No project loaded."
+        lines: list[str] = []
+        if p.probability is not None:
+            vals = p.probability["probability"]
+            lines += [
+                f"prob.dat planning units: {len(vals)}",
+                f"  min / max / mean: {vals.min():.4f} / {vals.max():.4f} / "
+                f"{vals.mean():.4f}",
+            ]
+        if "prob" in p.planning_units.columns:
+            vals = p.planning_units["prob"].astype(float)
+            lines += [
+                "pu.dat prob (Probability 1D loss):",
+                f"  min / max / mean: {vals.min():.4f} / {vals.max():.4f} / "
+                f"{vals.mean():.4f}",
+            ]
+        if not lines:
+            lines.append("No per-unit probability data loaded.")
+        lines += [
+            "",
+            f"PROBMODE in force: {_probmode(p)}"
+            + ("" if "PROBMODE" in p.parameters else " (selected from the data)"),
+            f"PROBZEROVAR: {initial_zero_var_choice(p)}",
+            f"PROBABILITYWEIGHTING: {input.prob_weight()}",
+        ]
+        return "\n".join(lines)

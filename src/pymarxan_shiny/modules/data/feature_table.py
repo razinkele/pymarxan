@@ -9,11 +9,15 @@ from pymarxan_shiny.modules.help.help_button import help_card_header, help_serve
 
 _COLUMN_ORDER = [
     "id", "name", "target", "spf",
-    "ptarget", "target2", "clumptype",
+    "ptarget", "ptarget1d", "target2", "clumptype",
     "sepdistance", "sepnum",
 ]
 _EDITABLE_FLOAT_COLUMNS = ("target", "spf", "target2", "sepdistance")
 _EDITABLE_INT_COLUMNS = ("clumptype", "sepnum")
+# Probability targets (2D ptarget, 1D ptarget1d): -1 (Marxan's "disabled") or (0, 1].
+_PROBABILITY_TARGET_COLUMNS = ("ptarget", "ptarget1d")
+# Optional columns shown (and edited) when present on the problem.
+_OPTIONAL_COLUMNS = ("ptarget", "ptarget1d", "target2", "clumptype", "sepdistance", "sepnum")
 # Per-column int validator overrides. Columns not listed here use the
 # default `>= 0` int rule (round-3 H9 — clumptype's {0,1,2} rule must
 # NOT apply to sepnum, which is any non-negative int).
@@ -35,7 +39,18 @@ def validate_feature_edit(column: str, value: str) -> float | int | None:
     Phase 20 columns:
       - sepdistance : float ≥ 0  (0 disables separation for this feature)
       - sepnum : int ≥ 0  (≤1 disables separation; Marxan sentinel)
+
+    Probability targets (v0.48):
+      - ptarget (2D), ptarget1d (1D) : −1 (disabled) or a probability in (0, 1]
     """
+    if column in _PROBABILITY_TARGET_COLUMNS:
+        try:
+            pval = float(value)
+        except (ValueError, TypeError):
+            return None
+        if pval == -1.0 or 0.0 < pval <= 1.0:
+            return pval
+        return None
     if column in _EDITABLE_FLOAT_COLUMNS:
         try:
             val = float(value)
@@ -76,6 +91,9 @@ def feature_table_ui():
             " are optional Marxan SEPDISTANCE / SEPNUM columns: require N "
             "geographically separated PUs (≥ sepdistance apart in CRS units) "
             "to count toward the feature's target. Leave sepnum = 1 to disable. ",
+            ui.tags.strong("ptarget / ptarget1d"),
+            " are the Probability 2D / 1D targets (spec.dat ptarget2d / ptarget1d): "
+            "the required probability of meeting the target, −1 to disable. ",
             "Click a cell to edit, then Save Changes to apply.",
             class_="text-muted small mb-3",
         ),
@@ -84,7 +102,8 @@ def feature_table_ui():
             ui.input_action_button(
                 "save_changes", "Save Changes", class_="btn-warning w-100 mt-2"
             ),
-            "Write edited target / SPF / ptarget / target2 / clumptype / sepdistance / "
+            "Write edited target / SPF / ptarget / ptarget1d / target2 / clumptype / "
+            "sepdistance / "
             "sepnum values back to the conservation problem. Changes take effect "
             "immediately for subsequent solver runs.",
         ),
@@ -109,7 +128,7 @@ def feature_table_server(
         # columns when they exist on the problem, so legacy projects without
         # ptarget / target2 / clumptype don't see empty columns in the editor.
         cols = ["id", "name", "target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
+        for opt in _OPTIONAL_COLUMNS:
             if opt in p.features.columns:
                 cols.append(opt)
         df = p.features[cols].copy()
@@ -125,7 +144,7 @@ def feature_table_server(
         if p is None:
             return patch["value"]
         cols = ["id", "name", "target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
+        for opt in _OPTIONAL_COLUMNS:
             if opt in p.features.columns:
                 cols.append(opt)
         col = cols[col_idx] if col_idx < len(cols) else ""
@@ -145,7 +164,7 @@ def feature_table_server(
         # Edited columns: target, spf, plus any of ptarget/target2/clumptype
         # that are present on the data view (which mirrors p.features).
         edit_cols = ["target", "spf"]
-        for opt in ("ptarget", "target2", "clumptype", "sepdistance", "sepnum"):
+        for opt in _OPTIONAL_COLUMNS:
             if opt in df.columns:
                 edit_cols.append(opt)
         # Join on id to handle user-sorted/filtered views correctly
