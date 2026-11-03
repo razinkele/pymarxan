@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Shiny About dialog shows the version, the author (Artūras Razinkovas-Baziukas, Marine
+  Research Institute, Klaipėda University) and a comparison of pymarxan with Marxan and
+  prioritizr (the User Manual's "Side by side" table). It is built by
+  `pymarxan_shiny.modules.help.about.about_modal`, and the assembled app (`make app`) now has
+  the About button too.
+
 ## [0.47.1] — 2026-11-01
 
 ### Fixed
