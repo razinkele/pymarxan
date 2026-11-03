@@ -23,6 +23,15 @@ from pymarxan.recovery.builder import (
     potential_feature_id,
     scaled_spf,
 )
+from pymarxan.recovery.evaluate import (
+    DEFAULT_MULTIPLIERS,
+    NO_TIME_LAG,
+    RECOVERY_CAVEAT,
+    RecoveryResult,
+    evaluate_recovery,
+    recovery_caveat,
+    success_sensitivity,
+)
 from pymarxan.recovery.inputs import PassiveAction, RecoveryInputs
 from pymarxan.recovery.solve import (
     RECOVERY_MIP_SIZE_WARNING,
@@ -32,6 +41,9 @@ from pymarxan.recovery.solve import (
 
 __all__ = [
     "ACTION_NAMES",
+    "DEFAULT_MULTIPLIERS",
+    "NO_TIME_LAG",
+    "RECOVERY_CAVEAT",
     "RECOVERY_MIP_SIZE_WARNING",
     "SPF_SCALE",
     "ZONE_NO_ACTION",
@@ -44,11 +56,15 @@ __all__ = [
     "RecoveryInputWarning",
     "RecoveryInputs",
     "RecoveryMapping",
+    "RecoveryResult",
     "RecoverySizeWarning",
     "build_recovery_problem",
     "check_recovery_inputs",
+    "evaluate_recovery",
     "existing_feature_id",
     "potential_feature_id",
+    "recovery_caveat",
     "scaled_spf",
     "solve_recovery",
+    "success_sensitivity",
 ]
