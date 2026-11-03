@@ -13,6 +13,11 @@ The GOLDEN values were recorded on the unmodified v0.37 code; #6 must not change
   halved: every objective moved, and the unconverged SA at SPF 10 (NUMITNS 100)
   took a different path, changing both of its assignments. "small" runs at
   BLM 1 and is unchanged.
+- 2026-11-03 (v0.49.0): zone SA now proposes zone 0 ("no action") for PUs that may stay
+  unassigned, and draws its start zones from the same options. Only the three SA cases
+  moved: "small" SA now reaches the heuristic/II optimum (0, 1, 0, 0) at 184.0 (was
+  318.8, a plan that could not drop units); the unconverged "large" SA runs took new
+  paths. Heuristic, II and improve() values are unchanged.
 
 Regenerate with:
     PYTHONPATH=src:. /opt/micromamba/envs/shiny/bin/python \
@@ -127,7 +132,7 @@ def _run_improve(fx: str) -> Golden:
 
 GOLDEN: dict[str, Golden] = {
     'small-sa-None-None':
-        [((1, 1, 0, 2), 318.8), ((1, 1, 0, 2), 318.8)],
+        [((0, 1, 0, 0), 184.0), ((0, 1, 0, 0), 184.0)],
     'small-sa-10.0-None':
         [((1, 1, 0, 2), 335.0), ((1, 1, 0, 2), 335.0)],
     'small-heuristic-None-None':
@@ -147,19 +152,19 @@ GOLDEN: dict[str, Golden] = {
     'small-ii-10.0-3':
         [((1, 1, 0, 2), 335.0), ((1, 1, 0, 2), 335.0)],
     'large-sa-None-None':
-        [((2, 1, 1, 0, 3, 2, 1, 1, 1, 0, 1, 3, 2, 2, 1, 0, 2, 2, 2, 1, 1, 0, 3, 3, 1, 1, 1, 0, 1,
-           2, 2, 3),
-          1049.111313),
-         ((1, 1, 1, 0, 3, 1, 2, 1, 1, 0, 1, 3, 2, 2, 1, 0, 2, 2, 2, 1, 1, 0, 3, 2, 1, 1, 1, 0, 1,
-           2, 2, 3),
-          931.773222)],
+        [((1, 0, 1, 0, 0, 1, 2, 0, 1, 0, 0, 3, 2, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0,
+           0, 0, 2),
+          648.321929),
+         ((1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 3, 0, 0, 1, 0, 1, 2, 1, 1, 1, 0, 0, 2, 1, 1, 1, 0, 0,
+           0, 2, 2),
+          735.461791)],
     'large-sa-10.0-None':
-        [((2, 2, 1, 0, 3, 2, 1, 1, 1, 0, 1, 3, 2, 2, 1, 0, 2, 2, 2, 1, 1, 0, 3, 3, 1, 1, 1, 0, 1,
-           2, 2, 3),
-          2461.179331),
-         ((1, 1, 1, 0, 3, 3, 2, 1, 1, 0, 1, 3, 2, 2, 1, 0, 3, 2, 2, 2, 1, 0, 3, 2, 3, 1, 1, 0, 1,
-           2, 2, 3),
-          2484.980532)],
+        [((2, 1, 1, 0, 3, 1, 2, 0, 1, 0, 0, 3, 2, 0, 1, 0, 1, 2, 2, 1, 1, 0, 1, 0, 3, 1, 1, 0, 2,
+           0, 2, 2),
+          2286.62163),
+         ((2, 0, 1, 0, 0, 1, 3, 2, 1, 0, 0, 3, 2, 0, 1, 0, 1, 2, 3, 1, 1, 0, 2, 0, 3, 1, 1, 0, 1,
+           0, 2, 3),
+          2471.94701)],
     'large-heuristic-None-None':
         [((0, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0, 3, 0, 0, 1, 0, 0, 0, 2, 1, 1, 0, 3, 0, 1, 1, 1, 0, 0,
            0, 0, 2),

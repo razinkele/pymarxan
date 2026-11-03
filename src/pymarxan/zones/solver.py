@@ -11,7 +11,12 @@ from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
 from pymarxan.solvers.utils import _emit_probability_diagnostics, _ignored_terms_messages
 from pymarxan.zones.cache import ZoneProblemCache
-from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues
+from pymarxan.zones.model import (
+    PUZoneRule,
+    ZonalProblem,
+    fixed_zones,
+    warn_zone_input_issues,
+)
 from pymarxan.zones.objective import build_zone_solution
 
 
@@ -23,6 +28,24 @@ def _propose(
     idx = int(swappable[rng.integers(len(swappable))])
     options = opts[idx]
     return idx, int(options[rng.integers(len(options))])
+
+
+def _proposal_options(rules: list[PUZoneRule], zone_ids: list[int]) -> list[np.ndarray]:
+    """Per-PU zone options for proposals and the start draw: the allowed zones, plus 0
+    ("no action") when the rule lets the PU stay unassigned (v0.49.0; before, 0 was never
+    proposed, so free PUs could not return to no action). Unrestricted PUs share one array
+    per kind, so the common case allocates nothing per PU."""
+    every = frozenset(zone_ids)
+    assigned = np.array(sorted(zone_ids), dtype=int)
+    free = np.array([0, *sorted(zone_ids)], dtype=int)
+    opts: list[np.ndarray] = []
+    for rule in rules:
+        if rule.allowed == every:
+            opts.append(free if rule.may_be_unassigned else assigned)
+        else:
+            zs = sorted(rule.allowed)
+            opts.append(np.array(([0] if rule.may_be_unassigned else []) + zs, dtype=int))
+    return opts
 
 
 _COOLING_FACTORIES: dict[str, Callable[..., CoolingSchedule]] = {
@@ -87,17 +110,11 @@ class ZoneSASolver(Solver):
 
         pu_ids = problem.planning_units["id"].tolist()
         n_pu = len(pu_ids)
-        zone_ids_list = sorted(problem.zone_ids)
-        zone_options = np.array(zone_ids_list, dtype=int)
+        zone_ids_list = sorted(int(z) for z in problem.zone_ids)
 
         rules = problem.pu_zone_rules()
         locked = fixed_zones(rules)
-        every = frozenset(zone_ids_list)
-        opts: list[np.ndarray] = [
-            zone_options if rule.allowed == every
-            else np.array(sorted(rule.allowed), dtype=int)
-            for rule in rules
-        ]
+        opts = _proposal_options(rules, zone_ids_list)
         swappable = np.array(
             [i for i in range(n_pu) if i not in locked], dtype=int
         )

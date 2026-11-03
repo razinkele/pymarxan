@@ -369,7 +369,9 @@ def solver_picker_server(input, output, session, solver_config: reactive.Value):
         elif st == "zone_sa":
             return ("Zone SA (Multi-Zone)\n--------------------\n"
                     "Simulated annealing for multi-zone conservation planning.\n"
-                    "Each planning unit is assigned to a zone (or left unassigned).\n"
+                    "Each planning unit is assigned to a zone or left unassigned\n"
+                    "(no action), unless MANDATORYALLOCATION is 1 or the unit is\n"
+                    "locked or restricted to zones (pulock / puzone / status 2).\n"
                     "Requires zone project data (zones, zone costs, etc.).")
         elif st == "greedy":
             return (

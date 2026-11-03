@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Zone SA can choose "no action".** `ZoneSASolver` now proposes zone 0 (unassigned) for
+  every planning unit whose rule allows it (`may_be_unassigned`: not locked, not
+  puzone-restricted, `MANDATORYALLOCATION` 0), and draws its start zones from the same
+  options. Before, it only ever proposed listed zones, so on any problem with free units it
+  protected or restored every one of them (review C1: `[1, 1, 1, 1]` at 4.0 where the MIP
+  finds `[1, 0, 0, 0]` at 1.0). **Behaviour change:** zone SA results change on every zone
+  problem with unlocked, unrestricted units (seeded runs take new paths and usually reach
+  lower objectives). The per-flip delta already handled moves to and from zone 0; the
+  boundary part of such moves no longer builds an `n_pu`-sized mask. The solver-picker help
+  text now states when units can stay unassigned.
+
 ## [0.48.0] — 2026-11-03
 
 ### Added

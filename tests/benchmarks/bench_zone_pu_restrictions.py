@@ -12,7 +12,7 @@ import pytest
 from pymarxan.solvers.base import SolverConfig
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem, fixed_zones
-from pymarxan.zones.solver import ZoneSASolver, _propose
+from pymarxan.zones.solver import ZoneSASolver, _proposal_options, _propose
 from tests.benchmarks.conftest import make_zone_problem
 
 pytestmark = pytest.mark.bench
@@ -22,9 +22,7 @@ N_PU, N_FEAT, N_ZONES, N_MOVES = 1000, 50, 3, 20_000
 def _opts(problem: ZonalProblem) -> tuple[list[np.ndarray], np.ndarray, np.ndarray]:
     rules = problem.pu_zone_rules()
     zone_options = np.array(sorted(problem.zone_ids), dtype=int)
-    every = frozenset(zone_options.tolist())
-    opts = [zone_options if r.allowed == every else np.array(sorted(r.allowed), dtype=int)
-            for r in rules]
+    opts = _proposal_options(rules, zone_options.tolist())  # the solver's own options (0 too)
     fixed = fixed_zones(rules)
     swappable = np.array([i for i in range(len(rules)) if i not in fixed], dtype=int)
     return opts, swappable, zone_options

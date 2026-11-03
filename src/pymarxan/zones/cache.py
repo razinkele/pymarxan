@@ -426,10 +426,10 @@ class ZoneProblemCache:
             # Selection status is changing
             if will_be_selected:
                 # Adding to selection
-                std_boundary_delta = self._boundary_delta_add(idx, assignment > 0)
+                std_boundary_delta = self._boundary_delta_add(idx, assignment)
             else:
                 # Removing from selection
-                std_boundary_delta = self._boundary_delta_remove(idx, assignment > 0)
+                std_boundary_delta = self._boundary_delta_remove(idx, assignment)
 
         # --- Zone boundary delta ---
         zone_boundary_delta = self._zone_boundary_delta(
@@ -534,21 +534,23 @@ class ZoneProblemCache:
         after = np.maximum(0.0, self.overall_target_vector - (overall + change))
         return float(np.dot(self.feat_spf, after - before))
 
-    def _boundary_delta_add(self, idx: int, selected: np.ndarray) -> float:
-        """Boundary delta when adding PU idx to the selection."""
+    def _boundary_delta_add(self, idx: int, assignment: np.ndarray) -> float:
+        """Boundary delta when adding PU idx to the selection (zone > 0). Reads the
+        neighbours' zones directly: building ``assignment > 0`` would make every move to or
+        from no action O(n_pu)."""
         delta = self.self_boundary[idx]
         for j, w in self.neighbors[idx]:
-            if selected[j]:
+            if assignment[j] > 0:
                 delta -= w  # mismatch resolved
             else:
                 delta += w  # new mismatch
         return float(delta)
 
-    def _boundary_delta_remove(self, idx: int, selected: np.ndarray) -> float:
-        """Boundary delta when removing PU idx from the selection."""
+    def _boundary_delta_remove(self, idx: int, assignment: np.ndarray) -> float:
+        """Boundary delta when removing PU idx from the selection (see ``_boundary_delta_add``)."""
         delta = -self.self_boundary[idx]
         for j, w in self.neighbors[idx]:
-            if selected[j]:
+            if assignment[j] > 0:
                 delta += w  # new mismatch
             else:
                 delta -= w  # mismatch resolved
