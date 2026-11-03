@@ -13,3 +13,6 @@ htmlcov/
 !.claude/skills/
 .worktrees/
 .playwright-mcp/
+
+# Shiny Server restart trigger (laguna.ku.lt/marxan serves src/pymarxan_shiny)
+src/pymarxan_shiny/restart.txt

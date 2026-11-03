@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `pymarxan.__version__` is read from the checkout's `pyproject.toml` when pymarxan runs from a
+  source checkout, before falling back to install metadata. A deployment that imports the
+  checkout without installing it (Shiny Server) showed `0.0.0+unknown` in the About dialog,
+  and a stale editable install could report an old version.
+
 ## [0.47.2] — 2026-11-03
 
 ### Added
