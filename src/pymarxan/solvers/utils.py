@@ -16,6 +16,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
     _nonfinite_cells_error,
     _probzerovar_value,
+    _resolved_probmode,
 )
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
 from pymarxan.solvers._tolerance import target_tol as target_tol
@@ -97,9 +98,12 @@ def _total_cost(costs: np.ndarray, selected: np.ndarray) -> float:
 
 
 def _probmode(problem: ConservationProblem) -> int:
-    """``PROBMODE``; default 1 with a probability table, 0 without (v0.45 §3)."""
-    default = 1 if problem.probability is not None else 0
-    return int(problem.parameters.get("PROBMODE", default))
+    """``PROBMODE``; default 1 with a probability table, 0 without (v0.45 §3).
+
+    An explicit value outside 0–5 means 0 here (``validate()`` reports it). The rule lives
+    in ``models.problem._resolved_probmode`` so ``validate()`` shares it. Pure.
+    """
+    return _resolved_probmode(problem)
 
 
 def _chance_terms(problem: ConservationProblem) -> frozenset[str]:
@@ -190,7 +194,50 @@ def _probability_vector(
     return p
 
 
-def _check_finite_cells(puvspr: pd.DataFrame) -> None:
+def _has_1d_data(problem: ConservationProblem) -> bool:
+    """A Probability 1D source exists: a pu.dat ``prob`` column, or ``problem.probability``."""
+    return "prob" in problem.planning_units.columns or problem.probability is not None
+
+
+def _loss_probability_vector(
+    problem: ConservationProblem, pu_id_to_idx: dict[int, int], n_pu: int,
+) -> np.ndarray:
+    """(n_pu,) Probability 1D loss probabilities ``p_i`` by position (spec §3.3).
+
+    The pu.dat ``prob`` column if it exists (Marxan 3 ``readPlanningUnits``, cast to
+    float here: ``read_pu`` does not cast it), else ``problem.probability`` through
+    :func:`_probability_vector` (a PU missing from the table has p = 0), else zeros. Always
+    a probability of **loss**: ``E = Σ a·(1 − p)``, ``V = Σ a²·p·(1 − p)``. A non-finite
+    value raises ``ValueError`` naming the PU ids; values outside [0, 1] are used as given
+    (``validate()`` reports them). Pure; never warns (a disagreement between the two
+    sources is a ``_probability_diagnostics`` message).
+    """
+    pu = problem.planning_units
+    if "prob" not in pu.columns:
+        if problem.probability is None:
+            return np.zeros(n_pu, dtype=np.float64)
+        return _probability_vector(problem, pu_id_to_idx, n_pu)
+    vals = pd.to_numeric(pu["prob"], errors="coerce").to_numpy(
+        dtype=np.float64, na_value=np.nan,
+    )
+    ids = pu["id"].to_numpy()
+    bad = ~np.isfinite(vals)
+    if bad.any():
+        raise ValueError(
+            "planning_units prob has non-finite values (NaN or infinite) for planning unit "
+            f"IDs {sorted({int(u) for u in ids[bad]})}"
+        )
+    p = np.zeros(n_pu, dtype=np.float64)
+    for pid, val in zip(ids, vals):
+        k = pu_id_to_idx.get(int(pid))
+        if k is not None:
+            p[k] = val
+    return p
+
+
+def _check_finite_cells(
+    puvspr: pd.DataFrame, columns: tuple[str, ...] = ("prob", "amount"),
+) -> None:
     """``ValueError`` naming the PU ids when a puvspr ``amount`` or ``prob`` is non-finite.
 
     These are the 2D chance term's cell data (a blank field reads as NaN, a non-numeric
@@ -201,7 +248,7 @@ def _check_finite_cells(puvspr: pd.DataFrame) -> None:
     reports the same cells with the same message (``models.problem._nonfinite_cells_error``).
     Finite values outside [0, 1] are used as given; a missing ``prob`` column is not checked.
     """
-    message = _nonfinite_cells_error(puvspr)
+    message = _nonfinite_cells_error(puvspr, columns)
     if message is not None:
         raise ValueError(message)
 

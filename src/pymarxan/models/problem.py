@@ -24,17 +24,20 @@ STATUS_LOCKED_IN = 2
 STATUS_LOCKED_OUT = 3
 
 
-def _nonfinite_cells_error(puvspr: pd.DataFrame) -> str | None:
+def _nonfinite_cells_error(
+    puvspr: pd.DataFrame, columns: tuple[str, ...] = ("prob", "amount"),
+) -> str | None:
     """The message for non-finite puvspr ``prob`` / ``amount`` values, or None.
 
-    These are the 2D chance term's cell data: under PROBMODE 3 with a ``prob`` column every
-    solver raises on them (``solvers.utils._check_finite_cells``) and ``validate()`` reports
-    them, with this one message. A blank field reads as NaN; a non-numeric token (``-``)
-    counts as non-finite too, as in the prob.dat check.
+    These are the chance terms' cell data: the 2D term reads ``prob`` and ``amount``, the
+    1D term ``amount`` only (``columns``). Every solver raises on them
+    (``solvers.utils._check_finite_cells``) and ``validate()`` reports them, with this one
+    message. A blank field reads as NaN; a non-numeric token (``-``) counts as non-finite
+    too, as in the prob.dat check.
     """
     pids = puvspr["pu"].to_numpy()
     found: list[str] = []
-    for column in ("prob", "amount"):
+    for column in columns:
         if column not in puvspr.columns:
             continue
         values = pd.to_numeric(puvspr[column], errors="coerce")
@@ -46,6 +49,68 @@ def _nonfinite_cells_error(puvspr: pd.DataFrame) -> str | None:
     if not found:
         return None
     return "pu_vs_features has non-finite values (NaN or infinite): " + "; ".join(found)
+
+
+# PROBMODE values: 0 none, 1 cost premium, 2 expected amounts (pymarxan extensions),
+# 3 Probability 2D, 4 Probability 1D, 5 both (Marxan 3's two chance terms).
+_PROBMODES = (0, 1, 2, 3, 4, 5)
+
+
+def _probmode_value(value: object) -> int | None:
+    """``PROBMODE`` as 0–5, or None when it is none of them (``validate()`` reports it).
+
+    The one parser of the parameter, shared by ``validate()`` and the solvers'
+    ``solvers.utils._probmode`` (which reads an invalid value as 0, "no probability").
+    A bool is not a mode (it would save as the text ``True``); an integral float or a
+    numeric string is.
+    """
+    if isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number.is_integer() and int(number) in _PROBMODES:
+        return int(number)
+    return None
+
+
+def _resolved_probmode(problem: ConservationProblem) -> int:
+    """The ``PROBMODE`` in force: an explicit valid value, else the default (pure).
+
+    The default is 1 with a probability table, else 0. An explicit invalid value means
+    0 (no probability) here and is reported by ``validate()``.
+    """
+    params = problem.parameters
+    if "PROBMODE" in params:
+        value = _probmode_value(params["PROBMODE"])
+        return 0 if value is None else value
+    return 1 if problem.probability is not None else 0
+
+
+def _requested_terms(mode: int) -> frozenset[str]:
+    """Chance terms requested by a PROBMODE: 3 → 2D, 4 → 1D, 5 → both."""
+    return {
+        3: frozenset({"2d"}), 4: frozenset({"1d"}), 5: frozenset({"1d", "2d"}),
+    }.get(mode, frozenset())
+
+
+def _range_error(name: str, ids: np.ndarray, values: pd.Series) -> list[str]:
+    """``validate()`` messages for a probability column: non-finite values (with the PU
+    ids) and finite values outside [0, 1]."""
+    vals = pd.to_numeric(values, errors="coerce").to_numpy(dtype=np.float64, na_value=np.nan)
+    errors: list[str] = []
+    finite = np.isfinite(vals)
+    if not finite.all():
+        bad = sorted({int(u) for u in ids[~finite]})
+        errors.append(
+            f"{name} has non-finite values (NaN or infinite) for planning unit IDs {bad}"
+        )
+    fin = vals[finite]
+    if ((fin < 0.0) | (fin > 1.0)).any():
+        bad = sorted({int(u) for u in ids[finite][(fin < 0.0) | (fin > 1.0)]})
+        errors.append(f"{name} values must be in range [0, 1] (planning unit IDs {bad})")
+    return errors
 
 
 def _probzerovar_value(value: object) -> int | None:
@@ -299,14 +364,34 @@ class ConservationProblem:
                     f"features: {sorted(unknown_features)}"
                 )
 
-            # The 2D chance term's cells (PROBMODE 3 with a puvspr prob column): every
-            # solver raises on a non-finite one, so report the PU ids here.
-            default_mode = 1 if self.probability is not None else 0
-            probmode = self.parameters.get("PROBMODE", default_mode)
-            if "prob" in self.pu_vs_features.columns and str(probmode).strip() == "3":
-                cells_error = _nonfinite_cells_error(self.pu_vs_features)
+            # The chance terms' cells: every solver raises on a non-finite one, so report
+            # the PU ids here. The 2D term (PROBMODE 3 / 5 with a puvspr prob column)
+            # reads prob and amount; the 1D term (PROBMODE 4 / 5) amount only.
+            requested = _requested_terms(_resolved_probmode(self))
+            cell_cols: tuple[str, ...] = ()
+            if "2d" in requested and "prob" in self.pu_vs_features.columns:
+                cell_cols = ("prob", "amount")
+            elif "1d" in requested:
+                cell_cols = ("amount",)
+            if cell_cols:
+                cells_error = _nonfinite_cells_error(self.pu_vs_features, cell_cols)
                 if cells_error is not None:
                     errors.append(cells_error)
+            # Presence probabilities in [0, 1], whatever the mode (finite values; the
+            # non-finite ones are the chance terms' cell check above).
+            if "prob" in self.pu_vs_features.columns:
+                pv_vals = pd.to_numeric(self.pu_vs_features["prob"], errors="coerce")
+                pv_fin = pv_vals[np.isfinite(pv_vals.to_numpy(dtype=np.float64))]
+                if ((pv_fin < 0.0) | (pv_fin > 1.0)).any():
+                    errors.append("pu_vs_features prob values must be in range [0, 1]")
+
+        # --- pu.dat prob: Probability 1D loss probability (Marxan 3 readPlanningUnits) ---
+        # Reported whatever the mode, even when no mode reads it (spec §5).
+        if "prob" in self.planning_units.columns and "id" in self.planning_units.columns:
+            errors.extend(_range_error(
+                "planning_units prob", self.planning_units["id"].to_numpy(),
+                self.planning_units["prob"],
+            ))
 
         # --- Boundary columns ---
         if self.boundary is not None:
@@ -361,6 +446,12 @@ class ConservationProblem:
                     )
 
         # --- Parameter validation ---
+        if "PROBMODE" in self.parameters and _probmode_value(self.parameters["PROBMODE"]) is None:
+            errors.append(
+                "PROBMODE must be 0 (none), 1 (cost premium), 2 (expected amounts), "
+                "3 (Probability 2D), 4 (Probability 1D) or 5 (1D and 2D), got "
+                f"{self.parameters['PROBMODE']!r}"
+            )
         if (
             "PROBZEROVAR" in self.parameters
             and _probzerovar_value(self.parameters["PROBZEROVAR"]) is None
