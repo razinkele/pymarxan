@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from shiny import App, Inputs, Outputs, Session, reactive, render, ui
 
+from pymarxan import __version__
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
@@ -44,6 +45,7 @@ from pymarxan_shiny.modules.data.feature_table import (
     feature_table_ui,
 )
 from pymarxan_shiny.modules.data_input.upload import upload_server, upload_ui
+from pymarxan_shiny.modules.help.about import about_modal
 from pymarxan_shiny.modules.mapping.comparison_map import (
     comparison_map_server,
     comparison_map_ui,
@@ -218,11 +220,20 @@ app_ui = ui.page_navbar(
         spatial_export_ui("spatial_export"),
         col_widths=[6, 6, 6, 6, 12, 12, 12, 12],
     )),
+    ui.nav_spacer(),
+    ui.nav_control(
+        ui.input_action_button("about_btn", "ⓘ About", class_="btn btn-sm btn-outline-secondary"),
+    ),
     title="pymarxan",
     id="navbar",
 )
 
 def server(input: Inputs, output: Outputs, session: Session):
+    @reactive.effect
+    @reactive.event(input.about_btn)
+    def _show_about():
+        ui.modal_show(about_modal(__version__))
+
     problem: reactive.Value[ConservationProblem | None] = reactive.value(None)
     solver_config: reactive.Value[dict] = reactive.value({
         "solver_type": "mip", "blm": 1.0, "num_solutions": 10, "seed": None,

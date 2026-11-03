@@ -38,6 +38,7 @@ from modules.connectivity.matrix_input import matrix_input_server, matrix_input_
 from modules.connectivity.metrics_viz import metrics_viz_server, metrics_viz_ui
 from modules.data.feature_table import feature_table_server, feature_table_ui
 from modules.data_input.upload import upload_server, upload_ui
+from modules.help.about import about_modal
 from modules.mapping.comparison_map import comparison_map_server, comparison_map_ui
 from modules.mapping.frequency_map import frequency_map_server, frequency_map_ui
 from modules.mapping.network_view import network_view_server, network_view_ui
@@ -175,59 +176,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.about_btn)
     def _show_about():
-        m = ui.modal(
-            ui.div(
-                ui.tags.div(
-                    ui.tags.span("🌊", style="font-size: 2.5rem;"),
-                    style="text-align: center; margin-bottom: 0.5rem;",
-                ),
-                ui.tags.h4(
-                    "PyMarxan",
-                    style="text-align: center; margin: 0 0 0.25rem 0; font-weight: 700;",
-                ),
-                ui.tags.p(
-                    f"Version {__version__}",
-                    style=(
-                        "text-align: center; color: var(--ocean-teal); "
-                        "font-weight: 600; margin-bottom: 1rem;"
-                    ),
-                ),
-                ui.tags.hr(style="border-color: rgba(15, 163, 177, 0.15);"),
-                ui.tags.p(
-                    "Systematic conservation planning tool powered by the Marxan "
-                    "optimization framework. Design efficient reserve networks that "
-                    "meet biodiversity targets while minimizing costs.",
-                    style="line-height: 1.6; color: var(--ocean-mid);",
-                ),
-                ui.tags.h6("Key Features", style="margin-top: 1rem; font-weight: 600;"),
-                ui.tags.ul(
-                    ui.tags.li("Import & manage spatial planning units"),
-                    ui.tags.li("Configure species & habitat feature targets"),
-                    ui.tags.li("Connectivity matrix analysis & visualization"),
-                    ui.tags.li("BLM, SPF & sensitivity calibration tools"),
-                    ui.tags.li("Simulated annealing & exact solvers"),
-                    ui.tags.li("Interactive maps with solution comparison"),
-                    ui.tags.li("Export results in standard Marxan formats"),
-                    style="color: var(--ocean-mid); line-height: 1.8; padding-left: 1.2rem;",
-                ),
-                ui.tags.hr(style="border-color: rgba(15, 163, 177, 0.15);"),
-                ui.tags.p(
-                    ui.tags.small(
-                        "Built with Shiny for Python · Ocean Palette Theme · "
-                        "© 2026 PyMarxan Project",
-                        style="color: var(--ocean-mid); opacity: 0.7;",
-                    ),
-                    style="text-align: center; margin-bottom: 0;",
-                ),
-            ),
-            title=ui.tags.span(
-                "🌊 About PyMarxan",
-                style="font-weight: 600;",
-            ),
-            easy_close=True,
-            size="m",
-        )
-        ui.modal_show(m)
+        ui.modal_show(about_modal(__version__))
 
     # Shared reactive state
     problem = reactive.Value(None)
