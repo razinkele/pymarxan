@@ -137,11 +137,16 @@ pymarxan (three-layer monorepo)
   `snap_barriers` (snap barrier points to nearest segment)
 
 ### Probability
-- Probability is the probability of **loss** per planning unit. Three modes:
+- Probability is the probability of **loss** per planning unit (prob.dat, or a `prob`
+  column in pu.dat). Modes:
   - Mode 1 (pymarxan extension): risk premium `γ·Σp·c·x` added to the objective
   - Mode 2 (pymarxan extension): targets judged on expected amounts `Σ a·(1−p)`
-  - Mode 3: based on Marxan's Probability 2D (per-cell probability of presence,
-    Z-score soft penalty against per-feature `ptarget`)
+  - Mode 3: Marxan 3's Probability 2D (per-cell probability of presence,
+    Z-score soft penalty against per-feature `ptarget2d`)
+  - Mode 4: Marxan 3's Probability 1D (per-unit loss probability, Z-score soft penalty
+    against `ptarget1d`); mode 5: both terms
+  - With no PROBMODE set the data selects the mode, with a warning when it differs from
+    v0.46's
 - Integrated in SA, heuristic, and MIP solvers
 
 ### Modern conservation planning

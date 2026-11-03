@@ -219,6 +219,10 @@ class ProblemCache:
     chance_cells: dict[str, ChanceCells] = field(
         default_factory=dict, compare=False, repr=False,
     )
+    # Both terms active (PROBMODE 5): the two terms' cells merged into one set of "virtual
+    # features" (1d feature j → j, 2d feature j → n_feat + j), so ChanceState previews a
+    # flip with one gather instead of two (``merge_chance_cells``). None otherwise.
+    chance_merged: ChanceCells | None = field(default=None, compare=False, repr=False)
     # feat_ptarget[j] = per-feature 2D probability target; ≤0 means disabled.
     feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # feat_ptarget1d[j] = per-feature 1D probability target (ptarget1d); ≤0 disabled.
@@ -614,6 +618,10 @@ class ProblemCache:
             chance_cells=chance_cells,
             feat_ptarget=feat_ptarget,
             feat_ptarget1d=feat_ptarget1d,
+            chance_merged=(
+                merge_chance_cells([chance_cells[t] for t in sorted(chance_cells)], n_feat)
+                if len(chance_cells) > 1 else None
+            ),
             feat_target2=feat_target2,
             feat_clumptype=feat_clumptype,
             feat_baseline_penalty=feat_baseline_penalty,
@@ -1013,6 +1021,43 @@ def _build_chance_cells(
         c_indptr=c_indptr, c_rows=cell_row[order], c_ev=ev.take(order, axis=1),
         f_abs_e=f_abs_e, f_terms=f_terms,
         r_indptr=r_indptr, r_rows=rows[r_order], r_e=row_e[r_order],
+    )
+
+
+def merge_chance_cells(cells: list[ChanceCells], n_feat: int) -> ChanceCells:
+    """One ``ChanceCells`` holding several terms' cells as virtual features: term ``t``'s
+    feature ``j`` becomes ``t·n_feat + j`` (PROBMODE 5: 1D then 2D).
+
+    The terms share the CSR structure (both come from ``build_pu_feature_csr``), so row
+    ``i`` of the merge is term 0's cells of row ``i`` then term 1's, still ascending; the
+    CSC and row-order arrays are the terms' concatenated. Every per-cell and per-feature
+    value is copied unchanged, so a merged ``ChanceState`` computes exactly what the
+    per-term ones would (one gather per flip instead of one per term).
+    """
+    base = cells[0]
+    rows = np.repeat(np.arange(len(base.indptr) - 1, dtype=np.int64), np.diff(base.indptr))
+    order = np.argsort(np.concatenate([rows] * len(cells)), kind="stable")
+    off = [t * n_feat for t in range(len(cells))]
+    c_off = np.cumsum([0] + [int(c.c_indptr[-1]) for c in cells])
+    r_off = np.cumsum([0] + [int(c.r_indptr[-1]) for c in cells])
+    ev = np.hstack([c.ev for c in cells])[:, order]
+    return ChanceCells(
+        indptr=base.indptr * len(cells),
+        indices=np.concatenate([c.indices + o for c, o in zip(cells, off)])[order],
+        ev=ev, abs_ev=np.abs(ev),
+        pos=np.concatenate([c.pos for c in cells])[order],
+        c_indptr=np.concatenate(
+            [cells[0].c_indptr[:1]] + [c.c_indptr[1:] + o for c, o in zip(cells, c_off)]
+        ),
+        c_rows=np.concatenate([c.c_rows for c in cells]),
+        c_ev=np.hstack([c.c_ev for c in cells]),
+        f_abs_e=np.concatenate([c.f_abs_e for c in cells]),
+        f_terms=np.concatenate([c.f_terms for c in cells]),
+        r_indptr=np.concatenate(
+            [cells[0].r_indptr[:1]] + [c.r_indptr[1:] + o for c, o in zip(cells, r_off)]
+        ),
+        r_rows=np.concatenate([c.r_rows for c in cells]),
+        r_e=np.concatenate([c.r_e for c in cells]),
     )
 
 

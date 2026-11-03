@@ -260,15 +260,32 @@ def test_commit_equals_preview_and_fresh_state(layout, mode):
         previews = cs._preview[3]
         cs.apply_flip(cache, idx, add)
         fresh = ChanceState.from_selection(cache, cs.selected)
-        for (name, t), (cols, EV2, _, N2, pen2) in zip(cs.terms.items(), previews):
+        # the hot path's states (one merged state under mode 5) equal their previews
+        for t, (cols, EV2, _, N2, pen2) in zip(cs._term_list, previews):
             np.testing.assert_array_equal(t.EV[:, cols], EV2)
             np.testing.assert_array_equal(t.N[cols], N2)
             np.testing.assert_array_equal(t.pen[cols], pen2)
+        # and the per-term views equal a fresh state
+        for name, t in cs.terms.items():
             f = fresh.terms[name]
             np.testing.assert_array_equal(t.N, f.N)
             np.testing.assert_allclose(t.E, f.E, rtol=1e-12, atol=1e-300)
             np.testing.assert_allclose(t.V, f.V, rtol=1e-12, atol=1e-300)
             np.testing.assert_allclose(t.pen, f.pen, rtol=0, atol=1e-12)
+
+
+def test_mode_5_previews_one_merged_state():
+    """Mode 5 runs one merged state (one gather per flip); the per-term views follow it."""
+    cache = ProblemCache.from_problem(mixed(4, mode=5))
+    assert cache.chance_merged is not None
+    cs = ChanceState.from_selection(cache, np.zeros(cache.n_pu, dtype=bool))
+    assert len(cs._term_list) == 1
+    cs.delta_penalty(cache, 0, True)
+    cs.apply_flip(cache, 0, True)
+    fresh = ChanceState.from_selection(cache, cs.selected)
+    for name in ("1d", "2d"):
+        np.testing.assert_allclose(cs.terms[name].EV, fresh.terms[name].EV, rtol=1e-12)
+    assert cs.penalty_total() == pytest.approx(fresh.penalty_total(), abs=1e-12)
 
 
 def test_mode_5_terms_use_their_own_ptarget():

@@ -182,10 +182,15 @@ class ChanceState:
         weight: float,
         zero_var_rule: str,
         targets: np.ndarray,
+        internal: list[_TermState] | None = None,
     ) -> None:
         self.selected = np.asarray(selected, dtype=bool)  # a mask, whatever the caller's dtype
+        # ``terms``: per-term state by name (views into ``internal``'s arrays when merged);
+        # ``internal``: the states the hot path updates — the terms themselves, or under
+        # PROBMODE 5 one merged state over virtual features (``cache.chance_merged``),
+        # whose ``targets`` are then tiled per term.
         self.terms = terms
-        self._term_list = list(terms.values())
+        self._term_list = list(terms.values()) if internal is None else internal
         self.weight = weight
         self.zero_var_rule = zero_var_rule
         self._met = zero_var_rule == "met"
@@ -235,10 +240,38 @@ class ChanceState:
                 cells=cells, EV=EV, B=_RESET * np.abs(EV), N=N, pen=pen,
                 ptarget=ptarget, ptarget_den=_ptarget_den(ptarget), knife=knife, thr=thr,
             )
+        targets = np.asarray(cache.feat_targets, dtype=np.float64)
+        merged = getattr(cache, "chance_merged", None)
+        if merged is None or len(terms) < 2:
+            return cls(
+                selected=sel, terms=terms, weight=float(cache.prob_weight),
+                zero_var_rule=cache.zero_var_rule, targets=targets,
+            )
+        # PROBMODE 5: one merged state (virtual features, term-major), per-term views.
+        parts = [terms[name] for name in sorted(terms)]
+
+        def cat(attr: str) -> np.ndarray | None:
+            arrs = [getattr(t, attr) for t in parts]
+            if arrs[0] is None:
+                return None
+            return np.concatenate(arrs, axis=-1)
+
+        m = _TermState(
+            cells=merged, EV=cat("EV"), B=cat("B"), N=cat("N"), pen=cat("pen"),  # type: ignore[arg-type]
+            ptarget=cat("ptarget"), ptarget_den=cat("ptarget_den"),  # type: ignore[arg-type]
+            knife=cat("knife"), thr=cat("thr"),
+        )
+        for k, name in enumerate(sorted(terms)):
+            sl = slice(k * n_feat, (k + 1) * n_feat)
+            t = terms[name]
+            terms[name] = _TermState(
+                cells=t.cells, EV=m.EV[:, sl], B=m.B[:, sl], N=m.N[sl], pen=m.pen[sl],
+                ptarget=t.ptarget, ptarget_den=t.ptarget_den, knife=t.knife, thr=t.thr,
+            )
         return cls(
             selected=sel, terms=terms, weight=float(cache.prob_weight),
-            zero_var_rule=cache.zero_var_rule,
-            targets=np.asarray(cache.feat_targets, dtype=np.float64),
+            zero_var_rule=cache.zero_var_rule, targets=np.tile(targets, len(parts)),
+            internal=[m],
         )
 
     # ------------------------------------------------------------------

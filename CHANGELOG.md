@@ -9,7 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `PROBZEROVAR 2`, the exact zero-variance rule for PROBMODE 3. A feature whose selected
+- **Probability 1D** (Marxan 3's `ComputeProbability1D`): a per-planning-unit probability of
+  loss from a `prob` column in pu.dat (else prob.dat) and a per-feature `ptarget1d`. Per
+  feature, over the selected units, `E = Σ a·(1 − p)` and `V = Σ a²·p·(1 − p)` (one term per
+  puvspr row), `Z = (target − E)/√V`, and the feature pays
+  `PROBABILITYWEIGHTING × (ptarget1d − P)/ptarget1d` when `ptarget1d > P`. New
+  **PROBMODE 4** (1D) and **PROBMODE 5** (1D + 2D, penalties added, as Marxan 3 does).
+  Simulated annealing and iterative improvement optimise it incrementally (`ChanceState`
+  gains the 1D term; each term scores against its own target); the evaluator, the MIP's
+  `drop` report and every solver's `Solution` report it in the new
+  `Solution.prob1d_shortfalls` / `prob1d_penalty`; mvbest writes `Prob1D_Gap`; the Shiny
+  target-met table shows `ptarget1d` / `P1D(met)` / `prob1d_gap`. The MIP's `piecewise` /
+  `socp` strategies raise and proportion decisions are rejected, as for mode 3.
+- spec.dat columns `ptarget1d` and `ptarget2d` (Marxan 3's names); `ptarget2d` is read into
+  the in-memory 2D target `ptarget`, and a file with both `ptarget` and `ptarget2d` must
+  agree. `ptarget1d` is overridable in scenarios.
+- Probability diagnostics (`_probability_diagnostics`): `load_project` and every top-level
+  solve warn when the data-selected PROBMODE differs from v0.46's, when an explicit mode
+  ignores the 1D or 2D targets, when a requested chance term has no data (it is then off),
+  when pu.dat `prob` is present under PROBMODE 1 / 2 (which read prob.dat only), and when
+  pu.dat `prob` and prob.dat disagree (pu.dat is used). Solves nested in another
+  (RunModePipeline's inner steps) stay silent. The greedy heuristic, Zonation and the zone
+  solvers warn that they ignore the chance terms; RunModePipeline warns for RUNMODE 1; the
+  Marxan binary wrapper warns that the binary switches its own terms on from the files, and
+  writes prob.dat loss probabilities into its temporary pu.dat when they are the 1D source.
+- `validate()` reports a PROBMODE outside 0–5, a pu.dat `prob` that is non-finite or
+  outside [0, 1] (whatever the mode), and a puvspr `prob` outside [0, 1].
+- Shiny: the probability panel offers PROBMODE 0–5 and follows the project's mode in force,
+  has a PROBZEROVAR control (0 / 1 / 2) and a help page; the feature table edits `ptarget`
+  and `ptarget1d` (−1 or (0, 1]); project upload shows the probability diagnostics.
+- The manual describes using Probability 1D for restoration and nature-recovery plans
+  (`prob` = the chance an action fails or its funding ends; Baker et al. 2025).
+
+- `PROBZEROVAR 2`, the exact zero-variance rule for the chance terms (PROBMODE 3–5). A feature whose selected
   cells carry no variance holds a certain amount: it is met outright (probability 1, no
   chance penalty) when that amount reaches its target within the deterministic targets'
   relative tolerance (amount ≥ target − 1e-7·|target|), and missed outright otherwise
@@ -17,7 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PROBABILITYWEIGHTING × (ptarget − 0)/ptarget`, i.e. `PROBABILITYWEIGHTING` for any
   `ptarget` in (0, 1]). A target of 0 gets a float-noise tolerance instead (amount ≥
   −n·eps·Σ|amounts|, over the feature's n puvspr rows), so an amount that is exactly 0 is
-  met in every row order while a genuinely negative one is short. Marxan's rule (`PROBZEROVAR 0`, Z = 4) stays the default and
+  met in every row order while a genuinely negative one is short. Marxan's rule
+  (`PROBZEROVAR 0`, Z = 4) stays the default and
   `PROBZEROVAR 1` ("met") is unchanged, so no existing result moves. The evaluator,
   `score_feature(s)`, simulated annealing and iterative improvement (`ChanceState`, which
   takes a zero-variance feature's decision from a sum in the evaluator's own row order, at
@@ -30,12 +63,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Ball, Possingham & Watts 2009; Watts et al. 2009; Hanson et al. 2024) and a note that
   pymarxan is independent of both projects.
 
+### Changed
+
+- **PROBMODE is selected from the data when unset** (in `_probmode`, so code-built and
+  `copy_with` problems get it too): a 1D source with any `ptarget1d > 0` → 4, a puvspr
+  `prob` column with any `ptarget > 0` → 3, both → 5, otherwise v0.46's default (1 with
+  prob.dat, else 0). Projects whose data now selects 3–5 change mode, with a warning naming
+  the old one — including Marxan-native projects with pu.dat `prob` + `ptarget1d` or puvspr
+  `prob` + `ptarget2d`, which used to warn about an unknown column and run without a chance
+  term. A prob.dat project that ran as mode 1 and now selects 4 **loses the PROBMODE 1 cost
+  premium** (modes 3–5 carry none); set `PROBMODE 1` to keep it. `rank_importance` (via
+  `compute_objective_terms`) changes with the mode.
+- `write_spec` writes `ptarget2d` (in `ptarget`'s position) and `ptarget1d`, each dropped
+  when all −1, and never `ptarget`: a legacy project is re-written in Marxan-native form.
+- `read_spec` always adds `ptarget1d` (−1) to the features table.
+- A PROBMODE outside 0–5 now means "no probability" in the solvers (it used to crash
+  `int()` for a non-numeric value), and `validate()` reports it.
+
 ### Fixed
 
 - `pymarxan.__version__` is read from the checkout's `pyproject.toml` when pymarxan runs from a
   source checkout, before falling back to install metadata. A deployment that imports the
   checkout without installing it (Shiny Server) showed `0.0.0+unknown` in the About dialog,
   and a stale editable install could report an old version.
+- The Shiny probability panel's weight slider no longer rewrites PROBMODE to the radio's
+  default (1) when moved.
 
 ## [0.47.2] — 2026-11-03
 

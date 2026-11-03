@@ -36,13 +36,15 @@ ROUNDS = 5
 
 def _make_probmode3_problem(
     n_pu: int = 500, n_features: int = 10, seed: int = 0, risk: str = "dense",
-    cells_per_pu: int = 5,
+    cells_per_pu: int = 5, mode: int = 3,
 ) -> ConservationProblem:
     """Synthetic PROBMODE 3 problem (the spec review's layout: ~``cells_per_pu`` feature
     cells per PU).
 
     ``risk="dense"``: presence q = 1 − p with loss p ~ U(0, 0.3) on every cell.
     ``risk="sparse"``: 1 % of PUs risky (p = 0.05, q = 0.95); every other cell q = 1.
+    ``mode`` 4 / 5 (v0.48): a pu.dat ``prob`` loss column with the same layout per PU (dense
+    p ~ U(0, 0.3); sparse 1 % of PUs at 0.05) and ``ptarget1d``; mode 4 drops the 2D term.
     """
     rng = np.random.default_rng(seed)
     pu_ids = np.arange(1, n_pu + 1)
@@ -68,9 +70,17 @@ def _make_probmode3_problem(
         "target": 0.4 * total, "spf": 1.0,
         "ptarget": rng.uniform(0.3, 0.95, n_features),
     })
+    if mode in (4, 5):
+        if risk == "dense":
+            pu["prob"] = rng.uniform(0.0, 0.3, n_pu)
+        else:
+            p1 = np.zeros(n_pu)
+            p1[rng.choice(n_pu, max(1, n_pu // 100), replace=False)] = 0.05
+            pu["prob"] = p1
+        features["ptarget1d"] = rng.uniform(0.3, 0.95, n_features)
     return ConservationProblem(
         planning_units=pu, features=features, pu_vs_features=pv,
-        parameters={"PROBMODE": 3, "BLM": 0.0},
+        parameters={"PROBMODE": mode, "BLM": 0.0},
     )
 
 
@@ -100,16 +110,20 @@ def _per_flip_seconds(
     return (time.perf_counter() - t0) / len(idxs)
 
 
+_TERMS = {3: {"2d"}, 4: {"1d"}, 5: {"1d", "2d"}}
+
+
 def _check_ratio(
     n_pu: int, n_feat: int, risk: str, cells_per_pu: int = 5, min_cells: int = 0,
+    mode: int = 3,
 ) -> None:
-    """Mode 3's per flip (cache + ChanceState) ≤ ``RATIO_BOUND`` × mode 0's (cache only),
-    printed; first checks that every feature holds more than ``min_cells`` cells."""
+    """Mode 3/4/5's per flip (cache + ChanceState) ≤ ``RATIO_BOUND`` × mode 0's (cache
+    only), printed; first checks that every feature holds more than ``min_cells`` cells."""
     problem = _make_probmode3_problem(n_pu, n_feat, seed=0, risk=risk,
-                                      cells_per_pu=cells_per_pu)
+                                      cells_per_pu=cells_per_pu, mode=mode)
     cache3 = ProblemCache.from_problem(problem)
-    assert cache3.chance_terms == {"2d"}
-    cells = np.diff(cache3.chance_cells["2d"].c_indptr)
+    assert cache3.chance_terms == _TERMS[mode]
+    cells = np.diff(cache3.chance_cells[sorted(_TERMS[mode])[0]].c_indptr)
     assert cells.min() > min_cells, f"a feature has only {cells.min()} cells"
     cache0 = ProblemCache.from_problem(problem.copy_with(parameters={"PROBMODE": 0}))
     rng = np.random.default_rng(1)
@@ -124,7 +138,7 @@ def _check_ratio(
     t0, t3, ratio = sorted(pairs, key=lambda p: p[2])[ROUNDS // 2]
     ratios = ", ".join(f"{p[2]:.2f}" for p in pairs)
     measured = (
-        f"PROBMODE 3 per flip {t3 * 1e6:.1f} µs = {ratio:.2f}× mode 0 ({t0 * 1e6:.1f} µs) "
+        f"PROBMODE {mode} per flip {t3 * 1e6:.1f} µs = {ratio:.2f}× mode 0 ({t0 * 1e6:.1f} µs) "
         f"at {n_pu}×{n_feat}, {risk} risk, {cells.mean():.0f} cells per feature "
         f"(median of paired rounds {ratios})"
     )
@@ -132,11 +146,13 @@ def _check_ratio(
     assert ratio <= RATIO_BOUND, f"{measured} (bound {RATIO_BOUND}×)."
 
 
+@pytest.mark.parametrize("mode", [3, 4, 5])
 @pytest.mark.parametrize("risk", ["dense", "sparse"])
 @pytest.mark.parametrize("n_pu, n_feat", [(2000, 20), (10_000, 50)])
-def test_probmode3_per_flip_within_6x_mode0(n_pu: int, n_feat: int, risk: str) -> None:
-    """Per-flip cost of mode 3 (cache + ChanceState) ≤ 6× mode 0 (cache only)."""
-    _check_ratio(n_pu, n_feat, risk)
+def test_probmode3_per_flip_within_6x_mode0(n_pu: int, n_feat: int, risk: str,
+                                            mode: int) -> None:
+    """Per-flip cost of modes 3/4/5 (cache + ChanceState) ≤ 6× mode 0 (cache only)."""
+    _check_ratio(n_pu, n_feat, risk, mode=mode)
 
 
 @pytest.mark.parametrize("n_pu, n_feat", [(2000, 20), (10_000, 50)])
