@@ -48,10 +48,21 @@ class RunModePipeline(Solver):
         return True
 
     def _probability_messages(self, problem: ConservationProblem) -> list[str]:
-        """RUNMODE 1 (heuristic only) ignores the chance terms; RUNMODEs 0 and 2–6 run SA or
-        II, which optimise them, so they say nothing (spec §3.1). The inner solves are
-        nested and silent."""
-        if int(problem.parameters.get("RUNMODE", self._runmode)) != 1:
+        """The pipeline's own message; its inner solves are nested and silent (spec §3.1).
+
+        On a ``ZonalProblem`` every RUNMODE runs zone solvers, which neither optimise nor
+        report the chance terms: their message, for every RUNMODE. Otherwise RUNMODE 1
+        (heuristic only) ignores the chance terms, and RUNMODEs 0 and 2–6 run SA or II,
+        which optimise them, so they say nothing.
+        """
+        from pymarxan.zones.model import ZonalProblem
+
+        runmode = int(problem.parameters.get("RUNMODE", self._runmode))
+        if isinstance(problem, ZonalProblem):
+            return _ignored_terms_messages(
+                problem, f"RUNMODE {runmode} (zone solvers)", zones=True,
+            )
+        if runmode != 1:
             return []
         return _ignored_terms_messages(problem, "RUNMODE 1 (heuristic only)")
 

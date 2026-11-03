@@ -260,8 +260,9 @@ _IN_SOLVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
-def _in_top_level_solve() -> bool:
-    """True inside a ``_solve_scope`` in this context (a nested solve)."""
+def _in_nested_solve() -> bool:
+    """True inside a ``_solve_scope`` in this context: a solve started now is nested, and
+    its probability diagnostics stay silent."""
     return _IN_SOLVE.get()
 
 

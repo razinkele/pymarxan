@@ -2,13 +2,15 @@
 
 Greedy, Zonation and the zone solvers ignore the chance terms during optimisation; the
 Marxan binary switches its own 1D / 2D terms on from the files; RunModePipeline says
-"ignored" for RUNMODE 1 (heuristic only) and nothing for the RUNMODEs where SA or II
-optimise the terms. Each message goes through the guarded emitter, so a nested solve (the
+"ignored" for RUNMODE 1 (heuristic only), nothing for the RUNMODEs where SA or II
+optimise the terms, and on a zone problem the zone solvers' message for every RUNMODE. Each
+message goes through the guarded emitter, so a nested solve (the
 pipeline's inner heuristic) stays silent.
 """
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -109,3 +111,55 @@ def test_binary_project_writes_prob_dat_loss_into_pu_dat():
     assert _binary_project(p).planning_units["prob"].tolist() == [0.1, 0.2, 0.0, 0.3]
     q = _problem(1, pu_prob=False, table=table)
     assert "prob" not in _binary_project(q).planning_units.columns
+
+
+ZONE_WORDING = "zone solvers neither optimise nor report"
+SINGLE_ZONE_WORDING = "Simulated annealing and iterative improvement optimise them"
+
+
+def _zone_problem():
+    from pymarxan.zones.readers import load_zone_project
+
+    z = load_zone_project(Path(__file__).resolve().parents[2] / "data" / "zones")
+    features = z.features.copy()
+    features["ptarget1d"] = 0.5
+    pu = z.planning_units.copy()
+    pu["prob"] = 0.2
+    z = z.copy_with(features=features, planning_units=pu)
+    z.parameters.update({"NUMITNS": 300, "NUMTEMP": 10})
+    return z
+
+
+@pytest.mark.parametrize("runmode", [0, 1, 6])
+def test_zone_pipeline_says_the_zone_solvers_ignore_the_terms_once(runmode):
+    """Review M-1: the inner zone solvers run nested (silent), so the pipeline itself says
+    they ignore the chance terms, once per solve, for every RUNMODE, with the zone wording
+    (zone Solutions carry no chance fields)."""
+    z = _zone_problem()
+    z.parameters["RUNMODE"] = runmode
+    msgs = _record(lambda: RunModePipeline(runmode=runmode).solve(
+        z, SolverConfig(num_solutions=2, seed=1)))
+    ignored = [m for m in msgs if IGNORED in m]
+    assert len(ignored) == 1, msgs
+    assert ZONE_WORDING in ignored[0]
+    assert SINGLE_ZONE_WORDING not in ignored[0]
+
+
+def test_zone_pipeline_says_nothing_without_chance_terms():
+    z = _zone_problem()
+    z.parameters["PROBMODE"] = 0
+    assert RunModePipeline(runmode=0)._probability_messages(z) == []
+
+
+@pytest.mark.parametrize("runmode", [0, 6])
+def test_single_zone_sa_and_ii_runmodes_emit_nothing(runmode):
+    msgs = _record(lambda: RunModePipeline(runmode=runmode).solve(
+        _problem(), SolverConfig(num_solutions=2, seed=1)))
+    assert not any(IGNORED in m for m in msgs)
+
+
+def test_single_zone_runmode_1_keeps_the_single_zone_wording():
+    msgs = _record(lambda: RunModePipeline(runmode=1).solve(
+        _problem(), SolverConfig(num_solutions=2, seed=1)))
+    (m,) = [m for m in msgs if IGNORED in m]
+    assert SINGLE_ZONE_WORDING in m and ZONE_WORDING not in m

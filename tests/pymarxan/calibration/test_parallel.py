@@ -197,6 +197,39 @@ def test_parallel_sweep_keeps_probability_table():
     )
 
 
+def _mode4_problem() -> ConservationProblem:
+    """PROBMODE 4 (Probability 1D) whose only 1D source is a prob.dat table."""
+    pu = pd.DataFrame({"id": [1, 2, 3], "cost": [10.0, 12.0, 8.0], "status": [0, 0, 0]})
+    feat = pd.DataFrame({"id": [1], "name": ["f1"], "target": [5.0], "spf": [100.0],
+                         "ptarget1d": [0.9]})
+    puvspr = pd.DataFrame({"species": [1, 1, 1], "pu": [1, 2, 3], "amount": [3.0, 4.0, 5.0]})
+    prob = pd.DataFrame({"pu": [1, 2, 3], "probability": [0.5, 0.1, 0.9]})
+    return ConservationProblem(
+        planning_units=pu, features=feat, pu_vs_features=puvspr, probability=prob,
+        parameters={"PROBMODE": 4, "PROBABILITYWEIGHTING": 2.0},
+    )
+
+
+def test_parallel_sweep_keeps_the_prob_dat_1d_source():
+    """Spec §4: a mode-4 objective from prob.dat agrees between run_sweep and
+    run_sweep_parallel; the 1D penalty would vanish if the workers dropped the table."""
+    from pymarxan.calibration.sweep import run_sweep
+    from pymarxan.solvers.heuristic import HeuristicSolver
+
+    problem = _mode4_problem()
+    config = SweepConfig(
+        param_dicts=[{"BLM": 0.0}, {"BLM": 1.0}],
+        solver_config=SolverConfig(num_solutions=1, seed=42),
+    )
+    seq = run_sweep(problem, HeuristicSolver(), config)
+    par = run_sweep_parallel(problem, HeuristicSolver(), config, max_workers=2)
+    assert all(s.prob1d_penalty for s in seq.solutions)  # the term is really on
+    assert par.objectives == pytest.approx(seq.objectives, rel=1e-12)
+    assert [s.prob1d_penalty for s in par.solutions] == pytest.approx(
+        [s.prob1d_penalty for s in seq.solutions], rel=1e-12,
+    )
+
+
 def test_parallel_sweep_keeps_subclass_and_optional_tables():
     """The workers see the problem's subclass, probability and connectivity tables."""
     base = _mode1_problem()

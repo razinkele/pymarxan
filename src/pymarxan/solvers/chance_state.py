@@ -25,10 +25,14 @@ reset is starting slack, not a bound on the recompute's own summation error, whi
 with the number of selected cells (it can exceed ``4·eps·|value|`` by a factor that also
 grows with that number: about 2x at 10^3 cells, over 10x at 10^5); the per-update
 increments are true bounds. When
-``nonzero`` reaches 0, ``E`` and ``V`` snap to the exact sums of the remaining
-zero-variance cells (``V = 0``). Zero variance itself is the exact count, never a
-tolerance on ``V``; the scorer also applies Marxan's ``V > 0`` test, which after the
-recompute only decides when a ``q`` outside [0, 1] leaves ``V ≤ 0`` beside counted cells.
+``nonzero`` reaches 0, ``E`` snaps to the exact sum of the remaining cells and ``V`` to 0.
+That is exact for probabilities in [0, 1], where every remaining cell has ``v = 0``. A
+``p`` or ``q`` outside [0, 1] gives cells with ``v < 0``, which the snap discards, so ``V``
+can differ from the evaluator's sum there: such inputs are not handled exactly
+(``validate()`` reports them; the 2D term has always behaved so). Zero variance itself is
+the exact count, never a tolerance on ``V``; the scorer also applies Marxan's ``V > 0``
+test, which after the recompute only decides when such out-of-range cells leave ``V ≤ 0``
+beside counted cells.
 
 Exact rule's knife edge (``PROBZEROVAR 2``). Under Marxan's rule (0) and "met" (1) a
 zero-variance feature's penalty does not depend on ``E``. Under the exact rule it steps at
@@ -225,6 +229,7 @@ class ChanceState:
             ptarget = term_ptarget(cache, name)
             knife = thr = zero_tol = None
             if cache.zero_var_rule == "exact":
+                assert cells.f_abs_e is not None and cells.f_terms is not None  # per term
                 n_terms = np.maximum(_KNIFE_MIN_TERMS, cells.f_terms)
                 knife = 3.0 * n_terms * EPS * cells.f_abs_e
                 zero_tol = _zero_target_tol(cells.f_abs_e, cells.f_terms)

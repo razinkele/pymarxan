@@ -85,9 +85,10 @@ class ChanceCells:
     ``v = a·a·p·(1 − p)``, built from ``p`` directly.
 
     Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|e|`` over the feature's puvspr rows,
-    and ``f_terms`` = ``n_j``, the number of those
-    terms. Any float sum of the feature's terms over any selection — the evaluator's
-    row-by-row sum, a fresh column sum of the cells — is within
+    and ``f_terms`` = ``n_j``, the number of those terms (one term's cells only: None in
+    ``merge_chance_cells``'s merge, whose state takes each term's knife-edge window and
+    thresholds from the per-term cells). Any float sum of the feature's terms over any
+    selection — the evaluator's row-by-row sum, a fresh column sum of the cells — is within
     ``γ_{n_j−1}·S_j ≈ (n_j − 1)·u·S_j`` of the exact sum; ``ChanceState``'s exact-rule
     knife-edge window is built on it.
 
@@ -106,11 +107,11 @@ class ChanceCells:
     c_indptr: np.ndarray
     c_rows: np.ndarray
     c_ev: np.ndarray
-    f_abs_e: np.ndarray
-    f_terms: np.ndarray
     r_indptr: np.ndarray
     r_rows: np.ndarray
     r_e: np.ndarray
+    f_abs_e: np.ndarray | None = None
+    f_terms: np.ndarray | None = None
 
     @property
     def c_e(self) -> np.ndarray:
@@ -1030,9 +1031,12 @@ def merge_chance_cells(cells: list[ChanceCells], n_feat: int) -> ChanceCells:
 
     The terms share the CSR structure (both come from ``build_pu_feature_csr``), so row
     ``i`` of the merge is term 0's cells of row ``i`` then term 1's, still ascending; the
-    CSC and row-order arrays are the terms' concatenated. Every per-cell and per-feature
-    value is copied unchanged, so a merged ``ChanceState`` computes exactly what the
-    per-term ones would (one gather per flip instead of one per term).
+    CSC and row-order arrays are the terms' concatenated, each offset by the earlier terms'
+    cells (``c_indptr``) or puvspr rows (``r_indptr``: more than cells with duplicate
+    ``(pu, species)`` rows). Every per-cell value is copied unchanged, so a merged
+    ``ChanceState`` computes exactly what the per-term ones would (one gather per flip
+    instead of one per term). ``f_abs_e`` / ``f_terms`` are not merged (None): the state
+    builds the knife-edge window and thresholds per term and concatenates them.
     """
     base = cells[0]
     rows = np.repeat(np.arange(len(base.indptr) - 1, dtype=np.int64), np.diff(base.indptr))
@@ -1051,8 +1055,6 @@ def merge_chance_cells(cells: list[ChanceCells], n_feat: int) -> ChanceCells:
         ),
         c_rows=np.concatenate([c.c_rows for c in cells]),
         c_ev=np.hstack([c.c_ev for c in cells]),
-        f_abs_e=np.concatenate([c.f_abs_e for c in cells]),
-        f_terms=np.concatenate([c.f_terms for c in cells]),
         r_indptr=np.concatenate(
             [cells[0].r_indptr[:1]] + [c.r_indptr[1:] + o for c, o in zip(cells, r_off)]
         ),

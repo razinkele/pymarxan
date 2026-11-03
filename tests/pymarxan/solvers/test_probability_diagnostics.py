@@ -28,7 +28,7 @@ from pymarxan.solvers.run_mode import RunModePipeline
 from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
 from pymarxan.solvers.utils import (
     _emit_probability_diagnostics,
-    _in_top_level_solve,
+    _in_nested_solve,
     _probability_diagnostics,
     _probmode,
     _solve_scope,
@@ -207,15 +207,15 @@ class TestEmitter:
 
     def test_nested_solve_is_silent_and_the_guard_resets(self):
         problem = _problem()
-        assert not _in_top_level_solve()
+        assert not _in_nested_solve()
 
         def outer():
             SimulatedAnnealingSolver().solve(problem, SolverConfig(num_solutions=1, seed=1))
 
         with pytest.raises(RuntimeError), _solve_scope():
-            assert _in_top_level_solve()
+            assert _in_nested_solve()
             raise RuntimeError("boom")
-        assert not _in_top_level_solve()  # reset in finally
+        assert not _in_nested_solve()  # reset in finally
         assert sum(DIFFERS in m for m in _record(outer)) == 1
 
     def test_a_copied_context_inside_a_solve_stays_silent(self):
@@ -227,4 +227,4 @@ class TestEmitter:
             seen.append(_record(lambda: ctx.run(
                 HeuristicSolver().solve, problem, SolverConfig(num_solutions=1))))
         assert seen == [[]]
-        assert not _in_top_level_solve()
+        assert not _in_nested_solve()
