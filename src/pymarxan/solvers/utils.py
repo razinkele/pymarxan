@@ -345,6 +345,27 @@ _MODE_NAMES = {
 }
 
 
+def _ignored_terms_messages(
+    problem: ConservationProblem, who: str, *, zones: bool = False,
+) -> list[str]:
+    """The "ignores the chance terms" message of a solver that cannot optimise them
+    (greedy, Zonation, the zone solvers, RunModePipeline RUNMODE 1), or none when no chance
+    term is requested (``_chance_terms``)."""
+    if not _chance_terms(problem):
+        return []
+    mode = _probmode(problem)
+    if zones:
+        return [
+            f"{who} ignores the chance terms (PROBMODE {mode}): zone solvers neither "
+            "optimise nor report Probability 1D / 2D."
+        ]
+    return [
+        f"{who} ignores the chance terms (PROBMODE {mode}) during optimisation; the "
+        "reported objective and Solution include them. Simulated annealing and iterative "
+        "improvement optimise them."
+    ]
+
+
 def _emit_probability_diagnostics(
     problem: ConservationProblem, extra: Iterable[str] = (), stacklevel: int = 3,
 ) -> None:

@@ -9,7 +9,7 @@ import numpy as np
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.cooling import CoolingSchedule
-from pymarxan.solvers.utils import _emit_probability_diagnostics
+from pymarxan.solvers.utils import _emit_probability_diagnostics, _ignored_terms_messages
 from pymarxan.zones.cache import ZoneProblemCache
 from pymarxan.zones.model import ZonalProblem, fixed_zones, warn_zone_input_issues
 from pymarxan.zones.objective import build_zone_solution
@@ -51,6 +51,10 @@ class ZoneSASolver(Solver):
     def supports_separation(self) -> bool:
         # Per-zone SEPDISTANCE / SEPNUM deferred to v0.3 (round-3 H1).
         return False
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """Zone solvers ignore the chance terms (spec §3.1)."""
+        return _ignored_terms_messages(problem, self.name(), zones=True)
 
     def solve(
         self,

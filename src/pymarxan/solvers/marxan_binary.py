@@ -13,9 +13,28 @@ import numpy as np
 from pymarxan.io.writers import save_project
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
+from pymarxan.solvers.utils import (
+    _active_chance_terms,
+    _emit_probability_diagnostics,
+    _loss_probability_vector,
+    _probmode,
+    build_solution,
+)
 
 _BINARY_NAMES = ["Marxan_x64", "marxan", "Marxan", "marxan_x64"]
+
+
+def _binary_project(problem: ConservationProblem) -> ConservationProblem:
+    """The problem as written for the binary: when the 1D term is active and its source is
+    prob.dat only, the loss probabilities go into a pu.dat ``prob`` column (Marxan 3 reads
+    Probability 1D from pu.dat only, ``readPlanningUnits``)."""
+    pu = problem.planning_units
+    if "1d" not in _active_chance_terms(problem) or "prob" in pu.columns:
+        return problem
+    idx = {int(u): i for i, u in enumerate(pu["id"])}
+    return problem.copy_with(
+        planning_units=pu.assign(prob=_loss_probability_vector(problem, idx, len(pu))),
+    )
 
 
 class MarxanBinarySolver(Solver):
@@ -34,6 +53,22 @@ class MarxanBinarySolver(Solver):
         if self._binary_path is not None:
             return True
         return self._find_binary() is not None
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """The Marxan 3 binary switches its own 1D / 2D terms on from the files it is given
+        (a pu.dat ``prob`` column, a puvspr ``prob`` header), whatever PROBMODE says."""
+        written = _binary_project(problem)
+        has_1d = "prob" in written.planning_units.columns
+        has_2d = "prob" in written.pu_vs_features.columns
+        if not (has_1d or has_2d):
+            return []
+        parts = [n for n, on in (("pu.dat prob (Probability 1D)", has_1d),
+                                 ("puvspr prob (Probability 2D)", has_2d)) if on]
+        return [
+            "The Marxan binary switches its own chance terms on from the project files ("
+            + " and ".join(parts) + f"), whatever PROBMODE ({_probmode(problem)}) says; "
+            "spec.dat carries ptarget1d / ptarget2d. (Marxan v4's handling is not verified.)"
+        ]
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None
@@ -63,8 +98,9 @@ class MarxanBinarySolver(Solver):
             run_params["SAVEBEST"] = 3
             run_params["OUTPUTDIR"] = "output"
             run_params["SCENNAME"] = "output"
-            problem_copy = problem.copy_with(
-                planning_units=problem.planning_units.copy(),
+            written = _binary_project(problem)
+            problem_copy = written.copy_with(
+                planning_units=written.planning_units.copy(),
                 features=problem.features.copy(),
                 pu_vs_features=problem.pu_vs_features.copy(),
                 boundary=problem.boundary.copy() if problem.boundary is not None else None,

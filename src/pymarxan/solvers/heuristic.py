@@ -13,6 +13,7 @@ from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
 from pymarxan.solvers.utils import (
     _emit_probability_diagnostics,
+    _ignored_terms_messages,
     _probability_map,
     _probmode,
     build_solution,
@@ -55,6 +56,10 @@ class HeuristicSolver(Solver):
 
     def supports_space(self) -> bool:
         return True
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """It ignores the chance terms while selecting (spec §3.5)."""
+        return _ignored_terms_messages(problem, "The greedy heuristic")
 
     def solve(
         self,

@@ -6,7 +6,7 @@ import numpy as np
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import _emit_probability_diagnostics
+from pymarxan.solvers.utils import _emit_probability_diagnostics, _ignored_terms_messages
 from pymarxan.zones.model import (
     PUZoneRule,
     ZonalProblem,
@@ -34,6 +34,10 @@ class ZoneHeuristicSolver(Solver):
     def supports_separation(self) -> bool:
         # Per-zone SEPDISTANCE / SEPNUM deferred to v0.3 (round-3 H1).
         return False
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """Zone solvers ignore the chance terms (spec §3.1)."""
+        return _ignored_terms_messages(problem, self.name(), zones=True)
 
     def solve(
         self,

@@ -15,7 +15,11 @@ from typing import Any
 
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import _emit_probability_diagnostics, _solve_scope
+from pymarxan.solvers.utils import (
+    _emit_probability_diagnostics,
+    _ignored_terms_messages,
+    _solve_scope,
+)
 
 _VALID_RUNMODES = frozenset(range(7))
 
@@ -42,6 +46,14 @@ class RunModePipeline(Solver):
 
     def supports_zones(self) -> bool:
         return True
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """RUNMODE 1 (heuristic only) ignores the chance terms; RUNMODEs 0 and 2–6 run SA or
+        II, which optimise them, so they say nothing (spec §3.1). The inner solves are
+        nested and silent."""
+        if int(problem.parameters.get("RUNMODE", self._runmode)) != 1:
+            return []
+        return _ignored_terms_messages(problem, "RUNMODE 1 (heuristic only)")
 
     def solve(
         self,

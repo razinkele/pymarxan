@@ -9,7 +9,11 @@ from pymarxan.models.problem import (
     ConservationProblem,
 )
 from pymarxan.solvers.base import Solution, Solver, SolverConfig
-from pymarxan.solvers.utils import _emit_probability_diagnostics, build_solution
+from pymarxan.solvers.utils import (
+    _emit_probability_diagnostics,
+    _ignored_terms_messages,
+    build_solution,
+)
 from pymarxan.zonation.rank_removal import rank_removal
 from pymarxan.zonation.smoothing import GridSmoothingSpec, SmoothingSpec
 
@@ -56,6 +60,10 @@ class ZonationSolver(Solver):
         self.weights = weights
         self.use_cost = use_cost
         self.smoothing = smoothing
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """It ignores the chance terms while selecting (spec §3.5)."""
+        return _ignored_terms_messages(problem, "Zonation")
 
     def solve(
         self, problem: ConservationProblem, config: SolverConfig | None = None

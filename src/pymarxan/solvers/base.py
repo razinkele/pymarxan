@@ -143,13 +143,14 @@ class Solver(ABC):
         return True
 
     def supports_probmode3(self) -> bool:
-        """Whether this solver supports PROBMODE 3 (Z-score chance constraints).
+        """Whether this solver supports the chance terms (PROBMODE 3, 4 and 5: Marxan's
+        Probability 2D, 1D and both). The name predates Probability 1D.
 
-        Defaults to True. Solvers that genuinely cannot run under PROBMODE 3
-        (no native or fallback path) override to False so dispatchers and UI
-        can pre-filter. MIPSolver/ZoneMIPSolver keep this True because they
-        fall back to ``mip_chance_strategy='drop'`` (deterministic solve,
-        post-hoc chance-constraint reporting).
+        Defaults to True, meaning "optimises them or has a fallback": greedy, Zonation and
+        the zone solvers ignore the terms while selecting (each says so in a warning) and
+        ``build_solution`` reports them; MIPSolver / ZoneMIPSolver fall back to
+        ``mip_chance_strategy='drop'`` (deterministic solve, post-hoc report). A solver with
+        neither overrides this to False so dispatchers and UI can pre-filter.
         """
         return True
 

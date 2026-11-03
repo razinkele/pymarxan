@@ -24,7 +24,7 @@ from pymarxan.solvers.presolve import (
     _presolve_data,
     _validate_presolve_flag,
 )
-from pymarxan.solvers.utils import _emit_probability_diagnostics
+from pymarxan.solvers.utils import _emit_probability_diagnostics, _ignored_terms_messages
 from pymarxan.zones.diagnostics import (
     ZoneMIPNoSolutionWarning,
     _feature_groups,
@@ -275,6 +275,10 @@ class ZoneMIPSolver(Solver):
         built = self._build(problem, config or SolverConfig())
         _emit_presolve(self.presolve_check, data, built.model, self.name(), stacklevel=3)
         return built.model
+
+    def _probability_messages(self, problem: ConservationProblem) -> list[str]:
+        """Zone solvers ignore the chance terms (spec §3.1)."""
+        return _ignored_terms_messages(problem, self.name(), zones=True)
 
     def solve(  # type: ignore[override]
         self, problem: ZonalProblem, config: SolverConfig | None = None
