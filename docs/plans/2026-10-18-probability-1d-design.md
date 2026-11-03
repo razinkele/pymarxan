@@ -248,7 +248,16 @@ One function scores a feature from `(E, V, nonzero, target, ptarget, zero_var_ru
   under `PROBZEROVAR = 1`: penalty 0 and shortfall 0 ("met", shipped in v0.47.0); under
   `PROBZEROVAR = 2` (release B, B0; decision below): the exact limit — the amount is certain,
   so P = 1 if E ≥ target − 1e-7·|target| (z = −inf, shortfall 0, penalty 0), else P = 0
-  (z = +inf, shortfall = ptarget, penalty 1).
+  (z = +inf, shortfall = ptarget, penalty 1). **Target 0 (user, 2026-11-03, B0 review M-2):**
+  the relative tolerance is 0 there, so float summation order alone decided met or short (0.82
+  + 0.01 − 0.83 sums to 0.0 or −8.7e-18 by row order); the threshold for a target of 0 is
+  `−n_j·eps·S_j` (`S_j = Σ|a·q|` over the feature's puvspr rows, `n_j` their count), a bound
+  on that rounding. An amount that is 0 in exact arithmetic is met in every order; a genuinely
+  negative amount is still short. Targets ≠ 0 are unchanged. **Summation order (B0 review
+  M-1):** `ChanceState` takes each exact-rule zero-variance decision from a sum in the
+  evaluator's order (the feature's puvspr rows in row order), at construction and on a window
+  recompute, so the two agree for any planning-unit or puvspr ordering and duplicate rows; the
+  evaluator's own order is unchanged (PROBZEROVAR 0 / 1 stay bit-identical).
 - otherwise `Z = (target − E)/√V`, `P = norm.sf(Z)`, penalty and shortfall as in §1.
 
 The core is `score_feature(E, V, nonzero, target, ptarget, zero_var_rule) -> FeatureChance`
