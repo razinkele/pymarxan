@@ -75,7 +75,7 @@ def _reject_nonbinary(
         return
     causes: list[str] = []
     if _chance_terms(problem):
-        causes.append("PROBMODE 3 (Z-score chance constraints)")
+        causes.append(f"PROBMODE {_probmode(problem)} (Z-score chance constraints)")
     causes += _nonbinary_conflicts(problem)
     if config.metadata and config.metadata.get("forbidden_selections"):
         causes.append(
@@ -475,7 +475,7 @@ class MIPSolver(Solver):
         _reject_nonbinary(problem, config, self.decisions)
         binary = self.decisions == "binary"
 
-        # PROBMODE 3 gating — see class docstring for rationale.
+        # Chance-term gating (PROBMODE 3–5) — see class docstring for rationale.
         probmode = _probmode(problem)
         chance_terms = _chance_terms(problem)
         if chance_terms:

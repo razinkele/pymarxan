@@ -49,9 +49,10 @@ def test_2d_term_without_puvspr_prob_is_requested_but_not_active() -> None:
     assert _active_chance_terms(p) == frozenset()
 
 
-@pytest.mark.parametrize("mode", [4, 5, 7, -1])
-def test_other_modes_request_nothing_in_release_a(mode: int) -> None:
-    """Modes 4 / 5 (Probability 1D) arrive in release B; until then they request nothing."""
+@pytest.mark.parametrize("mode", [7, -1])
+def test_invalid_modes_request_nothing(mode: int) -> None:
+    """Rewritten (v0.48.0): modes 4 / 5 now request the 1D term (test_probability1d.py);
+    a value outside 0-5 requests nothing (and validate() reports it)."""
     p = _problem({"PROBMODE": mode})
     assert _chance_terms(p) == frozenset()
     assert _active_chance_terms(p) == frozenset()

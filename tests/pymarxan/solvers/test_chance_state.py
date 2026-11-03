@@ -809,7 +809,7 @@ def test_an_int_selection_gives_the_same_recompute() -> None:
     base = ChanceState.from_selection(cache, sel)
     cs = ChanceState(
         selected=sel.astype(np.int8), terms=base.terms, weight=base.weight,
-        zero_var_rule=base.zero_var_rule, targets=base.targets, ptargets=base.ptargets,
+        zero_var_rule=base.zero_var_rule, targets=base.targets,
     )
     assert cs.selected.dtype == np.bool_
     for idx in rng.integers(cache.n_pu, size=10).tolist():

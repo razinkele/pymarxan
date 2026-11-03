@@ -61,6 +61,7 @@ from pymarxan.solvers.probability import DEFAULT_ZERO_VAR_RULE
 from pymarxan.solvers.utils import (
     _active_chance_terms,
     _check_finite_cells,
+    _loss_probability_vector,
     _probability_vector,
     _probmode,
     _zero_var_rule,
@@ -81,9 +82,11 @@ class ChanceCells:
     The feature-major (CSC) copy — ``c_indptr`` / ``c_rows`` / ``c_ev`` (rows ``c_e`` /
     ``c_v``, each C-contiguous), rows ascending within a feature — serves
     ``ChanceState``'s per-feature recompute. For the 2D term (puvspr ``prob`` = ``q``, the
-    probability of presence): ``e = a·q``, ``v = a²·q·(1 − q)``.
+    probability of presence): ``e = a·q``, ``v = a²·q·(1 − q)``. For the 1D term (the PU's
+    loss probability ``p``, Marxan 3 ``ReturnProbabilityAmounts1D``): ``e = a·(1 − p)``,
+    ``v = a·a·p·(1 − p)``, built from ``p`` directly.
 
-    Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|a·q|`` over the feature's puvspr rows
+    Per feature: ``f_abs_e`` = ``S_j``, the sum of ``|e|`` over the feature's puvspr rows
     (and ``|e|`` of any cell no row names), and ``f_terms`` = ``n_j``, the number of those
     terms. Any float sum of the feature's terms over any selection — the evaluator's
     row-by-row sum, a fresh column sum of the cells — is within
@@ -190,14 +193,15 @@ class ProblemCache:
     cost_thresh: float
     thresh_pen1: float
     thresh_pen2: float
-    # Chance terms (PROBMODE 3, Z-score chance constraints). The cache holds only the
+    # Chance terms (PROBMODE 3–5, Z-score chance constraints). The cache holds only the
     # immutable per-cell contributions (``chance_cells``); the running per-feature state and
     # the penalty live in the ``ChanceState`` sidecar (solvers/chance_state.py), so neither
     # ``compute_full_objective`` nor ``compute_delta_objective`` includes the chance term.
     probmode: int = 0
     prob_weight: float = 1.0
     # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
-    # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
+    # ``"2d"`` = the Z-score term from the puvspr ``prob`` column, ``"1d"`` = the one from
+    # the per-PU loss probability (pu.dat ``prob``, else prob.dat).
     chance_terms: frozenset[str] = frozenset()
     # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan", "met" or
     # "exact".
@@ -208,8 +212,10 @@ class ProblemCache:
     chance_cells: dict[str, ChanceCells] = field(
         default_factory=dict, compare=False, repr=False,
     )
-    # feat_ptarget[j] = per-feature probability target; ≤0 means disabled.
+    # feat_ptarget[j] = per-feature 2D probability target; ≤0 means disabled.
     feat_ptarget: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # feat_ptarget1d[j] = per-feature 1D probability target (ptarget1d); ≤0 disabled.
+    feat_ptarget1d: np.ndarray = field(default_factory=lambda: np.zeros(0))
     # Phase 19 clumping (TARGET2 / CLUMPTYPE / type-4 species). All-zero /
     # inactive when no feature has target2 > 0, so non-clumping problems
     # pay zero per-flip cost.
@@ -393,17 +399,22 @@ class ProblemCache:
         # ComputeProbability2D: E += amount·prob, V += amount²·prob·(1 − prob)) — the
         # opposite polarity to PROBMODE 2 (per-PU loss probability, held a·(1 − p)).
         chance_cells: dict[str, ChanceCells] = {}
-        if "2d" in chance_terms:
-            chance_cells["2d"] = _build_chance_cells_2d(
-                problem, pu_id_to_idx, feat_id_to_col, pu_feat_csr,
+        for term in sorted(chance_terms):
+            chance_cells[term] = _build_chance_cells(
+                problem, pu_id_to_idx, feat_id_to_col, pu_feat_csr, term,
             )
 
-        # Per-feature probability target; default -1 (disabled sentinel) for
-        # legacy specs without a ptarget column (read_spec already fills this).
-        if "ptarget" in feat_df.columns:
-            feat_ptarget = np.asarray(feat_df["ptarget"].values, dtype=np.float64)
-        else:
-            feat_ptarget = np.full(n_feat, -1.0, dtype=np.float64)
+        # Per-feature probability targets; default -1 (disabled sentinel) for
+        # specs without the column (read_spec fills both; code-built problems may not).
+        def _ptarget_array(column: str) -> np.ndarray:
+            if column in feat_df.columns:
+                return np.asarray(
+                    feat_df[column].astype(float).fillna(-1.0).values, dtype=np.float64,
+                )
+            return np.full(n_feat, -1.0, dtype=np.float64)
+
+        feat_ptarget = _ptarget_array("ptarget")
+        feat_ptarget1d = _ptarget_array("ptarget1d")
 
         # Phase 19 clumping precompute (target2, clumptype, baseline_penalty,
         # feat_uses_pu). Defaults match read_spec's legacy fill: target2=0
@@ -595,6 +606,7 @@ class ProblemCache:
             zero_var_rule=zero_var_rule,
             chance_cells=chance_cells,
             feat_ptarget=feat_ptarget,
+            feat_ptarget1d=feat_ptarget1d,
             feat_target2=feat_target2,
             feat_clumptype=feat_clumptype,
             feat_baseline_penalty=feat_baseline_penalty,
@@ -941,35 +953,46 @@ class ProblemCache:
         return total
 
 
-def _build_chance_cells_2d(
+def _build_chance_cells(
     problem: ConservationProblem,
     pu_id_to_idx: dict[int, int],
     feat_id_to_col: dict[int, int],
     pu_feat_csr: csr_matrix,
+    term: str,
 ) -> ChanceCells:
-    """``ChanceCells`` of the 2D term from the puvspr ``prob`` column (presence ``q``).
+    """``ChanceCells`` of one chance term: ``"2d"`` from the puvspr ``prob`` column
+    (presence ``q``), ``"1d"`` from the per-PU loss probability ``p``
+    (``_loss_probability_vector``: pu.dat ``prob``, else prob.dat).
 
     One cell per ``(pu, species)`` (the CSR of ``build_pu_feature_csr``), holding the sum of
-    its puvspr rows' ``a·q`` and ``a²·q(1 − q)``: Marxan 3 keeps one sparse-matrix entry
-    per row (``input.c`` ``readSparseMatrix``) and adds them one by one
-    (``ReturnProbabilityAmounts2D``), as the evaluator (``_term_moments``) does. A cell's
-    variance is > 0 exactly when one of its rows' is (for q in [0, 1] every term is ≥ 0).
-    A non-finite ``amount`` or ``prob`` in any row raises ``ValueError`` naming the PU ids
-    (``_check_finite_cells``, as the evaluator does). Rows with an unknown id are skipped;
-    a cell no row names keeps ``q = 1`` (certain).
+    its puvspr rows' terms: 2D ``a·q`` and ``a²·q(1 − q)``; 1D ``a·(1 − p)`` and
+    ``a·a·p·(1 − p)``. Marxan 3 keeps one sparse-matrix entry per row (``input.c``
+    ``readSparseMatrix``) and adds them one by one (``ReturnProbabilityAmounts1D`` /
+    ``2D``), as the evaluator (``_term_moments``) does, so a duplicated row adds ``a²``
+    per row, not ``(Σa)²``. A cell's variance is > 0 exactly when one of its rows' is (for
+    q or p in [0, 1] every term is ≥ 0). A non-finite cell value raises ``ValueError``
+    naming the PU ids (``_check_finite_cells`` / ``_loss_probability_vector``, as the
+    evaluator does). Rows with an unknown id are skipped; a cell no row names keeps its CSR
+    amount as one term of its own (2D: ``q = 1``; 1D: its PU's ``p``).
     """
     pv = problem.pu_vs_features
-    _check_finite_cells(pv)
+    _check_finite_cells(pv, ("prob", "amount") if term == "2d" else ("amount",))
     csr = pu_feat_csr
-    n_feat = csr.shape[1]
+    n_pu, n_feat = csr.shape
+    loss = _loss_probability_vector(problem, pu_id_to_idx, n_pu) if term == "1d" else None
     indptr = np.asarray(csr.indptr, dtype=np.int64)
     indices = np.asarray(csr.indices, dtype=np.int64)
     amt = np.asarray(csr.data, dtype=np.float64)
-    cell_row = np.repeat(np.arange(csr.shape[0], dtype=np.int64), np.diff(indptr))
+    cell_row = np.repeat(np.arange(n_pu, dtype=np.int64), np.diff(indptr))
     cell_key = cell_row * n_feat + indices  # ascending: canonical CSR (sum_duplicates)
 
-    e = amt.copy()
-    v = np.zeros(len(amt), dtype=np.float64)
+    if loss is None:
+        e = amt.copy()
+        v = np.zeros(len(amt), dtype=np.float64)
+    else:
+        pc = loss[cell_row]
+        e = amt * (1.0 - pc)
+        v = amt * amt * pc * (1.0 - pc)
     named = np.zeros(len(amt), dtype=bool)
     f_abs_e = np.zeros(n_feat, dtype=np.float64)
     f_terms = np.zeros(n_feat, dtype=np.int64)
@@ -979,20 +1002,31 @@ def _build_chance_cells_2d(
         cols = np.fromiter((feat_id_to_col.get(int(f), -1) for f in pv["species"].values),
                            np.int64, len(pv))
         a = np.asarray(pv["amount"].values, dtype=np.float64)
-        q = np.asarray(pv["prob"].values, dtype=np.float64)
         ok = (rows >= 0) & (cols >= 0)
         keys = rows[ok] * n_feat + cols[ok]
-        a, q = a[ok], q[ok]
+        a = a[ok]
+        if loss is None:
+            pr = np.asarray(pv["prob"].values, dtype=np.float64)[ok]
+        else:
+            pr = loss[rows[ok]]
         pos = np.searchsorted(cell_key, keys)
         hit = (pos < len(cell_key)) & (cell_key[np.minimum(pos, len(cell_key) - 1)] == keys)
-        pos, a, q = pos[hit], a[hit], q[hit]
+        pos, a, pr = pos[hit], a[hit], pr[hit]
+        # Operand order as in _term_moments (bit-equal cell terms).
+        if loss is None:
+            row_e = a * pr
+            row_v = a * a * pr * (1.0 - pr)
+        else:
+            row_e = a * (1.0 - pr)
+            row_v = a * a * pr * (1.0 - pr)
         e[pos] = 0.0  # named cells are the sums of their rows
-        np.add.at(e, pos, a * q)
-        np.add.at(v, pos, a * a * q * (1.0 - q))  # operand order as in _term_moments
+        v[pos] = 0.0
+        np.add.at(e, pos, row_e)
+        np.add.at(v, pos, row_v)
         named[pos] = True
-        f_abs_e += np.bincount(indices[pos], weights=np.abs(a * q), minlength=n_feat)
+        f_abs_e += np.bincount(indices[pos], weights=np.abs(row_e), minlength=n_feat)
         f_terms += np.bincount(indices[pos], minlength=n_feat)
-    # A cell no row names is one term of its own (its CSR amount, q = 1).
+    # A cell no row names is one term of its own.
     f_abs_e += np.bincount(indices[~named], weights=np.abs(e[~named]), minlength=n_feat)
     f_terms += np.bincount(indices[~named], minlength=n_feat)
 

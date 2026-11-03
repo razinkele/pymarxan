@@ -1,4 +1,7 @@
-"""Marxan-faithful Z-score chance-constraint math (PROBMODE 3, Marxan's Probability 2D).
+"""Marxan-faithful Z-score chance-constraint math (Marxan's Probability 1D and 2D).
+
+PROBMODE 3 is Probability 2D, 4 Probability 1D, 5 both (their penalties add, as in
+Marxan 3's ``computeReserveValue``).
 
 This is the pure-functional layer: no problem objects, no solver state.
 Solver integration lives in ``chance_state.py`` (``ChanceState``: SA / iterative
@@ -15,7 +18,14 @@ integer-division bug that inverts the penalty. Per feature ``j``, over the selec
 
 ``q`` is the per-cell probability of **presence** (puvspr ``prob``; Marxan's PROB2D),
 the opposite polarity to PROBMODE 2 / Marxan 1D, where the per-PU ``prob`` is a loss
-probability and the held amount is ``amount · (1 − prob)``. ``T_j`` is the resolved
+probability and the held amount is ``amount · (1 − prob)``. Probability 1D (Marxan 3
+``ReturnProbabilityAmounts1D`` / ``ComputeProbability1D``) uses the per-PU loss
+probability ``p_i`` (pu.dat ``prob``, else prob.dat) and the target ``ptarget1d``::
+
+    E_j = Σ amount_ij · (1 − p_i),   V_j = Σ amount_ij² · p_i · (1 − p_i)
+
+built directly from ``p`` (never ``q = 1 − p`` first: for ``p < 1.1e-16`` ``1 − p``
+rounds to 1 and the variance would vanish). ``T_j`` is the resolved
 deterministic target (no MISSLEVEL). Marxan's ``probZUT`` is the Ibbetson polynomial
 (exact 0 / 1 for |z| ≥ 5, within ~1e-9 of ``norm.sf`` below); pymarxan keeps ``norm.sf``.
 
@@ -68,7 +78,10 @@ _ZERO_VAR_RULES = ("marxan", "met", "exact")
 # The rule used when a caller names none: Marxan 3's (PROBZEROVAR 0).
 DEFAULT_ZERO_VAR_RULE: ZeroVarRule = "marxan"
 
-_TERMS = ("2d",)
+_TERMS = ("1d", "2d")
+# The in-memory probability-target column of each term: the 2D target keeps pymarxan's
+# Phase 18 name ``ptarget`` (spec.dat ``ptarget2d``); the 1D target is ``ptarget1d``.
+PTARGET_COLUMN = {"1d": "ptarget1d", "2d": "ptarget"}
 
 
 @dataclass(frozen=True)
@@ -350,21 +363,28 @@ def _term_moments(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-feature ``(E, V, nonzero)`` of one chance term over the selected PUs.
 
-    A non-finite ``amount`` or ``prob`` in any puvspr row, selected or not, raises
-    ``ValueError`` naming the PU ids, as building the cache's chance cells does.
+    Row by row, as Marxan 3's ``ReturnProbabilityAmounts1D`` / ``2D`` (a duplicated
+    ``(pu, species)`` row adds its own terms). A non-finite cell value raises
+    ``ValueError`` naming the PU ids, as building the cache's chance cells does: the 2D
+    term's puvspr ``amount`` / ``prob`` in any row, selected or not; the 1D term's
+    ``amount`` and its loss probabilities (``_loss_probability_vector``).
     """
-    from pymarxan.solvers.utils import _check_finite_cells
+    from pymarxan.solvers.utils import _check_finite_cells, _loss_probability_vector
 
     if term not in _TERMS:
-        raise ValueError(f"unknown chance term {term!r}; release A knows {_TERMS}")
+        raise ValueError(f"unknown chance term {term!r}; known terms are {_TERMS}")
     puvspr = problem.pu_vs_features
-    _check_finite_cells(puvspr)
+    _check_finite_cells(puvspr, ("prob", "amount") if term == "2d" else ("amount",))
     col = {int(f): j for j, f in enumerate(feat_ids)}
     n = len(feat_ids)
     E = np.zeros(n)
     V = np.zeros(n)
     N = np.zeros(n, dtype=np.int64)
     pu_ids = problem.planning_units["id"].values
+    pu_index = {int(pu_ids[i]): i for i in range(len(pu_ids))}
+    loss = (
+        _loss_probability_vector(problem, pu_index, len(pu_ids)) if term == "1d" else None
+    )
     selected_pu_ids = {int(pu_ids[i]) for i in range(len(pu_ids)) if selected[i]}
     pv_pu = puvspr["pu"].values
     pv_sp = puvspr["species"].values
@@ -377,13 +397,21 @@ def _term_moments(
         if j is None:
             continue
         amt = float(pv_am[k])
-        # PROB2D presence convention: q = P(present); default 1.0 (certain presence)
-        # when there is no `prob` column (only on a direct call: evaluate_solution_chance
-        # scores a term without its data as off first). Marxan 3 ComputeProbability2D:
-        # E += amount·q, V += amount²·q·(1 − q).
-        q = float(pv_pr[k]) if pv_pr is not None else 1.0
-        v = amt * amt * q * (1.0 - q)
-        E[j] += amt * q
+        if loss is not None:
+            # Marxan 3 ReturnProbabilityAmounts1D: p = the PU's loss probability;
+            # E += amount·(1 − p), V += amount·amount·p·(1 − p).
+            p = float(loss[pu_index[int(pv_pu[k])]])
+            e = amt * (1.0 - p)
+            v = amt * amt * p * (1.0 - p)
+        else:
+            # PROB2D presence convention: q = P(present); default 1.0 (certain presence)
+            # when there is no `prob` column (only on a direct call: evaluate_solution_chance
+            # scores a term without its data as off first). Marxan 3 ComputeProbability2D:
+            # E += amount·q, V += amount²·q·(1 − q).
+            q = float(pv_pr[k]) if pv_pr is not None else 1.0
+            e = amt * q
+            v = amt * amt * q * (1.0 - q)
+        E[j] += e
         V[j] += v
         N[j] += int(v > 0)
     return E, V, N
@@ -394,18 +422,21 @@ def evaluate_solution_chance(
     selected,  # np.ndarray
     term: str = "2d",
 ) -> tuple[dict[int, float], float]:
-    """Post-hoc evaluation of one chance term for a fully-formed solution.
+    """Post-hoc evaluation of one chance term (``"1d"`` or ``"2d"``) for a solution.
 
     Used by ``build_solution`` (every solver's reported objective and the MIP "drop"
     strategy's post-hoc report): computes the per-feature E / V / nonzero over the
-    selected PUs and scores them with :func:`score_features`.
+    selected PUs and scores them with :func:`score_features` against the term's
+    probability target (``ptarget1d`` for 1D, ``ptarget`` for 2D).
 
     The gate is the term's data, not ``PROBMODE``. A term without its data (``"2d"``: no
-    ``prob`` column on ``pu_vs_features``) is off, as in every solver (spec §3.1): each
-    feature's shortfall is 0 and the penalty is 0 under every ``PROBZEROVAR`` rule, and
-    no cell is read (so a non-finite ``amount`` does not raise here). With its data the
-    term is scored whatever the mode, so a caller can score a problem as if the term
-    were requested.
+    ``prob`` column on ``pu_vs_features``; ``"1d"``: neither a pu.dat ``prob`` column nor
+    ``problem.probability``) is off, as in every solver (spec §3.1): each feature's
+    shortfall is 0 and the penalty is 0 under every ``PROBZEROVAR`` rule, and no cell is
+    read (so a non-finite ``amount`` does not raise here). With its data the term is
+    scored whatever the mode, so a caller can score a problem as if the term were
+    requested. A missing 1D target column counts as all −1 (all shortfalls 0); a missing
+    2D one returns ``({}, 0.0)`` as before.
 
     Returns
     -------
@@ -416,19 +447,25 @@ def evaluate_solution_chance(
         ``penalty`` is the weighted normalised total that the term adds to the
         objective.
     """
-    from pymarxan.solvers.utils import _zero_var_rule
+    from pymarxan.solvers.utils import _has_1d_data, _zero_var_rule
 
     if term not in _TERMS:
-        raise ValueError(f"unknown chance term {term!r}; release A knows {_TERMS}")
-    if "ptarget" not in problem.features.columns:
-        return {}, 0.0
+        raise ValueError(f"unknown chance term {term!r}; known terms are {_TERMS}")
+    pt_col = PTARGET_COLUMN[term]
     feat_ids = problem.features["id"].astype(int).values
+    if pt_col not in problem.features.columns:
+        if term == "2d":
+            return {}, 0.0
+        return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
     feat_target = problem.features["target"].astype(float).values
-    feat_ptarget = problem.features["ptarget"].astype(float).values
+    feat_ptarget = problem.features[pt_col].astype(float).fillna(-1.0).values
 
     # Off without its data (spec §3.1), as ``utils._active_chance_terms`` makes it in the
-    # solvers, or with no ptarget > 0. The 2D term's data is the puvspr ``prob`` column.
-    no_data = term == "2d" and "prob" not in problem.pu_vs_features.columns
+    # solvers, or with no ptarget > 0.
+    if term == "2d":
+        no_data = "prob" not in problem.pu_vs_features.columns
+    else:
+        no_data = not _has_1d_data(problem)
     if no_data or not any(pt > 0 for pt in feat_ptarget):
         return {fid: 0.0 for fid in feat_ids.tolist()}, 0.0
 

@@ -27,8 +27,9 @@ class Solution:
     shortfall: float = 0.0  # Total raw feature shortfall (sum of max(0, target - achieved))
     metadata: dict = field(default_factory=dict)
     zone_assignment: np.ndarray | None = None
-    # PROBMODE 3 outputs — populated when the 2D chance term is active (PROBMODE 3 with a
-    # puvspr `prob` column; empty / 0 without a spec `ptarget` column). None otherwise.
+    # Probability 2D outputs — populated when the 2D chance term is active (PROBMODE 3 or 5
+    # with a puvspr `prob` column; empty / 0 without a spec `ptarget` column). None
+    # otherwise. The 1D term's are prob1d_shortfalls / prob1d_penalty.
     prob_shortfalls: dict[int, float] | None = None  # feature_id -> max(0, ptarget − P)
     prob_penalty: float | None = None  # γ · Σ [ptarget > P] · (ptarget − P) / ptarget
     # TARGET2 / clumping outputs — populated when the problem has any
@@ -49,6 +50,10 @@ class Solution:
     # space_penalty: Σ space_spf · max(0, space_target − space_held)
     space_held: dict[int, float] | None = None
     space_penalty: float | None = None
+    # Probability 1D outputs (v0.48, PROBMODE 4 / 5) — populated when the 1D chance term
+    # is active (a pu.dat `prob` column or a prob.dat table). None otherwise.
+    prob1d_shortfalls: dict[int, float] | None = None  # feature_id -> max(0, ptarget1d − P)
+    prob1d_penalty: float | None = None  # γ · Σ [ptarget1d > P]·(ptarget1d − P)/ptarget1d
 
     @property
     def all_targets_met(self) -> bool:

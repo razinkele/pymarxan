@@ -230,6 +230,8 @@ def write_mvbest(
     # solutions (no PROBMODE 3 / TARGET2 / SEPNUM) get the original 6 columns
     # only — byte-identical to pre-Phase-18 mvbest output.
     prob_short_map = solution.prob_shortfalls
+    # getattr: a Solution pickled before v0.48 has no 1D fields.
+    prob1d_short_map = getattr(solution, "prob1d_shortfalls", None)
     clump_short_map = solution.clump_shortfalls
     sep_short_map = solution.sep_shortfalls
 
@@ -250,6 +252,8 @@ def write_mvbest(
         }
         if prob_short_map is not None:
             row["Prob_Gap"] = float(prob_short_map.get(fid, 0.0))
+        if prob1d_short_map is not None:
+            row["Prob1D_Gap"] = float(prob1d_short_map.get(fid, 0.0))
         if clump_short_map is not None:
             row["Clump_Short"] = float(clump_short_map.get(fid, 0.0))
         if sep_short_map is not None:

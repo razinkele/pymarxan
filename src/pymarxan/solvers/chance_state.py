@@ -80,6 +80,7 @@ import numpy as np
 
 from pymarxan.solvers.cache import ChanceCells
 from pymarxan.solvers.probability import (
+    PTARGET_COLUMN,
     _chance_penalty,
     _exact_threshold,
     _ptarget_den,
@@ -102,8 +103,10 @@ class _TermState:
 
     ``EV`` (2, n_feat): running ``E`` (row 0) and ``V`` (row 1); ``B`` (2, n_feat): their
     float error bounds since the feature's last recompute; ``N``: nonzero counts; ``pen``:
-    unweighted penalties; ``knife``: under the exact rule, each feature's evaluator-error
-    term of the knife-edge window, ``3·max(64, n_j)·eps·S_j`` (else None).
+    unweighted penalties; ``ptarget`` / ``ptarget_den``: the term's probability targets
+    (2D ``ptarget``, 1D ``ptarget1d``) and penalty denominators; ``knife``: under the exact
+    rule, each feature's evaluator-error term of the knife-edge window,
+    ``3·max(64, n_j)·eps·S_j`` (else None).
     """
 
     cells: ChanceCells
@@ -111,6 +114,8 @@ class _TermState:
     B: np.ndarray
     N: np.ndarray
     pen: np.ndarray
+    ptarget: np.ndarray
+    ptarget_den: np.ndarray
     knife: np.ndarray | None = None
 
     @property
@@ -130,6 +135,13 @@ class _TermState:
         return cast(np.ndarray, self.B[1])
 
 
+def term_ptarget(cache, name: str) -> np.ndarray:
+    """The probability targets of chance term ``name`` on ``cache`` (float64): the 2D
+    term's ``feat_ptarget`` (spec ``ptarget``), the 1D term's ``feat_ptarget1d``."""
+    attr = {"ptarget": "feat_ptarget", "ptarget1d": "feat_ptarget1d"}[PTARGET_COLUMN[name]]
+    return np.asarray(getattr(cache, attr), dtype=np.float64)
+
+
 # One term's preview for the flipped PU's features: (cols, EV2, B2, N2, pen2).
 _Payload = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
@@ -144,7 +156,6 @@ class ChanceState:
         weight: float,
         zero_var_rule: str,
         targets: np.ndarray,
-        ptargets: np.ndarray,
     ) -> None:
         self.selected = np.asarray(selected, dtype=bool)  # a mask, whatever the caller's dtype
         self.terms = terms
@@ -156,8 +167,6 @@ class ChanceState:
         # The exact rule's met thresholds (target − 1e-7·|target|), once per feature.
         self._thresholds = _exact_threshold(targets) if self._exact else None
         self.targets = targets
-        self.ptargets = ptargets
-        self._ptarget_den = _ptarget_den(ptargets)
         self.n_recompute = 0
         self._preview: tuple[int, bool, float, list[_Payload]] | None = None
 
@@ -184,21 +193,22 @@ class ChanceState:
             ]).astype(np.float64, copy=False)
             N = np.bincount(col, weights=(cells.c_v[mask] > 0), minlength=n_feat)
             N = N.astype(np.int64)
+            ptarget = term_ptarget(cache, name)
             pen = score_features(
-                EV[0], EV[1], N, cache.feat_targets, cache.feat_ptarget,
-                cache.zero_var_rule,
+                EV[0], EV[1], N, cache.feat_targets, ptarget, cache.zero_var_rule,
             )[3]
             knife = None
             if cache.zero_var_rule == "exact":
                 n_terms = np.maximum(_KNIFE_MIN_TERMS, cells.f_terms)
                 knife = 3.0 * n_terms * EPS * cells.f_abs_e
-            terms[name] = _TermState(cells=cells, EV=EV, B=_RESET * np.abs(EV), N=N, pen=pen,
-                                     knife=knife)
+            terms[name] = _TermState(
+                cells=cells, EV=EV, B=_RESET * np.abs(EV), N=N, pen=pen,
+                ptarget=ptarget, ptarget_den=_ptarget_den(ptarget), knife=knife,
+            )
         return cls(
             selected=sel, terms=terms, weight=float(cache.prob_weight),
             zero_var_rule=cache.zero_var_rule,
             targets=np.asarray(cache.feat_targets, dtype=np.float64),
-            ptargets=np.asarray(cache.feat_ptarget, dtype=np.float64),
         )
 
     # ------------------------------------------------------------------
@@ -295,8 +305,8 @@ class ChanceState:
                 B2[1, k] = _RESET * abs(vv)
                 self.n_recompute += 1
         pen2 = _chance_penalty(
-            E2, V2, ~live, self.targets[cols], self.ptargets[cols],
-            self._ptarget_den[cols], self._met, self._exact, thr,
+            E2, V2, ~live, self.targets[cols], t.ptarget[cols],
+            t.ptarget_den[cols], self._met, self._exact, thr,
         )
         return cols, EV2, B2, N2, pen2
 

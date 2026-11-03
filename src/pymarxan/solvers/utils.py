@@ -16,6 +16,7 @@ from pymarxan.models.problem import (
     ConservationProblem,
     _nonfinite_cells_error,
     _probzerovar_value,
+    _requested_terms,
     _resolved_probmode,
 )
 from pymarxan.solvers._tolerance import TARGET_REL_TOL as TARGET_REL_TOL
@@ -107,28 +108,31 @@ def _probmode(problem: ConservationProblem) -> int:
 
 
 def _chance_terms(problem: ConservationProblem) -> frozenset[str]:
-    """Chance terms **requested** by ``PROBMODE`` (spec §3.1): 3 → ``{"2d"}``, else none.
+    """Chance terms **requested** by ``PROBMODE`` (spec §3.1): 3 → ``{"2d"}``,
+    4 → ``{"1d"}``, 5 → ``{"1d", "2d"}``, else none.
 
     ``"2d"`` is the Z-score chance term from the puvspr ``prob`` column (Marxan
-    Probability 2D). Requested terms gate what depends on the mode alone: non-binary
-    rejection, the MIP chance-strategy gate and metadata, the Shiny MIP notice. Pure; never
-    warns.
+    Probability 2D), ``"1d"`` the one from the per-PU loss probability (Marxan
+    Probability 1D: pu.dat ``prob``, else prob.dat). Requested terms gate what depends on
+    the mode alone: non-binary rejection, the MIP chance-strategy gate and metadata, the
+    Shiny MIP notice. Pure; never warns.
     """
-    if _probmode(problem) == 3:
-        return frozenset({"2d"})
-    return frozenset()
+    return _requested_terms(_probmode(problem))
 
 
 def _active_chance_terms(problem: ConservationProblem) -> frozenset[str]:
     """Requested chance terms whose data exists (spec §3.1 "term without data").
 
-    ``"2d"`` needs a ``prob`` column on ``pu_vs_features``; without one the term is off
-    (penalty 0). Active terms gate the evaluator, ``ProblemCache``, the ``Solution``
-    fields and the reports. Pure; never warns.
+    ``"2d"`` needs a ``prob`` column on ``pu_vs_features``; ``"1d"`` a 1D source
+    (:func:`_has_1d_data`). Without its data a term is off (penalty 0). Active terms gate
+    the evaluator, ``ProblemCache``, the ``Solution`` fields and the reports. Pure; never
+    warns.
     """
     terms = _chance_terms(problem)
     if "2d" in terms and "prob" not in problem.pu_vs_features.columns:
         terms = terms - {"2d"}
+    if "1d" in terms and not _has_1d_data(problem):
+        terms = terms - {"1d"}
     return terms
 
 
@@ -564,8 +568,9 @@ def compute_probability_penalty(
       probability table, as in the MIP.
     - ``PROBMODE == 2``: no objective term; held amounts are expected amounts
       ``amount·(1 − prob)`` (see ``compute_held``). Returns 0 here.
-    - ``PROBMODE == 3``: Marxan-faithful Z-score chance-constraint
-      penalty using per-cell ``prob`` and per-feature ``ptarget``.
+    - ``PROBMODE == 3 / 4 / 5``: Marxan-faithful Z-score chance-constraint
+      penalties, the sum of the active terms: 2D (per-cell ``prob``, ``ptarget``) and / or
+      1D (per-PU loss probability, ``ptarget1d``). No premium, raw held amounts.
     """
     prob_mode = _probmode(problem)
     if prob_mode == 1:
@@ -575,12 +580,16 @@ def compute_probability_penalty(
     if _chance_terms(problem):
         if _is_fractional(selected):
             raise ValueError(
-                "PROBMODE 3 (Z-score chance constraints) is only defined for binary "
-                "selections; this selection holds proportion decisions. Solve with "
+                f"PROBMODE {prob_mode} (Z-score chance constraints) is only defined for "
+                "binary selections; this selection holds proportion decisions. Solve with "
                 "decisions='binary' or convert with binarize_solution()."
             )
-        if "2d" in _active_chance_terms(problem):
-            return _compute_probmode3_zscore_penalty(problem, selected)
+        from pymarxan.solvers.probability import evaluate_solution_chance
+
+        return float(sum(
+            evaluate_solution_chance(problem, selected, term)[1]
+            for term in sorted(_active_chance_terms(problem))
+        ))
     return 0.0
 
 
@@ -650,8 +659,8 @@ def compute_objective_terms(
       - ``"boundary"``: BLM * total boundary length
       - ``"penalty"``: SPF * shortfall per feature
       - ``"cost_threshold"``: penalty for exceeding cost threshold
-      - ``"probability"``: the PROBMODE 1 risk premium, or the active PROBMODE 3
-        chance penalty (both weighted by PROBABILITYWEIGHTING)
+      - ``"probability"``: the PROBMODE 1 risk premium, or the sum of the active chance
+        terms' penalties (PROBMODE 3–5; all weighted by PROBABILITYWEIGHTING)
       - ``"connectivity"``: connectivity penalty/bonus (CONNECTIVITY_WEIGHT)
 
     All terms use lower-is-better convention.  The ``"objective"`` key
@@ -687,7 +696,7 @@ def compute_objective_terms(
     else:
         terms["cost_threshold"] = 0.0
 
-    # Probability term: the PROBMODE 1 risk premium, or the active PROBMODE 3 chance penalty
+    # Probability term: the PROBMODE 1 risk premium, or the active chance terms (3–5)
     terms["probability"] = compute_probability_penalty(
         problem, selected, pu_index,
     )
@@ -757,16 +766,24 @@ def build_solution(
         problem, selected, pu_index, blm, _achieved=achieved,
     )
 
-    # PROBMODE 3: populate per-feature Z-score gap on the Solution so the
-    # UI can display it. The penalty itself is already part of terms["objective"]
-    # via compute_probability_penalty.
+    # Chance terms (PROBMODE 3–5): per-feature probability gaps on the Solution so the
+    # UI can display them; prob_* is the 2D term, prob1d_* the 1D term. The penalties
+    # themselves are already part of terms["objective"] via compute_probability_penalty.
     prob_shortfalls: dict[int, float] | None = None
     prob_penalty_val: float | None = None
-    if "2d" in _active_chance_terms(problem):
+    prob1d_shortfalls: dict[int, float] | None = None
+    prob1d_penalty_val: float | None = None
+    active_terms = _active_chance_terms(problem)
+    if active_terms:
         from pymarxan.solvers.probability import evaluate_solution_chance
-        prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
-            problem, selected,
-        )
+        if "2d" in active_terms:
+            prob_shortfalls, prob_penalty_val = evaluate_solution_chance(
+                problem, selected, "2d",
+            )
+        if "1d" in active_terms:
+            prob1d_shortfalls, prob1d_penalty_val = evaluate_solution_chance(
+                problem, selected, "1d",
+            )
 
     # Phase 19 TARGET2 / clumping: populate per-feature clump shortfall gap
     # and total penalty when any feature has target2 > 0. Same shape as
@@ -858,6 +875,8 @@ def build_solution(
         sep_penalty=sep_penalty_val,
         space_held=space_held,
         space_penalty=space_penalty_val,
+        prob1d_shortfalls=prob1d_shortfalls,
+        prob1d_penalty=prob1d_penalty_val,
     )
 
 
