@@ -23,8 +23,8 @@ def run_panel_ui():
             "After the run completes, explore results in the Results and Maps tabs.",
             class_="text-muted small mb-3",
         ),
-        # PROBMODE 3 notice — dynamically shown when MIP is selected on
-        # a PROBMODE=3 problem. The MIP solver's "drop" strategy solves
+        # Chance-term notice — dynamically shown when MIP is selected on
+        # a PROBMODE 3–5 problem. The MIP solver's "drop" strategy solves
         # the deterministic relaxation and reports the chance-constraint
         # gap post-hoc; users should know the MIP answer isn't the
         # chance-constraint optimum.
@@ -237,9 +237,9 @@ def run_panel_server(
 
     @render.ui
     def probmode3_mip_notice():
-        """Inform the user when MIP + PROBMODE 3 are about to be combined.
+        """Inform the user when MIP + PROBMODE 3–5 are about to be combined.
 
-        The MIP solver under PROBMODE 3 drops the chance-constraint term
+        The MIP solver under PROBMODE 3–5 drops the chance-constraint term
         (CBC can't handle SOCP) and reports the gap post-hoc. Without this
         banner the user sees a deterministic solution and may not realise
         the probability target wasn't actually enforced.

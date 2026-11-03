@@ -79,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_spec` always adds `ptarget1d` (−1) to the features table.
 - A PROBMODE outside 0–5 now means "no probability" in the solvers (it used to crash
   `int()` for a non-numeric value), and `validate()` reports it.
+- `validate()` reports a `ptarget` / `ptarget1d` above 1 (it cannot be met) or non-numeric,
+  naming the feature ids (≤ 0 or blank means disabled); the solvers' error for a
+  non-numeric target names the column and the ids. A puvspr `prob` outside [0, 1] is now
+  reported with the offending (pu, species) pairs.
+- `read_spec` reads a blank `ptarget` / `ptarget2d` field as −1, as it does `ptarget1d`, and
+  `write_spec` writes a NaN probability target as −1, never as an empty field (Marxan's
+  reader collapses an empty field and shifts the columns after it).
 
 ### Fixed
 
@@ -95,6 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the data summary and the run panel's MIP notice did not update. They now set a copy.
 - A feature-table edit the validator rejects (e.g. `ptarget1d` = 1.5, a negative target) is
   now refused instead of being stored.
+- RunModePipeline on a zone problem with chance terms requested warns once, for every
+  RUNMODE, that the zone solvers ignore them; it was silent for RUNMODE 0 / 6 and, for
+  RUNMODE 1, claimed that SA / II optimise them and that the Solution reports them.
+- `validate()` no longer reports a non-finite puvspr `amount` under PROBMODE 4 / 5 when there
+  is no 1D source (the 1D term is then off and no solver reads it).
 
 ## [0.47.2] — 2026-11-03
 

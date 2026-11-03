@@ -349,8 +349,8 @@ class MIPSolver(Solver):
         x_i = 0                            for locked-out PUs (status=3)
         x_i in {0, 1}
 
-    Under PROBMODE 3 (Z-score chance constraints, Phase 18) the Z-score
-    constraint involves ``√Σ σ²·x`` which is SOCP/QCP territory and not
+    Under PROBMODE 3–5 (the Z-score chance terms: 2D since Phase 18, 1D since v0.48) the
+    Z-score constraint involves ``√Σ σ²·x`` which is SOCP/QCP territory and not
     solvable by the default CBC backend. The ``mip_chance_strategy``
     knob controls behaviour:
 
@@ -391,7 +391,7 @@ class MIPSolver(Solver):
     ``decisions="proportion", upper=u``) or ``"semicontinuous"`` (``x = 0`` or
     ``lower ≤ x ≤ upper``, a MILP with one on/off binary per PU). Non-binary solutions hold
     float64 proportions; locked-in PUs are fixed whole (x = 1.0) in every mode, ``upper`` and
-    ``lower`` bound the free PUs. PROBMODE 3, clumping,
+    ``lower`` bound the free PUs. The chance terms (PROBMODE 3–5), clumping,
     separation, space targets, ``forbidden_selections`` and negative connectivity values
     are rejected with ``ValueError`` for non-binary decisions.
 
@@ -494,7 +494,7 @@ class MIPSolver(Solver):
                     "are wired in. Use 'drop' (default) or SA for now."
                 )
 
-        # TARGET2 / clumping gating (Phase 19). Like PROBMODE 3, the chance-
+        # TARGET2 / clumping gating (Phase 19). Like PROBMODE 3–5, the chance-
         # constrained-style CLUMPTYPE math is non-trivial in MILP; the
         # default "drop" strategy solves the deterministic relaxation and
         # build_solution reports the clump-shortfall gap post-hoc.

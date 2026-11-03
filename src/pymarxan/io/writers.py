@@ -79,7 +79,7 @@ def write_puvspr(df: pd.DataFrame, path: str | Path) -> None:
 
     The optional ``prob`` column (Marxan PROB2D — per-cell probability of
     presence) is always written when present, whatever its values: without the
-    column PROBMODE 3's 2D chance term is off (``_active_chance_terms``), while
+    column the 2D chance term (PROBMODE 3 / 5) is off (``_active_chance_terms``), while
     an all-0 or all-1 column has zero variance and pays Marxan's Z = 4 penalty
     (under ``PROBZEROVAR 1`` it counts as met; under ``PROBZEROVAR 2`` its certain
     amount meets or misses the target outright); Marxan 3 also switches its 2D term on from a
@@ -231,7 +231,7 @@ def write_mvbest(
 
     # Phase 18/19/20 backport (round-3 H7): emit constraint-specific columns
     # when the matching analytics dict is populated on the Solution. Legacy
-    # solutions (no PROBMODE 3 / TARGET2 / SEPNUM) get the original 6 columns
+    # solutions (no chance term / TARGET2 / SEPNUM) get the original 6 columns
     # only — byte-identical to pre-Phase-18 mvbest output.
     prob_short_map = solution.prob_shortfalls
     # getattr: a Solution pickled before v0.48 has no 1D fields.

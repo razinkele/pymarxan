@@ -35,7 +35,7 @@ class ZonationSolver(Solver):
     ride in ``Solution.metadata``. Zonation ranks by biological loss and does not
     optimize to meet feature targets, so a low ``top_fraction`` may leave
     ``all_targets_met`` False by design. Like ``HeuristicSolver``, Zonation is
-    blind to PROBMODE 3 / TARGET2 / SEPNUM during ranking but ``build_solution``
+    blind to PROBMODE 3–5 / TARGET2 / SEPNUM during ranking but ``build_solution``
     reports those gaps post-hoc, so the ``supports_*`` flags keep their ``True``
     defaults.
     """

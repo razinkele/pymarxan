@@ -195,7 +195,7 @@ class SimulatedAnnealingSolver(Solver):
                 )
                 current_obj += space_state.penalty_total()
 
-            # Chance terms (PROBMODE 3): ChanceState holds the incremental per-feature
+            # Chance terms (PROBMODE 3–5): ChanceState holds the incremental per-feature
             # E / V; the cache's full objective and delta exclude the term, so its
             # initial value is added here (as for SepState).
             chance_state = None

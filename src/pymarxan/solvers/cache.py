@@ -154,7 +154,7 @@ class ProblemCache:
         (n_pu, n_feat) float64 — amount of each feature in each PU (the source of truth).
         ``pu_feat_matrix`` is a lazily-densified ``cached_property`` view over it, built
         only when clumping / separation / analysis touch it; a plain problem (and a
-        PROBMODE 3 one) never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
+        PROBMODE 3–5 one) never densifies. ``feat_uses_pu`` derives from the CSR's CSC form.
     feat_targets : np.ndarray
         (n_feat,) float64 — target for each feature.
     feat_spf : np.ndarray
@@ -690,7 +690,7 @@ class ProblemCache:
         objective = cost + BLM * boundary + penalty [+ cost_threshold_penalty]
         [+ connectivity]
 
-        The chance terms (PROBMODE 3) are not included: callers add
+        The chance terms (PROBMODE 3–5) are not included: callers add
         ``ChanceState.penalty_total()`` (SA, II) — as for clumping / separation.
 
         Parameters

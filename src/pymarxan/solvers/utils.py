@@ -77,7 +77,7 @@ def _nonbinary_conflicts(problem: ConservationProblem) -> list[str]:
     """Problem settings whose evaluators only make sense for 0/1 selections (spec §3.5).
 
     Clumping, separation and space are evaluated post hoc by selecting PUs by truthiness.
-    PROBMODE 3 is checked separately (``compute_probability_penalty``).
+    The chance terms (PROBMODE 3–5) are checked separately.
     """
     feats = problem.features
     out: list[str] = []
@@ -898,7 +898,7 @@ def build_solution(
     for post-hoc space/adequacy reporting; defaults to geographic centroids when omitted.
 
     A float64 ``selected`` (proportions) is evaluated fraction-linearly (spec §5.3); with
-    clumping, separation, space targets or PROBMODE 3 it raises ``ValueError``. The input
+    clumping, separation, space targets or PROBMODE 3–5 it raises ``ValueError``. The input
     contract of ``_coerce_selected`` is enforced first.
     """
     selected = _coerce_selected(selected, len(problem.planning_units))
@@ -949,7 +949,7 @@ def build_solution(
 
     # Phase 19 TARGET2 / clumping: populate per-feature clump shortfall gap
     # and total penalty when any feature has target2 > 0. Same shape as
-    # PROBMODE 3 — single source of truth, every solver path inherits.
+    # the chance terms (PROBMODE 3–5) — single source of truth, every solver path inherits.
     clump_shortfalls: dict[int, float] | None = None
     clump_penalty_val: float | None = None
     if (

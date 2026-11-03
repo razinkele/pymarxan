@@ -219,7 +219,7 @@ class IterativeImprovementSolver(Solver):
         if cache.separation_active:
             from pymarxan.solvers.separation import SepState
             sep_state = SepState.from_selection(cache, selected)
-        # Chance terms (PROBMODE 3): incremental E / V per pass, fresh from the selection.
+        # Chance terms (PROBMODE 3–5): incremental E / V per pass, fresh from the selection.
         chance_state = _chance_state(cache, selected)
 
         improved = True
@@ -307,7 +307,7 @@ class IterativeImprovementSolver(Solver):
         if cache.separation_active:
             from pymarxan.solvers.separation import SepState
             sep_state = SepState.from_selection(cache, selected)
-        # Chance terms (PROBMODE 3): incremental E / V per pass, fresh from the selection.
+        # Chance terms (PROBMODE 3–5): incremental E / V per pass, fresh from the selection.
         chance_state = _chance_state(cache, selected)
 
         improved = True
