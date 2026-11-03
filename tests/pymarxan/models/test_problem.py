@@ -350,7 +350,8 @@ _PROBZEROVAR_PROBE = textwrap.dedent("""\
 
 
     assert problem(1).validate() == []
-    assert any("PROBZEROVAR" in e for e in problem(2).validate())
+    assert problem(2).validate() == []
+    assert any("PROBZEROVAR" in e for e in problem(3).validate())
     solver_modules = ("pulp", "pymarxan.solvers", "pymarxan.solvers.mip_solver")
     print(sorted(m for m in solver_modules if m in sys.modules))
 """)

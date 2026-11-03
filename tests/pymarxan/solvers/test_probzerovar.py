@@ -426,7 +426,7 @@ def test_rule_from_parameter(value, rule: str) -> None:
 
 
 @pytest.mark.parametrize("value", [
-    2, -1, 0.5, "yes",
+    3, -1, 0.5, "yes",
     # A bool is not 0 / 1 (v0.47.0 plan review #18): write_input_dat saves True as the text
     # "True", which reads back as a string, so True meant the opt-out in memory and Marxan's
     # rule after save_project / load_project. Now a bool means Marxan's rule in both, and
@@ -440,7 +440,7 @@ def test_validate_reports_bad_probzerovar(value) -> None:
     assert _zero_var_rule(problem) == "marxan"  # pure: never raises; validate() reports
 
 
-@pytest.mark.parametrize("value", [None, 0, 1])
+@pytest.mark.parametrize("value", [None, 0, 1, 2])
 def test_validate_accepts_probzerovar(value) -> None:
     params = {} if value is None else {"PROBZEROVAR": value}
     problem, _ = hand_example(**params)

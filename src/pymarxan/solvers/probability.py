@@ -27,7 +27,12 @@ when a ``q`` outside [0, 1] adds an uncounted negative term. The rule is
 ``zero_var_rule`` (``PROBZEROVAR`` in input.dat): ``"marxan"`` (``PROBZEROVAR 0``, the
 default) gives Marxan 3's ``Z = 4``, so ``P = probZUT(4) ≈ 3.17e-5`` fails any
 ``ptarget`` above that — nothing selected, all ``q`` in {0, 1}; ``"met"``
-(``PROBZEROVAR 1``) counts such a feature as met (pymarxan before v0.47).
+(``PROBZEROVAR 1``) counts such a feature as met (pymarxan before v0.47); ``"exact"``
+(``PROBZEROVAR 2``, v0.48) scores the certain amount ``E_j`` exactly: met outright
+(``Z = −inf``, ``P = 1``) when ``E_j ≥ T_j − TARGET_REL_TOL·|T_j|``
+(:func:`_exact_threshold`, the deterministic targets' 1e-7 relative tolerance; a target of
+0 has none), missed outright (``Z = +inf``, ``P = 0``: shortfall ``ptarget``, penalty 1)
+otherwise.
 
 Penalty per feature is the Marxan step function normalised by ptarget:
 
@@ -52,12 +57,14 @@ from typing import Literal, cast
 import numpy as np
 from scipy.special import ndtr
 
+from pymarxan.solvers._tolerance import TARGET_REL_TOL
+
 # Marxan's Z for a zero-variance feature (``probability.c``: ``rZ = 4``);
 # probZUT(4) = norm.sf(4) ≈ 3.17e-5.
 _MARXAN_ZERO_VARIANCE_SENTINEL = 4.0
 
-ZeroVarRule = Literal["marxan", "met"]
-_ZERO_VAR_RULES = ("marxan", "met")
+ZeroVarRule = Literal["marxan", "met", "exact"]
+_ZERO_VAR_RULES = ("marxan", "met", "exact")
 # The rule used when a caller names none: Marxan 3's (PROBZEROVAR 0).
 DEFAULT_ZERO_VAR_RULE: ZeroVarRule = "marxan"
 
@@ -72,7 +79,10 @@ class FeatureChance:
     the target; ``shortfall`` = ``max(0, ptarget − p)`` (absolute, for reports);
     ``penalty`` = ``[ptarget > p]·(ptarget − p)/ptarget``, unweighted. Both are 0 for a
     disabled feature (``ptarget ≤ 0``). Under the ``"met"`` rule a zero-variance feature
-    reports ``p = 1`` and no shortfall or penalty.
+    reports ``p = 1`` and no shortfall or penalty. Under the ``"exact"`` rule it reports
+    ``z = −inf``, ``p = 1`` when its certain amount meets the target (within
+    :func:`_exact_threshold`'s tolerance), else ``z = +inf``, ``p = 0`` (shortfall
+    ``ptarget``, penalty 1).
     """
 
     z: float
@@ -88,10 +98,26 @@ def _check_rule(zero_var_rule: str) -> None:
         )
 
 
+def _exact_threshold(target: np.ndarray) -> np.ndarray:
+    """The exact rule's met threshold ``target − TARGET_REL_TOL·|target|``: a certain
+    amount meets ``target`` iff it is ``≥`` this (``_tolerance.target_tol``, vectorised).
+
+    A prop = 1 target and ``E`` are float sums of the same amounts in different orders, so
+    without the tolerance a fully held certain feature can be scored short by an ulp. A
+    target of 0 has no tolerance (threshold 0): a negative certain amount is short.
+    """
+    target = np.asarray(target, dtype=np.float64)
+    return cast(np.ndarray, target - TARGET_REL_TOL * np.abs(target))
+
+
 def _chance_z(
     E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
+    exact: bool = False, threshold: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Z = (target − E)/√V; Marxan's 4 where ``zero`` (zero variance).
+    """Z = (target − E)/√V; where ``zero`` (zero variance) Marxan's 4, or under the exact
+    rule ``−inf`` (met: ``E ≥`` :func:`_exact_threshold` of the target) / ``+inf`` (short).
+    ``threshold``: that threshold, if the caller has it (``ChanceState`` keeps it per
+    feature).
 
     Both callers, :func:`score_features` and :func:`_chance_penalty`, fold Marxan's own
     test into ``zero`` (``| ~(V > 0)``, also True for a NaN ``V``), so the square root
@@ -99,6 +125,9 @@ def _chance_z(
     than the arithmetic on the hot path).
     """
     z = (target - E) / np.sqrt(np.where(zero, 1.0, V))
+    if exact:
+        thr = _exact_threshold(target) if threshold is None else threshold
+        return cast(np.ndarray, np.where(zero, np.where(E >= thr, -np.inf, np.inf), z))
     return np.where(zero, _MARXAN_ZERO_VARIANCE_SENTINEL, z)
 
 
@@ -114,6 +143,7 @@ def _chance_from_z(
     """``(p, shortfall, penalty)`` from Z: the one copy of the probability arithmetic.
 
     ``p ≥ 0``, so ``ptarget > p`` is False for a disabled feature (``ptarget ≤ 0``).
+    The exact rule needs no branch here: its ``z = ∓inf`` gives ``p`` = 1 / 0 exactly.
     """
     p = ndtr(-z)  # = norm.sf(z), Marxan's probZUT up to ~1e-9
     gap = np.where(ptarget > p, ptarget - p, 0.0)
@@ -128,12 +158,13 @@ def _chance_from_z(
 def _chance_penalty(
     E: np.ndarray, V: np.ndarray, zero: np.ndarray, target: np.ndarray,
     ptarget: np.ndarray, ptarget_den: np.ndarray, met: bool,
+    exact: bool = False, threshold: np.ndarray | None = None,
 ) -> np.ndarray:
     """Unweighted penalties only (``ChanceState``'s hot path): ``zero`` widened by
     Marxan's ``V > 0`` test, then the same operations, in the same order, as the
     ``penalty`` of :func:`score_features` (:func:`_chance_z` + :func:`_chance_from_z`)."""
     zero = zero | ~(V > 0)
-    p = ndtr(-_chance_z(E, V, zero, target))
+    p = ndtr(-_chance_z(E, V, zero, target, exact, threshold))
     penalty = np.where(ptarget > p, ptarget - p, 0.0) / ptarget_den
     if met:
         penalty = np.where(zero, 0.0, penalty)
@@ -161,7 +192,7 @@ def score_features(
     ptarget = np.asarray(ptarget, dtype=np.float64)
     zero = (np.asarray(nonzero) == 0) | ~(V > 0)
     with np.errstate(divide="ignore", invalid="ignore"):
-        z = _chance_z(E, V, zero, target)
+        z = _chance_z(E, V, zero, target, zero_var_rule == "exact")
     p, shortfall, penalty = _chance_from_z(
         z, zero, ptarget, _ptarget_den(ptarget), zero_var_rule == "met",
     )
@@ -194,7 +225,10 @@ def score_feature(
     zero_var_rule
         ``"marxan"``: zero variance gives Marxan 3's ``Z = 4``, then the normal path
         (so ``P ≈ 3.17e-5`` fails any ``ptarget`` above it). ``"met"``: zero variance
-        counts as met (penalty and shortfall 0).
+        counts as met (penalty and shortfall 0). ``"exact"``: the amount is certain, so
+        ``P = 1`` (``z = −inf``) if ``E ≥ target − 1e-7·|target|``
+        (:func:`_exact_threshold`), else ``P = 0`` (``z = +inf``; shortfall ``ptarget``,
+        penalty 1).
     """
     z, p, shortfall, penalty = score_features(
         np.array([E]), np.array([V]), np.array([nonzero]), np.array([target]),
@@ -248,6 +282,8 @@ def compute_zscore_penalty(
     *,
     zero_variance: frozenset[int] = frozenset(),
     zero_var_rule: str = DEFAULT_ZERO_VAR_RULE,
+    achieved_mean: dict[int, float] | None = None,
+    targets: dict[int, float] | None = None,
 ) -> float:
     """Marxan-faithful normalised probability shortfall penalty.
 
@@ -274,7 +310,12 @@ def compute_zscore_penalty(
         Ids of the zero-variance features, so a real ``Z = 4`` is told apart from
         Marxan's zero-variance 4; ``zero_var_rule`` applies to these only.
     zero_var_rule
-        ``"marxan"`` or ``"met"`` (see :func:`score_feature`).
+        ``"marxan"``, ``"met"`` or ``"exact"`` (see :func:`score_feature`).
+    achieved_mean, targets
+        Per-feature ``E`` and deterministic target (missing keys: 0), needed by the
+        ``"exact"`` rule only: a zero-variance feature's Z then comes from its certain
+        amount, which ``zscore_per_feature`` does not carry. ``ValueError`` if the rule is
+        ``"exact"`` and either is missing.
 
     Returns
     -------
@@ -288,6 +329,15 @@ def compute_zscore_penalty(
     z = np.array([zscore_per_feature[f] for f in fids], dtype=np.float64)
     pt = np.array([prob_targets.get(f, -1.0) for f in fids], dtype=np.float64)
     zero = np.array([f in zero_variance for f in fids], dtype=bool)
+    if zero_var_rule == "exact":
+        if achieved_mean is None or targets is None:
+            raise ValueError(
+                'zero_var_rule="exact" needs achieved_mean and targets: the certain '
+                "amount of a zero-variance feature decides it, and Z does not carry it"
+            )
+        E = np.array([achieved_mean.get(f, 0.0) for f in fids], dtype=np.float64)
+        T = np.array([targets.get(f, 0.0) for f in fids], dtype=np.float64)
+        z = np.where(zero, np.where(E >= _exact_threshold(T), -np.inf, np.inf), z)
     _, _, penalty = _chance_from_z(z, zero, pt, _ptarget_den(pt), zero_var_rule == "met")
     return float(weight * float(np.sum(penalty)))
 
@@ -352,7 +402,7 @@ def evaluate_solution_chance(
 
     The gate is the term's data, not ``PROBMODE``. A term without its data (``"2d"``: no
     ``prob`` column on ``pu_vs_features``) is off, as in every solver (spec §3.1): each
-    feature's shortfall is 0 and the penalty is 0 under either ``PROBZEROVAR`` rule, and
+    feature's shortfall is 0 and the penalty is 0 under every ``PROBZEROVAR`` rule, and
     no cell is read (so a non-finite ``amount`` does not raise here). With its data the
     term is scored whatever the mode, so a caller can score a problem as if the term
     were requested.

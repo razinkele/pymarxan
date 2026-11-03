@@ -272,3 +272,94 @@ class TestRoutedThroughScoreFeature:
         )
         held = cache.compute_held(sel)
         assert cache.compute_full_objective(sel, held, 0.0) == pytest.approx(2.0, abs=1e-12)
+
+
+class TestExactZeroVarianceRule:
+    """``"exact"`` (``PROBZEROVAR 2``, v0.48.0 B0): a zero-variance feature's amount is
+    certain, so it is met outright (z = −inf, P = 1) when ``E ≥ target − 1e-7·|target|``
+    (``_exact_threshold``), else missed outright (z = +inf, P = 0, shortfall = ptarget,
+    penalty 1)."""
+
+    def test_short(self) -> None:
+        fc = score_feature(5.0, 0.0, 0, 10.0, 0.95, "exact")
+        assert (fc.z, fc.p, fc.shortfall, fc.penalty) == (np.inf, 0.0, 0.95, 1.0)
+
+    @pytest.mark.parametrize("E", [10.0, 20.0])
+    def test_met(self, E: float) -> None:
+        fc = score_feature(E, 0.0, 0, 10.0, 0.95, "exact")
+        assert (fc.z, fc.p, fc.shortfall, fc.penalty) == (-np.inf, 1.0, 0.0, 0.0)
+
+    @pytest.mark.parametrize("target", [10.0, 750.31, 1e-9, 3e12, -4.0])
+    def test_uses_the_target_tolerance(self, target: float) -> None:
+        """Met at the threshold ``target − 1e-7·|target|`` and above it, short one ulp
+        below: the tolerance shared with the fractional plans (``_tolerance``)."""
+        from pymarxan.solvers._tolerance import TARGET_REL_TOL
+        from pymarxan.solvers.probability import _exact_threshold
+
+        thr = float(_exact_threshold(np.array([target]))[0])
+        assert thr == target - TARGET_REL_TOL * abs(target)
+        assert thr < target
+        for E, met in ((thr, True), (target, True), (np.nextafter(thr, -np.inf), False)):
+            fc = score_feature(float(E), 0.0, 0, target, 0.95, "exact")
+            assert fc.p == (1.0 if met else 0.0), (target, E)
+
+    def test_a_zero_target_has_no_tolerance(self) -> None:
+        """Target 0: threshold 0, so E = 0 is met and any negative certain amount is short."""
+        from pymarxan.solvers.probability import _exact_threshold
+
+        assert float(_exact_threshold(np.array([0.0]))[0]) == 0.0
+        assert score_feature(0.0, 0.0, 0, 0.0, 0.9, "exact").penalty == 0.0
+        for E in (-1e-300, -5e-324, -2.0):
+            fc = score_feature(E, 0.0, 0, 0.0, 0.9, "exact")
+            assert (fc.p, fc.shortfall, fc.penalty) == (0.0, 0.9, 1.0)
+
+    def test_negative_certain_amount(self) -> None:
+        fc = score_feature(-3.0, 0.0, 0, 2.0, 0.6, "exact")
+        assert (fc.z, fc.p, fc.shortfall, fc.penalty) == (np.inf, 0.0, 0.6, 1.0)
+
+    @pytest.mark.parametrize("V", [-23.0, 0.0, float("nan")])
+    def test_no_positive_variance_is_zero_variance(self, V: float) -> None:
+        """nonzero 1 but V not > 0: zero variance (Marxan 3's test), scored exactly."""
+        assert score_feature(13.0, V, 1, 8.0, 0.9, "exact").p == 1.0
+        assert score_feature(7.0, V, 1, 8.0, 0.9, "exact").p == 0.0
+
+    def test_counted_variance_takes_the_normal_path(self) -> None:
+        fc = score_feature(10.0, 1e-30, 1, 10.0, 0.95, "exact")
+        assert fc.z == 0.0 and fc.p == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("ptarget", [-1.0, 0.0])
+    def test_disabled_ptarget(self, ptarget: float) -> None:
+        for E in (0.0, 20.0):
+            fc = score_feature(E, 0.0, 0, 10.0, ptarget, "exact")
+            assert fc.penalty == 0.0 and fc.shortfall == 0.0
+
+    def test_batch_agrees_with_scalar(self) -> None:
+        rng = np.random.default_rng(5)
+        n = 300
+        t = rng.choice([0.0, 1.0, 10.0, 750.31], n)
+        E = t * rng.choice([0.5, 1.0, 1.0 - 1e-7, 1.0 - 2e-7, 2.0], n)
+        V = rng.uniform(0, 9, n)
+        N = rng.integers(0, 3, n)
+        V[N == 0] = 0.0
+        pt = rng.choice([-1.0, 0.2, 0.95, 1.0], n)
+        z, p, sf, pen = score_features(E, V, N, t, pt, "exact")
+        for k in range(n):
+            fc = score_feature(float(E[k]), float(V[k]), int(N[k]), float(t[k]),
+                               float(pt[k]), "exact")
+            assert (fc.z, fc.p, fc.shortfall, fc.penalty) == (
+                float(z[k]), float(p[k]), float(sf[k]), float(pen[k]),
+            )
+
+    def test_compute_zscore_penalty_needs_the_amounts(self) -> None:
+        """Z alone cannot tell a met certain amount from a short one: the exact rule needs
+        ``achieved_mean`` and ``targets``; without them it raises rather than guess."""
+        with pytest.raises(ValueError, match="achieved_mean"):
+            compute_zscore_penalty({1: 4.0}, {1: 0.95}, zero_variance=frozenset({1}),
+                                   zero_var_rule="exact")
+        kw = dict(zero_variance=frozenset({1, 2}), zero_var_rule="exact")
+        p = compute_zscore_penalty(
+            {1: 4.0, 2: 4.0, 3: 1.0}, {1: 0.95, 2: 0.5, 3: 0.95}, weight=2.0,
+            achieved_mean={1: 10.0, 2: 3.0, 3: 0.0}, targets={1: 10.0, 2: 4.0, 3: 0.0},
+            **kw,
+        )
+        assert p == pytest.approx(2.0 * (1.0 + (0.95 - float(norm.sf(1.0))) / 0.95))

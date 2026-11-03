@@ -49,7 +49,8 @@ def _nonfinite_cells_error(puvspr: pd.DataFrame) -> str | None:
 
 
 def _probzerovar_value(value: object) -> int | None:
-    """``PROBZEROVAR`` as 0 / 1, or None when it is neither (``validate()`` reports it).
+    """``PROBZEROVAR`` as 0 / 1 / 2, or None when it is none of them (``validate()``
+    reports it).
 
     The one parser of the parameter: ``ConservationProblem.validate()`` and the solvers'
     ``solvers.utils._zero_var_rule`` both use it, so ``validate()`` needs no solver import.
@@ -67,6 +68,8 @@ def _probzerovar_value(value: object) -> int | None:
         return 0
     if number == 1.0:
         return 1
+    if number == 2.0:
+        return 2
     return None
 
 
@@ -363,8 +366,9 @@ class ConservationProblem:
             and _probzerovar_value(self.parameters["PROBZEROVAR"]) is None
         ):
             errors.append(
-                "PROBZEROVAR must be 0 (Marxan's zero-variance rule, Z = 4) or 1 "
-                f"(zero variance counts as met), got {self.parameters['PROBZEROVAR']!r}"
+                "PROBZEROVAR must be 0 (Marxan's zero-variance rule, Z = 4), 1 (zero "
+                "variance counts as met) or 2 (exact: the certain amount meets or misses "
+                f"the target), got {self.parameters['PROBZEROVAR']!r}"
             )
 
         # --- Connectivity validation ---

@@ -190,7 +190,8 @@ class ProblemCache:
     # Active chance terms (``_active_chance_terms``: requested by PROBMODE and with data);
     # ``"2d"`` = the Z-score term from the puvspr ``prob`` column.
     chance_terms: frozenset[str] = frozenset()
-    # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan" or "met".
+    # Zero-variance rule of the chance terms (``_zero_var_rule``): "marxan", "met" or
+    # "exact".
     # ``from_problem`` always passes it; the default is the release default, not the opt-out.
     zero_var_rule: str = DEFAULT_ZERO_VAR_RULE
     # Per-cell contributions of each ACTIVE chance term (``ChanceCells``), keyed by term;

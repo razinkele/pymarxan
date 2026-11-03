@@ -134,13 +134,18 @@ def _zero_var_rule(problem: ConservationProblem) -> str:
     ``PROBZEROVAR 0`` (the default) → ``"marxan"``: Marxan 3's rule, a feature with no
     selected cell carrying variance gets ``Z = 4`` (``P ≈ 3.17e-5``) and so fails any
     ``ptarget`` above that. ``PROBZEROVAR 1`` → ``"met"``: such a feature counts as met (the
-    pre-v0.47 behaviour). Any other value, a bool included, means ``"marxan"`` here and is
-    reported by ``ConservationProblem.validate()``, which shares the parser
+    pre-v0.47 behaviour). ``PROBZEROVAR 2`` → ``"exact"`` (v0.48): the certain amount meets
+    the target (``P = 1``) or misses it (``P = 0``), within the targets' 1e-7 relative
+    tolerance. Any other value, a bool included, means ``"marxan"`` here and is reported
+    by ``ConservationProblem.validate()``, which shares the parser
     (``models.problem._probzerovar_value``). Pure; never warns or raises.
     """
-    return "met" if _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0)) == 1 else (
-        "marxan"
-    )
+    value = _probzerovar_value(problem.parameters.get("PROBZEROVAR", 0))
+    if value == 1:
+        return "met"
+    if value == 2:
+        return "exact"
+    return "marxan"
 
 
 def _probmode2_active(problem: ConservationProblem) -> bool:
