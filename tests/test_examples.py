@@ -39,6 +39,11 @@ def reedbeds():
 
 
 @pytest.fixture(scope="module")
+def recovery():
+    return _load("nature_recovery.py")
+
+
+@pytest.fixture(scope="module")
 def validation():
     return _load("validate_marxan_parity.py")
 
@@ -246,3 +251,33 @@ def test_reedbed_main_runs(reedbeds, capsys):
 
 def _solved(reedbeds, problem):
     return problem, reedbeds.solve_mosaic(problem)
+
+
+# ---------------------------------------------------------------------------
+# nature_recovery.py
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_recovery_example_exact_plan(recovery):
+    from pymarxan.recovery import build_recovery_problem, evaluate_recovery, solve_recovery
+
+    inputs = recovery.build_recovery_inputs()
+    assert inputs.validate() == []
+    problem, mapping = build_recovery_problem(inputs)
+    assert len(problem.planning_units) == 30 and problem.n_zones == 3
+    result = evaluate_recovery(solve_recovery(problem), problem, mapping)
+    assert result.targets_met
+    assert result.total_cost == pytest.approx(17.7)
+    # scalar eta with costs proportional to land cost: one action wins everywhere (spec §3.6)
+    assert set(result.actions["action"]) == {"no_action", "protect", "restore_passive"}
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_recovery_example_main_runs(recovery, capsys):
+    recovery.main()
+    out = capsys.readouterr().out
+    assert "cost 17.70" in out
+    assert "Saved and reloaded: same plan = True" in out
+    assert "not a prescription" in out

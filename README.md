@@ -71,6 +71,7 @@ pymarxan (three-layer monorepo)
 │   ├── models/            ConservationProblem & Solution dataclasses
 │   ├── solvers/           SA, MIP, heuristic, II, run-mode pipeline
 │   ├── zones/             Multi-zone model, zone SA/heuristic/II/MIP solvers
+│   ├── recovery/          Nature recovery: protect / restore active / passive / no action
 │   ├── connectivity/      Distance decay, penalties, circuit-theory (current-flow), smoothing
 │   ├── rivers/            River-network (DCI) + barrier-removal optimization
 │   ├── constraints/       Contiguity, feature contiguity, neighbor, linear, budget
@@ -123,6 +124,14 @@ pymarxan (three-layer monorepo)
 - Zone-aware connectivity (same-zone bonus)
 - Circuit-theory (current-flow / effective-resistance) connectivity from a resistance raster
 - Mass-conserving distribution smoothing via a dispersal kernel
+
+### Nature recovery (`pymarxan.recovery`)
+- Plan where to protect, restore actively, leave to passive recovery or do nothing, as a
+  Marxan-with-Zones problem with **expected** restored amounts (potential × probability of
+  success, optional passive efficacy and maturity factor); exact zone MIP in targets or
+  budget mode, zone SA + iterative improvement fallback, success-rate sensitivity,
+  shortfall-first results and a save/reload format. See the user manual and
+  `examples/nature_recovery.py`.
 
 ### River connectivity & barrier restoration (`pymarxan.rivers`)
 - `RiverNetwork`: rooted river tree (downstream-pointer encoding) with cached

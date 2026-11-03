@@ -93,3 +93,19 @@ the Marxan file format unchanged.
 ```bash
 python examples/validate_marxan_parity.py
 ```
+
+## `nature_recovery.py`
+
+A floodplain nature recovery plan on a 6 × 5 grid with two habitats (wet meadow, alder
+carr). It builds `RecoveryInputs` (existing habitat, restoration potential, success
+probability, passive recovery), solves the cheapest plan meeting both targets exactly (zone
+MIP) and heuristically (zone SA + iterative improvement), finds the best plan within a
+smaller budget, re-scores the plan at lower success rates, and saves and reloads it as a
+recovery project.
+
+```bash
+python examples/nature_recovery.py
+```
+
+It also shows the scalar-η artefact the manual warns about: with one passive efficacy per
+habitat and costs proportional to land cost, the plan restores only passively.

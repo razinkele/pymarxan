@@ -36,7 +36,8 @@ pymarxan is a three-layer monorepo:
 |---------|---------|
 | `models/` | `ConservationProblem`, `Solution`, `SolverConfig` dataclasses |
 | `solvers/` | SA, MIP, heuristic, iterative improvement, run-mode pipeline, cooling schedules. `MIPSolver(decisions="binary" \| "proportion" \| "semicontinuous", upper=, lower=)` (also on `MultiObjectiveMIP`) is the only solver producing fractional solutions; SA / heuristic / II / zone solvers are binary-only and II refuses a fractional start (`FractionalSolutionError`) |
-| `zones/` | `ZonalProblem`, zone SA/heuristic/II/MIP solvers, zone I/O |
+| `zones/` | `ZonalProblem`, zone SA/heuristic/II/MIP solvers, zone I/O (`load_zone_project` / `save_zone_project`) |
+| `recovery/` | Nature recovery on zones: `RecoveryInputs` / `PassiveAction` → `build_recovery_problem` → (`ZonalProblem`, `RecoveryMapping`); zones 1 protect / 2 restore active / 3 passive, unassigned = no action; habitat h → features 2h−1 (`_existing`) / 2h (`_potential`, expected units); `solve_recovery` (targets / budget; MIP or RUNMODE 2 heuristic), `evaluate_recovery` → `RecoveryResult`, `success_sensitivity`, `RECOVERY_CAVEAT`; sidecar I/O `save_recovery_project` / `load_recovery_project` |
 | `connectivity/` | Distance decay functions, connectivity penalties |
 | `constraints/` | ABCs + contiguity, feature contiguity, neighbor, linear, budget constraints |
 | `objectives/` | **Deprecated v0.39, removal v0.42** — objectives live on `MIPSolver(objective=...)` / `ZoneMIPSolver(objective=...)` (`solvers/_mip_objectives.py`) |

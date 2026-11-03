@@ -47,14 +47,15 @@ A comprehensive guide to using the pyMarxan Shiny application for systematic con
     - [SA Convergence](#sa-convergence)
     - [Scenario Comparison](#scenario-comparison)
     - [Export](#export)
-13. [pymarxan, Marxan and prioritizr](#pymarxan-marxan-and-prioritizr)
+13. [Nature recovery (Python API)](#nature-recovery-python-api)
+14. [pymarxan, Marxan and prioritizr](#pymarxan-marxan-and-prioritizr)
     - [Relationship to Marxan](#relationship-to-marxan)
     - [Relationship to prioritizr](#relationship-to-prioritizr)
     - [Side by side](#side-by-side)
     - [Which tool when](#which-tool-when)
     - [Development plans](#development-plans)
-14. [Marxan Concepts Glossary](#marxan-concepts-glossary)
-15. [Troubleshooting](#troubleshooting)
+15. [Marxan Concepts Glossary](#marxan-concepts-glossary)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -778,6 +779,144 @@ Download results as CSV files:
 
 - **Solution CSV**: One row per planning unit with columns: PU ID, selected (1/0), cost
 - **Target Summary CSV**: Feature ID, name, target, achieved amount, met status
+
+---
+
+## Nature recovery (Python API)
+
+*New in v0.49.0. The Shiny tab follows in v0.50.0.*
+
+`pymarxan.recovery` plans **where to protect, where to restore actively, where to leave land
+to recover passively, and where to do nothing**, sharing one budget. It builds an ordinary
+Marxan-with-Zones problem (Watts et al. 2009), so the exact zone MIP and the zone heuristics
+all work on it. Success is uncertain, so restored habitat is counted as an **expected**
+amount: potential × probability that restoration succeeds (Baker et al. 2025).
+
+### Inputs
+
+`RecoveryInputs(base, potential, p_success, ...)`:
+
+| Field | Meaning | Default |
+|---|---|---|
+| `base` | a `ConservationProblem`: units (`id`, `cost`, `status`), habitats as features, **existing** habitat per unit in `pu_vs_features` | required |
+| `potential` | `pu, feature, amount`: the **additional** habitat restoration would add (not the total afterwards) | required |
+| `p_success` | probability active restoration succeeds: one number or a Series indexed by unit id | required |
+| `restore_cost` / `restore_cost_factor` | active restoration cost per unit, else factor × unit cost | factor 2.5 (placeholder) |
+| `restore_cost_by_habitat` | implementation cost per unit of potential, added to the active cost | none |
+| `passive` | `PassiveAction(efficacy=0.5, efficacy_by_habitat=None, cost_factor=1.0)`: passive success = η × p, cost = factor × unit cost | off |
+| `maturity`, `horizon_years` | per-habitat factor g ∈ (0, 1]: what a restored unit counts for at horizon H; H must be given when any g ≠ 1 | g = 1 ("no time lag modelled") |
+| `protect_prop` | share of each habitat's existing amount to keep | 0.3 (policy-style placeholder) |
+| `restore_prop` / `restore_target` | share of the most active restoration could deliver, or an absolute target, **in expected units** | 0.2 (placeholder) |
+| `spf` | penalty factor; `None` scales it per feature (below) | scaled |
+
+`check_recovery_inputs(inputs)` returns `(errors, warnings)`. Errors: unknown unit or habitat
+ids, negative amounts or costs, p outside [0, 1], η or g outside (0, 1], restore cost ≤ 0 in
+any unit, passive cost ≥ active cost ("passive is never chosen there"), habitat ids that are
+not positive integers, and targets no plan can meet. Warnings: a habitat without potential;
+restoring cheaper than protecting in a unit with existing habitat.
+
+### The built problem
+
+`problem, mapping = build_recovery_problem(inputs)`:
+
+| Zone | Action | Zone cost |
+|---|---|---|
+| unassigned | no action | 0 |
+| 1 | protect | unit cost |
+| 2 | restore (active) | restore cost |
+| 3 | restore (passive) | passive cost (only with `passive`) |
+
+Each habitat `h` becomes two features: `2h−1` = `<name>_existing` (credited under **every**
+action: restoring a unit keeps the habitat already there) and `2h` = `<name>_potential`
+(amount = potential × p; credited 0 under protect, g under active, η·g under passive). All
+targets are overall targets. Status 3 units take no action; status 2 units without potential
+are locked into protect, those with potential may be protected or restored but never dropped;
+status 1 is treated as 0. A restore action on a unit without potential costs protect +
+restore, so it is never chosen. `mapping` (`RecoveryMapping`) records the habitat ↔ feature
+ids, zone ↔ action names, per-unit p and costs, and which values are placeholders.
+
+### Solving
+
+```python
+from pymarxan.recovery import (build_recovery_problem, evaluate_recovery,
+                               solve_recovery, success_sensitivity)
+
+problem, mapping = build_recovery_problem(inputs)
+plan = solve_recovery(problem)                                 # cheapest plan meeting the targets
+capped = solve_recovery(problem, mode="budget", budget=12.0)   # best plan within a budget
+quick = solve_recovery(problem, method="heuristic")            # zone SA + iterative improvement
+result = evaluate_recovery(plan, problem, mapping)
+print(result.habitats)          # shortfalls first
+print(success_sensitivity(result))
+print(result.caveat)
+```
+
+- **Targets mode** (default) is the zone MIP's minimum set; BLM applies.
+- **Budget mode** minimises the summed relative shortfall (or, with
+  `budget_objective="max_weighted_features"`, maximises the number of targets met) with total
+  cost ≤ `budget`; every target weighs the same. Boundary penalties are dropped in budget mode
+  and `result.boundary_dropped` says so.
+- **Heuristic** (`method="heuristic"`, targets mode only) runs RUNMODE 2 (zone simulated
+  annealing, then iterative improvement with ITIMPTYPE 3). With `spf=None` each feature's
+  penalty factor is 10 × the dearest cost per unit of that feature any unit and action
+  supplies. No penalty factor can guarantee that a heuristic meets every target (a missing
+  0.2 may need a whole unit), so a heuristic plan cheaper than the exact optimum always comes
+  with its shortfall in the results.
+- Above 50 000 unit × zone decisions the MIP warns (`RecoverySizeWarning`); set
+  `MIP_TIME_LIMIT` or use the heuristic.
+
+### Results
+
+`RecoveryResult.habitats` has one row per habitat, the largest shortfall first: restore and
+protect shortfalls and met flags, existing habitat kept (under any action) and its target, the
+expected amount restored actively and passively (separately), and the restore target.
+Existing and restored amounts are never added into one total: they are not the same thing.
+`cost_by_action` splits the cost; `mode`, `method`, `solver` record how the plan was found.
+
+`success_sensitivity(result, multipliers=(0.5, 0.75, 1.0, 1.25))` re-scores the same plan with
+every p multiplied (capped at 1) — no re-solve — and gives, per habitat, the lowest multiplier
+at which the restore target is still met.
+
+Every result carries this caveat (`RECOVERY_CAVEAT`):
+
+> Restored amounts are expected values: potential × probability that restoration succeeds
+> (passive: × efficacy η), judged at horizon H — often only 1–2-year establishment survival.
+> Targets are met on average, not with any stated probability: a target met by many
+> low-probability units may well fall short in practice. Restored habitat usually stays below
+> the quality of existing habitat for decades; no time lag is modelled. Costs, η and the
+> maturity factor are placeholders unless replaced with local evidence. This plan is a
+> decision aid for stakeholder discussion, not a prescription.
+
+### Saving and reloading
+
+`save_recovery_project(inputs, folder)` writes the zone project (`save_zone_project`, the
+inverse of `load_zone_project`) plus `potential.csv`, `recovery_units.csv` and
+`recovery.json`; `load_recovery_project(folder)` rebuilds the same problem and mapping. The
+zone files reproduce in pymarxan; MarZone C++ has no "no action" state, so they are not
+guaranteed to reproduce there.
+
+### Things to keep in mind
+
+- With one η per habitat and costs proportional to the unit cost, passive costs
+  `cost_factor_passive / (η × cost_factor_active)` per expected unit relative to active
+  restoration in every unit, so a plan picks the same restoration action everywhere for a
+  habitat (the worked example restores only passively). That is a model artefact: real
+  active/passive choices depend on the site (Holl & Aide 2011). Give per-unit restore costs
+  or per-habitat η when you have them. Reports of passive restoration outperforming active
+  (η > 1) exist but are contested (Crouzeilles et al. 2017; Reid et al. 2018).
+- Separate protect and restore targets fix the mix of outcomes; units compete only through
+  exclusive actions and cost. To let protection and restoration compete for one budget, use
+  budget mode.
+- Restoration costs differ by orders of magnitude between ecosystems (Bayraktarov et al.
+  2016); replace the 2.5 × factor with local figures.
+
+A complete worked example: `examples/nature_recovery.py`.
+
+References: Baker et al. (2025) *BioScience* 75(6):472–489, doi:10.1093/biosci/biaf030;
+Bayraktarov et al. (2016) *Ecol. Appl.*, doi:10.1890/15-1077; Crouzeilles et al. (2017)
+*Sci. Adv.*, doi:10.1126/sciadv.1701345; Holl & Aide (2011) *For. Ecol. Manage.*,
+doi:10.1016/j.foreco.2010.07.004; Reid et al. (2018) *Sci. Adv.*, doi:10.1126/sciadv.aas9143;
+Watts et al. (2009) *Environ. Model. Softw.*, doi:10.1016/j.envsoft.2009.06.005.
 
 ---
 

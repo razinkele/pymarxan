@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Nature recovery** (`pymarxan.recovery`, spec `docs/plans/2026-11-03-nature-recovery-workflow-design.md`):
+  plan where to protect, restore actively, leave to passive recovery or take no action.
+  `RecoveryInputs` (base project with existing habitat; incremental restoration
+  `potential`; `p_success`; restore cost or factor 2.5 plus optional per-habitat
+  implementation cost; optional `PassiveAction(efficacy=0.5, cost_factor=1.0)`; optional
+  per-habitat maturity factor with `horizon_years`; protect / restore targets, restore
+  targets in expected units) → `build_recovery_problem` → an ordinary `ZonalProblem`
+  (zones 1 protect, 2 restore active, 3 restore passive; unassigned = no action; habitat
+  `h` → features `2h−1` `<name>_existing`, credited under every action, and `2h`
+  `<name>_potential` = potential × p, credited 0 / g / η·g) plus a `RecoveryMapping`.
+  `check_recovery_inputs` reports input errors, unreachable targets (via
+  `diagnose_zone_infeasibility`) and warnings. Status 2 units without potential are locked
+  into protect, with potential restricted to protect/restore (never dropped); status 3
+  takes no action; status 1 is treated as 0. Default penalty factors are scaled per
+  feature (`SPF_SCALE` = 10 × the dearest cost per unit supplied).
+- `solve_recovery(problem, mode="targets" | "budget", method="mip" | "heuristic")`: zone MIP
+  minimum set, or the best plan within `budget` (zone MIP `min_shortfall` /
+  `max_weighted_features` with `COSTBUDGET`; boundary terms dropped and flagged), or
+  RUNMODE 2 (zone SA + iterative improvement, ITIMPTYPE 3); `RecoverySizeWarning` above
+  50 000 unit × zone decisions.
+- `evaluate_recovery` → `RecoveryResult`: per-habitat table led by shortfalls (existing kept
+  and expected restored active / passive, never summed), cost by action, solver provenance
+  and the always-shown `RECOVERY_CAVEAT`; `success_sensitivity` re-scores a plan at scaled
+  success rates and reports the lowest multiplier still meeting each restore target.
+- `save_zone_project` (`pymarxan.zones`), the inverse of `load_zone_project`; recovery
+  sidecar `potential.csv` / `recovery_units.csv` / `recovery.json` via
+  `write_recovery_inputs` / `read_recovery_inputs`; `save_recovery_project` /
+  `load_recovery_project`.
+- The default solver registry offers `zone_mip`.
+- User manual section "Nature recovery (Python API)" and `examples/nature_recovery.py`.
+
 ### Changed
 
 - **Zone SA can choose "no action".** `ZoneSASolver` now proposes zone 0 (unassigned) for
