@@ -1,6 +1,7 @@
 # Nature recovery workflow — design (rev 2, 2026-11-03)
 
-Status: **rev 2 after the four-lens review** (`docs/plans/2026-11-03-nature-recovery-workflow-review.md`,
+Status: §4 **rev 3 (2026-11-05)** after its own four-lens review (`docs/plans/2026-11-05-nature-recovery-shiny-review.md`) and user decisions E1–E4; §1–§3 unchanged from rev 2.
+Previous: **rev 2 after the four-lens review** (`docs/plans/2026-11-03-nature-recovery-workflow-review.md`,
 findings C1–C3, H1–H10, M1–M10) **and user decisions D1–D4** (2026-11-03). Awaiting written-spec
 approval. Rev 1 was drafted without a brainstorming interview; remaining choices that are not a
 user decision or a review finding are marked *(my call)*.
@@ -198,22 +199,163 @@ Register `zone_mip` (and the RUNMODE pipeline on zone problems) in `solvers/regi
 v0.50.0 tab and Python users can select them (review H1/H3). The single-zone picker is untouched
 in v0.49.0.
 
-## 4. Shiny "Nature recovery" tab (v0.50.0 — outline; its own review before planning)
+## 4. Shiny "Nature recovery" tab (v0.50.0 — rev 3 after its own review)
 
-Review H1/M4/M5 constraints this tab must meet: its **own** solve and results path (the existing
-run, map, target and frequency modules work on binary selections and never read
-`zone_assignment`); its **own** reactive state (`recovery_base` = the project it was built from,
-the built `ZonalProblem` derived and rebuilt on solve, so the Features/Cost/Probability tabs cannot
-corrupt it); every write builds a new object (v0.48.0 finding); the dead `zone_problem` value is
-either wired or removed; both apps (`pymarxan_shiny/app.py` — laguna — and `pymarxan_app/app.py`)
-share one module signature.
+Review: `docs/plans/2026-11-05-nature-recovery-shiny-review.md` (P1–P3, C1, H1–H10, M1–M10).
+User decisions 2026-11-05: **E1** v0.49.1 hotfix for the laguna `get_solver` crash only (P1); the MIP
+backend fallback (P2) and the MIP status fix (P3) are v0.50.0 core prerequisites. **E2** the app
+offers the zone MIP only; the heuristic stays a Python-API option. **E3** success probability starts
+at 0.5 with a placeholder badge. **E4** v0.50.0 includes a safety-margin input, a scenario shelf
+(last 3 runs), English + Lithuanian strings for the tab, and loading a saved recovery ZIP.
 
-Flow: Inputs (base = loaded project; upload potential CSV; p_success as a slider or an optional
-per-unit column — planners rarely have per-unit p) → Actions & targets (placeholders labelled;
-passive optional; maturity factor; mode: targets or budget) → Build & solve (summary, size guard,
-MIP or fallback) → Results (map by action, per-habitat table, cost by action, success
-sensitivity, caveat) → Export (recovery project, CSVs). Worked example dataset and manual section
-ship with v0.50.0. A size/time-limit guard for the deployed server is required.
+### 4.1 Core prerequisites (UI-free, TDD, in v0.50.0)
+
+- **MIP backend (P2).** `solvers/_backends.py`: when `PULP_CBC_CMD` is unavailable, fall back to
+  `pulp.COIN_CMD` with a `cbc` found on `PATH` or in `sys.prefix/bin`; `MIPSolver.available()` and
+  `ZoneMIPSolver.available()` report the truth. Acceptance: a MIP solve works with the shiny env's
+  site-packages only (`python -s`, as user `shiny` sees it), and on laguna after deployment.
+- **MIP status (P3).** Both MIP solvers record `proven_optimal` (from `model.sol_status`),
+  `time_limit_hit`, `time_limit_s` and wall time in `Solution.metadata`; `RecoveryResult` gains
+  `status`, `proven_optimal`, `boundary` (BLM × boundary term) and `objective`, so the tab reports
+  action cost and boundary penalty separately (H9).
+- **Readers.** `recovery/io.py`: `read_potential(src) -> DataFrame` (columns `pu, feature, amount`;
+  `species` accepted for `feature`; habitat **names** mapped to ids through `base.features.name`;
+  clear messages for missing columns, duplicate rows, non-numeric amounts) and
+  `read_unit_values(src) -> DataFrame` (`pu[, p_success][, restore_cost][, passive_cost]`, either
+  value column optional; the `recovery_units.csv` shape). `read_recovery_inputs` reuses both.
+- **Per-unit passive cost.** `RecoveryInputs.passive_cost: pd.Series | None` (the v0.49 deferral),
+  so zero-cost units are not refused when passive is on (H4).
+- **Size.** `recovery_problem_size(problem) -> RecoverySize(units, zones, decisions, boundary_rows)`;
+  no policy in the core.
+- **Example.** `pymarxan.recovery.example_inputs() -> RecoveryInputs` — the floodplain scenario,
+  which `examples/nature_recovery.py` then imports (one source, M8).
+
+### 4.2 Module shape and state
+
+One package `pymarxan_shiny/modules/recovery/`, one public signature for both apps:
+`recovery_panel_ui(id)` / `recovery_panel_server(id, *, problem)`. It reads `problem`; it never writes
+`problem`, `current_solution`, `all_solutions` or `solver_config`, and does not use `solver()`.
+Logic lives in pure helper files (no Shiny import at module level) tested without a session:
+settings → `RecoveryInputs`, guard decision, action colours and legend, result tables, export
+directory, strings. Package-absolute imports throughout (laguna loads `modules.*` under a second
+name). Placed as a top-level "Nature recovery" nav panel in both apps.
+
+The dead `zone_problem` value, the Zones subtab (`zone_config`) and the `zone_sa` choice in the
+global solver picker (a dead end: no loader produces a zone problem) are **removed** from both apps
+*(my call, M10; wiring a read-only view adds UI that no user flow needs)*.
+
+State (all writes build new objects):
+
+| name | kind | written by |
+|---|---|---|
+| `recovery_base` | Value | "Use loaded project", "Load recovery ZIP", "Load worked example" — an explicit snapshot, never followed reactively |
+| `potential`, `unit_values` | Value[DataFrame \| None] | uploads, via the core readers |
+| `settings` | Value[frozen `RecoverySettings`] | widgets, debounced; `dataclasses.replace` |
+| `inputs` | Calc → `RecoveryInputs` + `RecoveryCheck` | `check_recovery_inputs`, called by the tab (warnings are process-global, M3) |
+| `run` | Value[`RecoveryRun`] | solve completion: one frozen bundle (inputs, problem, mapping, solution, result, sensitivity, label) |
+| `shelf` | Value[tuple[`RecoveryRun`, …]] (≤ 3) | "Keep this plan"; oldest dropped; holds the bundle minus the built problem |
+
+Staleness (H5): if `problem() is not recovery_base()`, an amber banner offers "Use the loaded project"
+(ids in the uploads may no longer match). If `run.inputs is not inputs()`, results are greyed with
+"Inputs changed since this plan — solve again". A solve that finishes after its inputs changed is
+shown greyed, never as current.
+
+### 4.3 Layout and flow (one page, M2)
+
+`layout_sidebar`: inputs on the left, consequences on the right; no wizard.
+
+Sidebar, top to bottom:
+1. **Start**: Use loaded project · Load recovery ZIP (`load_recovery_project`) · Load worked example.
+   Language EN/LT radio (tab-local).
+2. **Restoration data**: upload potential (incremental amounts — the help says so); optional upload of
+   per-unit values; template downloads pre-filled with the base's unit and habitat ids.
+3. **Habitats and targets**: one editable row per base feature — include (default: features that
+   appear in the potential file; H3) | name | protect % (prefilled from the project's own targets
+   — `prop`, else `min(1, target / existing)` — labelled "from project"; 30 % placeholder only
+   where the project has none) | restore % | maturity factor g | passive η. Excluded features are
+   dropped from the base handed to the core (`copy_with`).
+4. **Success and costs**: success probability slider 0.05–1.00 step 0.05, **0.5 with a placeholder
+   badge** (E3), amber note at 1.0, overridden per unit by the uploaded file; active restore cost
+   factor (2.5, placeholder) unless per-unit costs are uploaded; passive recovery off by default →
+   cost factor 1.0, η 0.5 (placeholders); horizon (required when any g ≠ 1).
+5. **Plan**: mode — *Cheapest plan that meets the targets* / *Best plan within a budget* (budget
+   objective `min_shortfall` only; budget field shows the least possible cost and, once known, the
+   cheapest target-meeting cost); **safety margin** "plan for X % above each restore target" (0, 10,
+   20, 30 %; scales `restore_target` in the settings layer, recorded in provenance; E4); *Advanced*:
+   BLM (own control, **default 0**, project value shown; greyed with the reason in budget mode; M5),
+   MIP time limit (slider up to the server cap).
+6. **Solve** (disabled while errors exist, while this session is solving, or when no MIP backend is
+   available — with the reason) and **Cancel** (stops waiting; see §4.4).
+
+Main pane, top to bottom:
+1. **Check** (live, debounced): units, habitats, zones, decisions vs the server cap; per habitat
+   existing total, maximum expected restorable, targets; errors in red (block Solve), warnings in
+   amber, verbatim from `RecoveryCheck`; the placeholders still in use (from provenance). An empty
+   potential or every `restore_max = 0` is an error in the tab ("nothing to restore"), not a warning.
+2. **Results** (after a solve):
+   - Caveat, two tiers (M6): an always-visible plain banner — expected value = amount × chance; *the
+     plan is built to just reach each target on average, so about half the time it would fall short
+     unless a safety margin is used* (H6); restored habitat may take years to match existing; the
+     placeholders in use (generated, not fixed text) — and an expandable "Details" with
+     `RECOVERY_CAVEAT`.
+   - Headline: action cost and boundary penalty separately ("model cost units" unless costs came from
+     the user); cost share by action; solver status in words — "cheapest plan (proven)" or "best plan
+     found in N s; not proven cheapest" (P3); in budget mode "reduces total relative shortfall, all
+     targets weighted equally" and the `boundary_dropped` banner (H9, M7).
+   - Per-habitat table, shortfall first: existing protected vs target; expected restored, active and
+     passive, vs target; never summed; "short by X (Y %)" text, not colour alone; a "no margin" tag
+     where the expected amount equals the target.
+   - Action map: `build_pu_map(recovery_base, colors)`; four colour-blind-safe categories with a legend
+     (protect / restore actively / restore passively / no action — visible grey); title "Where the
+     plan places actions"; hover with unit, action, cost, existing and expected restored amount;
+     polygon cap with a table fallback.
+   - Robustness (H8): "This plan, if success turns out different — the same plan re-scored": rows by
+     **effective** success rate, rows where the cap at 100 % binds greyed, and per habitat the lowest
+     success rate at which the restore target is still met ("met down to 62 %; you assumed 80 %").
+   - Per-unit action table.
+3. **Scenario shelf** (E4): "Keep this plan" stores the current run (≤ 3 per session, named by the
+   user or auto-labelled with mode/p/margin); a side-by-side summary — cost, boundary, per-habitat
+   shortfalls, key inputs — and a map toggle between kept plans.
+4. **Export**: Recovery ZIP = `save_recovery_project` files + `plan_actions.csv`, `habitats.csv`,
+   `sensitivity.csv` + `README.txt` with the caveat and placeholder list; single CSV downloads; a
+   per-session temp dir removed on `session.on_ended`; current download API (not the deprecated
+   `render.download`).
+
+### 4.4 Execution on the shared server (C1, H1)
+
+- MIP only (E2). A solve runs in a worker thread (CBC itself is a subprocess); results return to the
+  session through the poll/`ExtendedTask` pattern; reactive values are written only on the main loop.
+- One solve per session; a **process-wide** `threading.BoundedSemaphore` (default 2) shared by all
+  sessions; a session that cannot acquire shows "queued — another plan is being computed". The
+  semaphore lives in a module imported only by its package path.
+- Server limits, one constant set in the helper module, overridable by environment variables
+  (`PYMARXAN_RECOVERY_*`) so laptops are not held to laguna's: MIP time limit **clamped** to ≤ 120 s
+  (default 60 s) whatever the project's `MIP_TIME_LIMIT`; targets mode with BLM > 0 refused above 500
+  units (offer BLM 0 or budget mode); everything refused above 20 000 units or 60 000 unit × zone
+  decisions. Thresholds come from the review's probes and are re-checked on laguna before release.
+- Cancel only detaches the session (results of that solve are discarded, the button re-enables);
+  the semaphore slot is released when the worker thread exits, so concurrent CBC runs stay bounded;
+  CBC ends at its clamped time limit at the latest *(my call: killing CBC early needs a child
+  process, not worth it with a clamp)*.
+- Errors from `RecoveryInputError`/`ValueError` are shown verbatim (already planner-readable);
+  anything else shows a generic message and is logged, never a traceback.
+
+### 4.5 Language (E4)
+
+All tab strings live in one `strings.py` table keyed by id with `en` and `lt` values; the tab's
+EN/LT radio selects them; numbers rounded for display ("X of Y ha"). The rest of the app stays
+English *(my call: no app-wide i18n in v0.50)*. The Lithuanian text must be reviewed by the user or a
+native speaker before release, and should reuse the LT stakeholder deck's terms
+(`docs/presentations/`).
+
+### 4.6 Tests and acceptance
+
+Pure helpers by ordinary pytest; source-text pins for wiring; an app-level test for **each** app that
+imports it and evaluates its solver factory for every picker choice (would have caught P1) and that the
+recovery tab is present; one playwright e2e test (worked example → solve → results table, marked
+`integration`/`slow`). Acceptance on laguna as user `shiny`: worked example solves with the MIP, a
+1751-unit project hits the time-limit banner, two concurrent sessions queue rather than stall.
+Manual section "Nature recovery in the app" and CHANGELOG ship with v0.50.0.
 
 ## 5. Goals, non-goals, anti-goals
 
@@ -243,12 +385,13 @@ review's executed cases become tests.
 checks, builder, mapping (§3.1–3.3, §3.6) with anchor tests; R3 solving modes, solver registration,
 spf scaling, heuristic ≥ MIP tests (§3.5, §3.9); R4 `RecoveryResult`, `success_sensitivity`,
 caveat text (§3.7); R5 persistence (§3.8); R6 docs (manual section for the Python API),
-CHANGELOG. **v0.50.0 (Shiny):** §4, after its own spec review.
+CHANGELOG. **v0.49.1:** laguna `get_solver` crash fix + app-level tests (§4, E1). **v0.50.0 (Shiny):** §4.1 core prerequisites, then §4.2–4.6.
 
 Process: this spec → prototype-first plan for v0.49.0 → plan review → SDD → release.
 
 ## 8. Left to the plan
 
-spf scaling rule; size-guard thresholds; exact signatures and file names; whether
-`success_sensitivity` also offers a budget sweep (≤ 5 solves); how `RecoveryMapping` is attached
-(returned tuple vs `parameters`); test fixtures beyond the anchors listed.
+v0.50.0: exact `RecoverySettings` fields and their mapping to `RecoveryInputs`; the editable-grid
+widget for §4.3 item 3; colour values for the four actions (`ocean_palette.py`); shelf memory per
+run; the Lithuanian review workflow (who reviews, when); file names inside the export ZIP;
+ExtendedTask vs thread-and-poll for §4.4; test fixtures beyond the worked example and prioritizr.
