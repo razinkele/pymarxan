@@ -237,7 +237,10 @@ def save_zone_project(problem: ZonalProblem, project_dir: str | Path) -> None:
     ``zonetarget.dat``, ``zoneboundcost.dat``, ``pulock.dat`` and ``puzone.dat``, naming
     each in ``input.dat`` (the loader reads pulock/puzone only when named). An absent
     optional table removes a stale file of the same name from the input directory, and its
-    ``*NAME`` key from the written parameters, so the reload cannot pick up old data.
+    ``*NAME`` key from the written parameters, so the reload cannot pick up old data; the
+    same holds for ``bound.dat`` and ``prob.dat`` when ``boundary`` or ``probability`` is
+    None. Reloaded Marxan tables equal the saved data up to the float parsing of those
+    readers (not necessarily bit for bit); the recovery sidecar CSVs are read exactly.
     pymarxan's "unassigned" (no action) state has no MarZone C++ equivalent, so a saved
     project is guaranteed to reproduce in pymarxan, not in MarZone.
     """
@@ -259,3 +262,21 @@ def save_zone_project(problem: ZonalProblem, project_dir: str | Path) -> None:
             writer(table, input_dir / str(params[key]))
         elif (input_dir / default).exists():
             (input_dir / default).unlink()
+    # save_project always names bound.dat / prob.dat; an absent table must not stay named
+    # (or keep a stale file the reload would read).
+    for attr, key, default in _OPTIONAL_PROJECT_FILES:
+        if getattr(problem, attr) is None:
+            (input_dir / default).unlink(missing_ok=True)
+            _drop_input_dat_key(project_dir / "input.dat", key)
+
+
+_OPTIONAL_PROJECT_FILES = (
+    ("boundary", "BOUNDNAME", "bound.dat"),
+    ("probability", "PROBNAME", "prob.dat"),
+)
+
+
+def _drop_input_dat_key(path: Path, key: str) -> None:
+    """Remove the ``key`` line from a KEY VALUE file."""
+    lines = path.read_text().splitlines(keepends=True)
+    path.write_text("".join(ln for ln in lines if ln.split(maxsplit=1)[:1] != [key]))

@@ -139,10 +139,13 @@ def write_input_dat(params: dict[str, Any], path: str | Path) -> None:
     with open(path, "w") as f:
         for key, value in params.items():
             if isinstance(value, float):
-                # Ensure float values always have a decimal point
-                formatted = f"{value:g}"
-                if "." not in formatted and "e" not in formatted.lower():
-                    formatted += ".0"
+                # repr is the shortest exact round trip ("%g" kept 6 digits, so BLM
+                # 0.123456789 reloaded as 0.123457). read_input_dat only parses text
+                # with a decimal point as float, so "1e-12" becomes "1.0e-12".
+                mantissa, sep, exponent = repr(value).partition("e")
+                if mantissa.lstrip("-").isdigit():
+                    mantissa += ".0"
+                formatted = mantissa + sep + exponent
                 f.write(f"{key} {formatted}\n")
             else:
                 f.write(f"{key} {value}\n")

@@ -113,3 +113,13 @@ def test_io_exports_writers():
     assert hasattr(io, "write_mvbest")
     assert hasattr(io, "write_ssoln")
     assert hasattr(io, "write_sum")
+
+
+def test_input_dat_floats_round_trip_exactly(tmp_path: Path) -> None:
+    params = {"BLM": 0.123456789, "TINY": 1e-12, "ONE": 1.0, "COUNT": 3}
+    out_path = tmp_path / "input.dat"
+    write_input_dat(params, out_path)
+    loaded = read_input_dat(out_path)
+    assert loaded["BLM"] == 0.123456789
+    assert loaded["TINY"] == 1e-12
+    assert loaded["ONE"] == 1.0 and loaded["COUNT"] == 3

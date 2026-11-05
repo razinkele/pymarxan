@@ -73,3 +73,24 @@ def test_saving_without_a_table_removes_its_stale_file(tmp_path: Path) -> None:
     assert again.pu_locks is None and again.zone_contributions is None
     assert not (tmp_path / "input" / "pulock.dat").exists()
     assert "PULOCKNAME" not in (tmp_path / "input.dat").read_text()
+
+
+def test_dropping_boundary_or_probability_removes_stale_files(tmp_path: Path) -> None:
+    # load_zone_project does not read prob.dat (it never passes probability through), so the
+    # probability side is checked with the base reader, which does.
+    from pymarxan.io.readers import load_project
+
+    base = _load(ZONES_DIR)
+    bound = pd.DataFrame({"id1": [1], "id2": [2], "boundary": [1.0]})
+    prob = pd.DataFrame({"pu": [1], "probability": [0.5]})
+    save_zone_project(base.copy_with(boundary=bound, probability=prob), tmp_path)
+    assert _load(tmp_path).boundary is not None
+    assert load_project(tmp_path).probability is not None
+    save_zone_project(base.copy_with(boundary=None, probability=None), tmp_path)
+    again = _load(tmp_path)
+    assert again.boundary is None
+    assert load_project(tmp_path).probability is None
+    assert not (tmp_path / "input" / "bound.dat").exists()
+    assert not (tmp_path / "input" / "prob.dat").exists()
+    text = (tmp_path / "input.dat").read_text()
+    assert "BOUNDNAME" not in text and "PROBNAME" not in text

@@ -117,3 +117,23 @@ def test_rejects_a_foreign_sidecar(tmp_path: Path) -> None:
 def test_write_refuses_invalid_inputs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="invalid recovery inputs"):
         write_recovery_inputs(anchor_inputs(p_success=2.0), tmp_path)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_sidecar_floats_round_trip_bit_exact(tmp_path: Path, seed: int) -> None:
+    """read_csv's default float parser drops the last bit on ~13% of values; the sidecar
+    must reload every amount, p_success and restore cost exactly (==, not approx)."""
+    rng = np.random.default_rng(seed)
+    p = rng.uniform(0.01, 1.0, 4)
+    rc = rng.uniform(1.0, 100.0, 4)
+    amounts = rng.uniform(1.0, 100.0, 2)
+    inputs = anchor_inputs(
+        p_success=pd.Series(dict(zip([1, 2, 3, 4], p.tolist()))),
+        restore_cost=pd.Series(dict(zip([1, 2, 3, 4], rc.tolist()))),
+        potential=pd.DataFrame({"pu": [3, 4], "feature": [1, 1], "amount": amounts.tolist()}),
+    )
+    write_recovery_inputs(inputs, tmp_path)
+    back = read_recovery_inputs(tmp_path, inputs.base)
+    assert back.p_by_unit().tolist() == inputs.p_by_unit().tolist()
+    assert back.restore_cost.loc[[1, 2, 3, 4]].tolist() == rc.tolist()
+    assert back.potential["amount"].tolist() == amounts.tolist()

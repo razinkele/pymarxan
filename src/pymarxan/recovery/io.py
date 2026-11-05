@@ -121,10 +121,10 @@ def read_recovery_inputs(project_dir: str | Path, base: ConservationProblem) -> 
     existing amounts in ``pu_vs_features``)."""
     d = Path(project_dir)
     sidecar = _read_sidecar(d)
-    potential = pd.read_csv(d / POTENTIAL_FILE).astype(
+    potential = pd.read_csv(d / POTENTIAL_FILE, float_precision="round_trip").astype(
         {"pu": int, "feature": int, "amount": float}
     )
-    units = pd.read_csv(d / UNITS_FILE).astype({"pu": int})
+    units = pd.read_csv(d / UNITS_FILE, float_precision="round_trip").astype({"pu": int})
     p_scalar = sidecar["p_success_scalar"]
     p_success: float | pd.Series = (
         float(p_scalar) if p_scalar is not None
@@ -179,7 +179,9 @@ def load_recovery_project(project_dir: str | Path) -> RecoveryProject:
     d = Path(project_dir)
     sidecar = _read_sidecar(d)
     zonal = load_zone_project(d)
-    units = pd.read_csv(d / UNITS_FILE).astype({"pu": int, "status": int})
+    units = pd.read_csv(d / UNITS_FILE, float_precision="round_trip").astype(
+        {"pu": int, "status": int}
+    )
     status_of = dict(zip(units["pu"], units["status"], strict=True))
     pu = zonal.planning_units[["id", "cost"]].copy()
     pu["status"] = [int(status_of[int(i)]) for i in pu["id"]]
