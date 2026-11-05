@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0] — 2026-11-05
+
 ### Added
 
 - **Nature recovery** (`pymarxan.recovery`, spec `docs/plans/2026-11-03-nature-recovery-workflow-design.md`):
@@ -1908,7 +1910,8 @@ spatial workflow built on `geopandas` / `rasterio`.
   `ipyleaflet.Map` outside a Shiny session need the
   `_allow_widget_outside_session` fixture.
 
-[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/razinkele/pymarxan/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.49.0
 [0.48.0]: https://github.com/razinkele/pymarxan/releases/tag/v0.48.0
 [0.47.2]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.2
 [0.47.1]: https://github.com/razinkele/pymarxan/releases/tag/v0.47.1
