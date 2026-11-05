@@ -42,11 +42,11 @@ def test_no_action_delta_does_not_scale_with_n_pu() -> None:
     large = make_zone_problem(n_pu=20_000, n_feat=10, n_zones=3, density=0.1, seed=1)
     ratio = _per_delta(large, to_zero=True) / _per_delta(small, to_zero=True)
     print(f"to-zero per-delta 20k/1k {ratio:.3f}")
-    assert ratio <= 1.5, f"to-zero per-delta grows with n_pu: 20k/1k ratio {ratio:.3f}"
+    assert ratio <= 1.25, f"to-zero per-delta grows with n_pu: 20k/1k ratio {ratio:.3f}"
 
 
 def test_no_action_delta_close_to_zone_swap_delta() -> None:
     p = make_zone_problem(n_pu=1_000, n_feat=50, n_zones=3, density=0.3, seed=42)
     ratio = _per_delta(p, to_zero=True) / _per_delta(p, to_zero=False)
     print(f"to-zero / zone-swap per-delta {ratio:.3f}")
-    assert ratio <= 1.5, f"to-zero / zone-swap per-delta {ratio:.3f}"
+    assert ratio <= 1.25, f"to-zero / zone-swap per-delta {ratio:.3f}"
