@@ -248,3 +248,54 @@ def test_budget_below_the_locked_in_cost_names_the_floor() -> None:
     problem, _ = build_recovery_problem(anchor_inputs(status=(0, 2, 0, 0), restore_prop=0.0))
     with pytest.raises(ValueError, match=r"least cost any plan must pay \(1: locked-in"):
         solve_recovery(problem, mode="budget", budget=0.5)
+
+
+def test_heuristic_returns_a_feasible_run_over_a_cheaper_infeasible_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cheaper run misses the target; the dearer run meets it. Feasible-first must win.
+    problem, _ = build_recovery_problem(anchor_inputs())
+    n = len(problem.planning_units)
+    infeasible = solve_module.Solution(
+        selected=np.zeros(n, dtype=bool), cost=1.0, boundary=0.0, objective=1.0,
+        targets_met={1: False, 2: True}, shortfall=0.5,
+    )
+    feasible = solve_module.Solution(
+        selected=np.ones(n, dtype=bool), cost=5.0, boundary=0.0, objective=5.0,
+        targets_met={1: True, 2: True}, shortfall=0.0,
+    )
+
+    def fake_runs(self, problem, config=None):  # type: ignore[no-untyped-def]
+        return [infeasible, feasible]
+
+    monkeypatch.setattr(solve_module.RunModePipeline, "solve", fake_runs)
+    sol = solve_recovery(problem, method="heuristic")
+    assert sol.all_targets_met
+    assert sol.objective == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("mode", ["budget", "targets"])
+def test_budget_mode_pins_equal_weight_spf_and_targets_mode_keeps_scaled(
+    monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    from pymarxan.zones.mip_solver import ZoneMIPSolver
+
+    seen: list[ZonalProblem] = []
+    real = ZoneMIPSolver.solve
+
+    def spy(self, problem, config=None):  # type: ignore[no-untyped-def]
+        seen.append(problem)
+        return real(self, problem, config)
+
+    monkeypatch.setattr(ZoneMIPSolver, "solve", spy)
+    problem, _ = build_recovery_problem(anchor_inputs(
+        passive=PassiveAction(), restore_target={1: 8.5},
+    ))
+    if mode == "budget":
+        solve_recovery(problem, mode="budget", budget=5.5)
+        assert seen[-1].features["spf"].tolist() == [1.0, 1.0]
+    else:
+        solve_recovery(problem)
+        assert seen[-1].features["spf"].tolist() == pytest.approx(
+            [SPF_SCALE * 3.5 / 6, SPF_SCALE * 0.625]
+        )

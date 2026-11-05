@@ -75,7 +75,8 @@ def solve_recovery(
         params = {**problem.parameters, **HEURISTIC_PARAMETERS}
         cfg = config or SolverConfig(num_solutions=10, seed=0)
         runs = RunModePipeline().solve(problem.copy_with(parameters=params), cfg)
-        best = min(runs, key=lambda s: s.objective)
+        # feasible runs first: a cheaper run that misses a target is never presented as the plan
+        best = min(runs, key=lambda s: (not s.all_targets_met, s.objective))
     else:
         n_decisions = len(problem.planning_units) * problem.n_zones
         if n_decisions > RECOVERY_MIP_SIZE_WARNING:

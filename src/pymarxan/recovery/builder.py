@@ -94,6 +94,13 @@ class RecoveryMapping:
 def scaled_spf(problem: ZonalProblem) -> dict[int, float]:
     """Feature id -> ``SPF_SCALE × max_{unit, zone} zone_cost / (amount × contribution)``
     over the (unit, zone) pairs that supply the feature; 1.0 for a feature nothing supplies.
+
+    Rationale: one unit of shortfall costs ``SPF_SCALE`` (10x) more than buying that unit of
+    supply the most expensive way. Integrality means no finite proportional spf guarantees
+    heuristic feasibility (anchor b1 at cost factor 0.2 needs ≥ 17); on the anchors and
+    random 7-8 unit instances SA + II met the targets in ~95 % of runs at 10 (50 % at 1,
+    67 % at 2) and always reached the MIP optimum when they did. Solvers therefore still
+    report any shortfall.
     """
     zc = {(int(p), int(z)): float(c) for p, z, c in zip(
         problem.zone_costs["pu"], problem.zone_costs["zone"], problem.zone_costs["cost"],
