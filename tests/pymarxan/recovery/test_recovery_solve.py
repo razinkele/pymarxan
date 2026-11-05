@@ -299,3 +299,16 @@ def test_budget_mode_pins_equal_weight_spf_and_targets_mode_keeps_scaled(
         assert seen[-1].features["spf"].tolist() == pytest.approx(
             [SPF_SCALE * 3.5 / 6, SPF_SCALE * 0.625]
         )
+
+
+def test_budget_without_budget_mode_is_rejected() -> None:
+    problem, _ = build_recovery_problem(anchor_inputs())
+    with pytest.raises(ValueError, match='mode="budget"'):
+        solve_recovery(problem, budget=10)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_budget_is_rejected(bad: float) -> None:
+    problem, _ = build_recovery_problem(anchor_inputs())
+    with pytest.raises(ValueError, match="finite"):
+        solve_recovery(problem, mode="budget", budget=bad)

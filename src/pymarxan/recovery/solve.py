@@ -5,11 +5,13 @@
 ``max_weighted_features`` with ``COSTBUDGET``; every target weighted equally; boundary terms
 dropped, recorded in ``metadata["boundary_dropped"]``). ``method="heuristic"`` (targets mode
 only) runs ``RunModePipeline`` with RUNMODE 2 (zone SA then iterative improvement) and
-ITIMPTYPE 3 and returns the run with the lowest objective; its shortfall, if any, is in the
+ITIMPTYPE 3 and returns the run with the lowest objective among the runs that meet every
+target, or the lowest-objective run if none does; its shortfall, if any, is in the
 ``Solution`` — never a cheaper plan presented as feasible.
 """
 from __future__ import annotations
 
+import math
 import warnings
 from typing import cast
 
@@ -62,9 +64,15 @@ def solve_recovery(
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if mode == "targets" and budget is not None:
+        raise ValueError(
+            'budget is ignored in mode="targets"; pass mode="budget" to cap the total cost'
+        )
     if mode == "budget":
         if budget is None:
             raise ValueError("budget mode needs a budget (total cost cap)")
+        if not math.isfinite(float(budget)):
+            raise ValueError(f"budget must be a finite number, got {budget!r}")
         if method != "mip":
             raise ValueError("budget mode is solved by the zone MIP only")
         if budget_objective not in BUDGET_OBJECTIVES:

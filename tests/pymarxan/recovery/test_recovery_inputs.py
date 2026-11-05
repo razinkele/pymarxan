@@ -166,3 +166,33 @@ def test_string_restore_cost_index_is_reported_not_a_crash() -> None:
     assert any("restore_cost index must hold integer unit ids" in e for e in inputs.validate())
     check = check_recovery_inputs(inputs)
     assert check.errors and check.warnings == []
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "needle"),
+    [("pu", 3.7, "3.7"), ("feature", 2.5, "2.5"), ("pu", float("nan"), "nan")],
+)
+def test_non_integral_potential_ids_are_reported_and_build_refuses(
+    column: str, value: float, needle: str,
+) -> None:
+    inputs = anchor_inputs()
+    pot = inputs.potential.copy()
+    pot[column] = pot[column].astype(float)
+    pot.loc[pot.index[0], column] = value
+    inputs.potential = pot
+    errors = inputs.validate()
+    assert any(f"potential {column} ids" in e and needle in e for e in errors), errors
+    with pytest.raises(RecoveryInputError):
+        build_recovery_problem(inputs)
+
+
+def test_zero_cost_unit_with_passive_names_the_remedy() -> None:
+    inputs = anchor_inputs(passive=PassiveAction())
+    pu = inputs.base.planning_units.copy()
+    pu.loc[pu.index[0], "cost"] = 0.0
+    inputs.base = inputs.base.copy_with(planning_units=pu)
+    errors = inputs.validate()
+    assert any(
+        "passive cost must be > 0" in e and "positive cost in the planning-unit table" in e
+        for e in errors
+    ), errors

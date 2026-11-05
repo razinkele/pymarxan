@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   problem with unlocked, unrestricted units (seeded runs take new paths and usually reach
   lower objectives). The per-flip delta already handled moves to and from zone 0; the
   boundary part of such moves no longer builds an `n_pu`-sized mask. The solver-picker help
-  text now states when units can stay unassigned.
+  text now states when units can stay unassigned. Set `MANDATORYALLOCATION 1` to keep every
+  unit in a zone (Marxan with Zones behaviour).
 
 ### Fixed
 

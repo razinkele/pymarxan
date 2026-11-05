@@ -327,7 +327,7 @@ pyMarxan supports ten solver algorithms:
 | **MIP (PuLP/CBC)** | Exact | ✗ | Mixed Integer Linear Programming. Guaranteed optimal solution. Best for small–medium problems. |
 | **Zone MIP** | Exact | ✓ | Multi-zone MIP with zone costs, contributions, and targets. |
 | **Simulated Annealing (Python)** | Heuristic | ✗ | Native Python SA with 4 cooling schedules (adaptive, geometric, linear, logarithmic). |
-| **Zone SA** | Heuristic | ✓ | Simulated annealing for multi-zone problems. Each PU is assigned to a zone. |
+| **Zone SA** | Heuristic | ✓ | Simulated annealing for multi-zone problems. A unit may be left unassigned (no action) unless `MANDATORYALLOCATION` is 1 or the unit is locked or restricted. Set `MANDATORYALLOCATION 1` to keep every unit in a zone (Marxan with Zones behaviour). |
 | **Greedy Heuristic** | Heuristic | ✗ | Selects PUs one-by-one based on a scoring strategy. Very fast baseline. |
 | **Zone Heuristic** | Heuristic | ✓ | Greedy zone assignment minimizing zone objective. |
 | **Iterative Improvement** | Heuristic | ✗ | Refines an existing solution by trying removals, additions, or swaps. |
@@ -808,6 +808,10 @@ amount: potential × probability that restoration succeeds (Baker et al. 2025).
 | `protect_prop` | share of each habitat's existing amount to keep | 0.3 (policy-style placeholder) |
 | `restore_prop` / `restore_target` | share of the most active restoration could deliver, or an absolute target, **in expected units** | 0.2 (placeholder) |
 | `spf` | penalty factor; `None` scales it per feature (below) | scaled |
+
+With passive restoration the passive cost is `cost_factor` × the unit cost, so a unit with cost 0
+is rejected; give it a positive cost in the planning-unit table or run without passive
+restoration.
 
 `check_recovery_inputs(inputs)` returns `(errors, warnings)`. Errors: unknown unit or habitat
 ids, negative amounts or costs, p outside [0, 1], η or g outside (0, 1], restore cost ≤ 0 in

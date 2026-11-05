@@ -225,6 +225,18 @@ class RecoveryInputs:
         if missing:
             errors.append(f"potential is missing columns {sorted(missing)}")
         else:
+            for col, label in (("pu", "unit"), ("feature", "habitat")):
+                vals = pot[col].values
+                bad_vals = [
+                    v for v in vals if not (_is_finite_number(v) and float(v) == int(v))
+                ]
+                if bad_vals:
+                    errors.append(
+                        f"potential {col} ids must be whole numbers ({label} ids): "
+                        f"{_first(list(dict.fromkeys(str(v) for v in bad_vals)))}"
+                    )
+            if errors:
+                return errors
             bad_u = sorted({int(u) for u in pot["pu"].values} - units)
             bad_h = sorted({int(h) for h in pot["feature"].values} - habs)
             if bad_u:
@@ -293,7 +305,11 @@ class RecoveryInputs:
         if pc is not None:
             bad = [u for u, c in zip(unit_ids, pc, strict=True) if not c > 0]
             if bad:
-                errors.append(f"passive cost must be > 0 in every unit: units {_first(bad)}")
+                errors.append(
+                    f"passive cost must be > 0 in every unit: units {_first(bad)}: passive "
+                    "cost is cost_factor x unit cost, so give these units a positive cost in "
+                    "the planning-unit table or run without passive restoration"
+                )
             never = [u for u, a, p in zip(unit_ids, rc, pc, strict=True) if p >= a]
             if never:
                 errors.append(
