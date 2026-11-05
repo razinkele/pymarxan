@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimum set, or the best plan within `budget` (zone MIP `min_shortfall` /
   `max_weighted_features` with `COSTBUDGET`; boundary terms dropped and flagged), or
   RUNMODE 2 (zone SA + iterative improvement, ITIMPTYPE 3); `RecoverySizeWarning` above
-  50 000 unit × zone decisions.
+  50 000 unit × zone decisions. When several runs are made, a run that meets every target is preferred over a cheaper
+  one that misses a target.
 - `evaluate_recovery` → `RecoveryResult`: per-habitat table led by shortfalls (existing kept
   and expected restored active / passive, never summed), cost by action, solver provenance
   and the always-shown `RECOVERY_CAVEAT`; `success_sensitivity` re-scores a plan at scaled
@@ -52,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lower objectives). The per-flip delta already handled moves to and from zone 0; the
   boundary part of such moves no longer builds an `n_pu`-sized mask. The solver-picker help
   text now states when units can stay unassigned.
+
+### Fixed
+
+- `write_input_dat` writes float parameters at full precision (it used 6 significant
+  digits, so e.g. BLM 0.123456789 reloaded as 0.123457), including numpy floats.
+- `save_zone_project` removes a stale `bound.dat` / `prob.dat` when the problem has no
+  boundary / probability table.
 
 ## [0.48.0] — 2026-11-03
 

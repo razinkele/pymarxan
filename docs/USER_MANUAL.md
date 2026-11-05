@@ -861,7 +861,8 @@ print(result.caveat)
   penalty factor is 10 × the dearest cost per unit of that feature any unit and action
   supplies. No penalty factor can guarantee that a heuristic meets every target (a missing
   0.2 may need a whole unit), so a heuristic plan cheaper than the exact optimum always comes
-  with its shortfall in the results.
+  with its shortfall in the results. When several runs are made, a run that meets every
+  target is preferred over a cheaper one that misses a target.
 - Above 50 000 unit × zone decisions the MIP warns (`RecoverySizeWarning`); set
   `MIP_TIME_LIMIT` or use the heuristic.
 
@@ -894,6 +895,10 @@ inverse of `load_zone_project`) plus `potential.csv`, `recovery_units.csv` and
 `recovery.json`; `load_recovery_project(folder)` rebuilds the same problem and mapping. The
 zone files reproduce in pymarxan; MarZone C++ has no "no action" state, so they are not
 guaranteed to reproduce there.
+
+Saving a plain zone project (`save_zone_project`) into a folder that already holds a recovery
+project leaves the old recovery sidecar (`recovery.json`, `potential.csv`,
+`recovery_units.csv`) in place; use `save_recovery_project` for recovery folders.
 
 ### Things to keep in mind
 
