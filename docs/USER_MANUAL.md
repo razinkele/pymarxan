@@ -803,7 +803,7 @@ amount: potential × probability that restoration succeeds (Baker et al. 2025).
 | `p_success` | probability active restoration succeeds: one number or a Series indexed by unit id | required |
 | `restore_cost` / `restore_cost_factor` | active restoration cost per unit, else factor × unit cost | factor 2.5 (placeholder) |
 | `restore_cost_by_habitat` | implementation cost per unit of potential, added to the active cost | none |
-| `passive` | `PassiveAction(efficacy=0.5, efficacy_by_habitat=None, cost_factor=1.0)`: passive success = η × p, cost = factor × unit cost | off |
+| `passive` | `PassiveAction(efficacy=0.5, efficacy_by_habitat=None, cost_factor=1.0)`: passive success = η × p, cost = factor × unit cost (η and cost factor are placeholders) | off |
 | `maturity`, `horizon_years` | per-habitat factor g ∈ (0, 1]: what a restored unit counts for at horizon H; H must be given when any g ≠ 1 | g = 1 ("no time lag modelled") |
 | `protect_prop` | share of each habitat's existing amount to keep | 0.3 (policy-style placeholder) |
 | `restore_prop` / `restore_target` | share of the most active restoration could deliver, or an absolute target, **in expected units** | 0.2 (placeholder) |

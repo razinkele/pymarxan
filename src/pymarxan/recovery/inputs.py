@@ -34,7 +34,7 @@ def _first(items: Sequence[object], n: int = 5) -> str:
 @dataclass(frozen=True)
 class PassiveAction:
     """Passive recovery (natural regeneration): success = η_h × active p_success, cost =
-    ``cost_factor × unit cost``. Defaults are ROWER placeholders (η 0.5, cost factor 1.0)."""
+    ``cost_factor × unit cost``. Defaults are placeholders (η 0.5, cost factor 1.0)."""
 
     efficacy: float = DEFAULT_PASSIVE_EFFICACY
     efficacy_by_habitat: Mapping[int, float] | None = None
