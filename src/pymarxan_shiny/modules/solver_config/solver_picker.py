@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from shiny import module, reactive, render, ui
 
+from pymarxan.solvers.base import Solver
 from pymarxan.solvers.marxan_binary import MarxanBinarySolver
 from pymarxan.solvers.mip_solver import MIPSolver
 from pymarxan_shiny.modules.help.help_button import help_card_header, help_server_setup
@@ -30,6 +31,44 @@ def build_mip_solver(config: dict) -> tuple[MIPSolver, str | None]:
         return MIPSolver(**mip_decision_kwargs(config)), None
     except ValueError as e:
         return MIPSolver(), f"{e} — running with binary decisions instead"
+
+
+def solver_from_config(config: dict) -> tuple[Solver, str | None]:
+    """The solver for the picker's ``solver_type`` and a warning message (or ``None``).
+
+    Shared by both apps so they build the same solver for the same choice. Unknown or
+    missing types fall back to the MIP solver, as the picker's default does.
+    """
+    st = config.get("solver_type", "mip")
+    if st == "sa":
+        from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
+
+        return SimulatedAnnealingSolver(), None
+    if st == "binary":
+        return MarxanBinarySolver(), None
+    if st == "zone_sa":
+        from pymarxan.zones.solver import ZoneSASolver
+
+        return ZoneSASolver(), None
+    if st == "greedy":
+        from pymarxan.solvers.heuristic import HeuristicSolver
+
+        return HeuristicSolver(), None
+    if st == "iterative_improvement":
+        from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
+
+        return IterativeImprovementSolver(), None
+    if st == "pipeline":
+        from pymarxan.solvers.run_mode import RunModePipeline
+
+        return RunModePipeline(), None
+    if st == "zonation":
+        from pymarxan_shiny.modules.zonation.zonation_panel import (
+            zonation_solver_from_config,
+        )
+
+        return zonation_solver_from_config(config), None
+    return build_mip_solver(config)
 
 
 @module.ui

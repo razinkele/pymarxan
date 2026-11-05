@@ -56,7 +56,11 @@ from modules.solver_config.objective_selector import (
     objective_selector_server,
     objective_selector_ui,
 )
-from modules.solver_config.solver_picker import solver_picker_server, solver_picker_ui
+from modules.solver_config.solver_picker import (
+    solver_from_config,
+    solver_picker_server,
+    solver_picker_ui,
+)
 from modules.spatial.cost_upload import cost_upload_server, cost_upload_ui
 from modules.spatial.gadm_picker import gadm_picker_server, gadm_picker_ui
 from modules.spatial.grid_builder import grid_builder_server, grid_builder_ui
@@ -191,10 +195,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     # Solver factory — returns the active solver based on current config
     @reactive.calc
     def solver():
-        from pymarxan.solvers import get_solver
-        cfg = solver_config()
-        solver_type = cfg.get("solver_type", "sa")
-        return get_solver(solver_type)
+        active, warning = solver_from_config(solver_config())
+        if warning is not None:
+            ui.notification_show(warning, type="warning", duration=10)
+        return active
 
     # --- Data Input ---
     upload_server("upload", problem=problem)

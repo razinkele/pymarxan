@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Web app (`pymarxan_shiny/app.py`, the deployed laguna app): Run and every Calibrate tab
+  crashed** with `ImportError: cannot import name 'get_solver'`, a name `pymarxan.solvers` never
+  had. Both apps now build the selected solver through one shared
+  `solver_picker.solver_from_config(config)`, so the same picker choice gives the same solver in
+  either app. App-level tests import the deployed app and build every solver the picker offers.
+- **Run panel showed "Error: None" when a solver failed.** The worker thread flipped the status to
+  "error" before writing the message, and the panel stops refreshing once the status changes.
+  `SolverProgress.fail()` now writes the message first.
+
+### Known issue
+
+- On a server whose PuLP has no bundled CBC (the laguna deployment), the MIP solver reports
+  `PULP_CBC_CMD: Not Available`; use simulated annealing or a heuristic there. A fallback to the
+  environment's own `cbc` binary is planned for 0.50.0.
+
 ## [0.49.0] — 2026-11-05
 
 ### Added

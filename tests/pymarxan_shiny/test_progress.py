@@ -88,3 +88,24 @@ class TestSolverProgress:
         p = SolverProgress()
         p.status = "done"
         assert p.progress_fraction() == 1.0
+
+
+def test_fail_publishes_error_before_status():
+    """The UI stops polling once status leaves "running"; status must flip last or the
+    user is left with "Error: None" (v0.49.1)."""
+    order: list[str] = []
+
+    class Recording(SolverProgress):
+        def __setattr__(self, name, value):
+            order.append(name)
+            super().__setattr__(name, value)
+
+    p = Recording()
+    p.status = "running"
+    order.clear()
+    p.fail("boom\ntraceback", "Solver failed (see error below).")
+    assert p.status == "error"
+    assert p.error == "boom\ntraceback"
+    assert p.message == "Solver failed (see error below)."
+    assert order[-1] == "status"
+    assert p.format_status() == "Error: boom\ntraceback"

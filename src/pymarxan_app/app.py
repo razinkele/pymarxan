@@ -8,10 +8,6 @@ from shiny import App, Inputs, Outputs, Session, reactive, render, ui
 from pymarxan import __version__
 from pymarxan.models.problem import ConservationProblem
 from pymarxan.solvers.base import Solution
-from pymarxan.solvers.marxan_binary import MarxanBinarySolver
-from pymarxan.solvers.mip_solver import MIPSolver
-from pymarxan.solvers.simulated_annealing import SimulatedAnnealingSolver
-from pymarxan.zones.solver import ZoneSASolver
 from pymarxan_shiny.modules.calibration.blm_explorer import (
     blm_explorer_server,
     blm_explorer_ui,
@@ -85,7 +81,7 @@ from pymarxan_shiny.modules.solver_config.objective_selector import (
     objective_selector_ui,
 )
 from pymarxan_shiny.modules.solver_config.solver_picker import (
-    build_mip_solver,
+    solver_from_config,
     solver_picker_server,
     solver_picker_ui,
 )
@@ -272,34 +268,10 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @reactive.calc
     def active_solver():
-        config_dict = solver_config()
-        st = config_dict.get("solver_type", "mip")
-        if st == "mip":
-            mip, warning = build_mip_solver(config_dict)
-            if warning is not None:
-                ui.notification_show(warning, type="warning", duration=10)
-            return mip
-        elif st == "sa":
-            return SimulatedAnnealingSolver()
-        elif st == "binary":
-            return MarxanBinarySolver()
-        elif st == "zone_sa":
-            return ZoneSASolver()
-        elif st == "greedy":
-            from pymarxan.solvers.heuristic import HeuristicSolver
-            return HeuristicSolver()
-        elif st == "iterative_improvement":
-            from pymarxan.solvers.iterative_improvement import IterativeImprovementSolver
-            return IterativeImprovementSolver()
-        elif st == "pipeline":
-            from pymarxan.solvers.run_mode import RunModePipeline
-            return RunModePipeline()
-        elif st == "zonation":
-            from pymarxan_shiny.modules.zonation.zonation_panel import (
-                zonation_solver_from_config,
-            )
-            return zonation_solver_from_config(config_dict)
-        return MIPSolver()
+        solver, warning = solver_from_config(solver_config())
+        if warning is not None:
+            ui.notification_show(warning, type="warning", duration=10)
+        return solver
 
     blm_explorer_server(
         "blm_cal", problem=problem, solver=active_solver,

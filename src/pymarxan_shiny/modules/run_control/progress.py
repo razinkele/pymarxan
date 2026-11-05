@@ -36,6 +36,16 @@ class SolverProgress:
         self.result_solutions = None
         self.result_best = None
 
+    def fail(self, error: str, message: str) -> None:
+        """Publish a failure from the solver thread.
+
+        ``status`` is written last: the UI stops polling once it leaves "running", so
+        a render between the two writes must never see the error state without its text.
+        """
+        self.error = error
+        self.message = message
+        self.status = "error"
+
     def format_status(self) -> str:
         """Return a human-readable status string."""
         if self.status == "idle":

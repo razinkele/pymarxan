@@ -143,9 +143,9 @@ def run_panel_server(
                 # leaves the "running" state instead of stalling on its
                 # last percent.
                 import traceback
-                progress.status = "error"
-                progress.error = f"{e!r}\n{traceback.format_exc()}"
-                progress.message = "Solver failed (see error below)."
+                progress.fail(
+                    f"{e!r}\n{traceback.format_exc()}", "Solver failed (see error below)."
+                )
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
