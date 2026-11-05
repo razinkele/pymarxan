@@ -138,11 +138,12 @@ def write_input_dat(params: dict[str, Any], path: str | Path) -> None:
     path = Path(path)
     with open(path, "w") as f:
         for key, value in params.items():
-            if isinstance(value, float):
-                # repr is the shortest exact round trip ("%g" kept 6 digits, so BLM
-                # 0.123456789 reloaded as 0.123457). read_input_dat only parses text
-                # with a decimal point as float, so "1e-12" becomes "1.0e-12".
-                mantissa, sep, exponent = repr(value).partition("e")
+            if isinstance(value, float | np.floating):
+                # repr(float(value)) is the shortest exact round trip ("%g" kept 6 digits,
+                # so BLM 0.123456789 reloaded as 0.123457; repr(np.float64) is
+                # "np.float64(...)" under numpy 2). read_input_dat only parses text with a
+                # decimal point as float, so "1e-12" becomes "1.0e-12".
+                mantissa, sep, exponent = repr(float(value)).partition("e")
                 if mantissa.lstrip("-").isdigit():
                     mantissa += ".0"
                 formatted = mantissa + sep + exponent

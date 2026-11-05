@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pymarxan.io.readers import load_project, read_input_dat, read_pu, read_spec
@@ -123,3 +124,22 @@ def test_input_dat_floats_round_trip_exactly(tmp_path: Path) -> None:
     assert loaded["BLM"] == 0.123456789
     assert loaded["TINY"] == 1e-12
     assert loaded["ONE"] == 1.0 and loaded["COUNT"] == 3
+
+
+def test_input_dat_numpy_scalars_round_trip(tmp_path: Path) -> None:
+    """numpy floats are written as plain decimals (repr(np.float64) is 'np.float64(...)' under
+    numpy 2); float32 keeps its exact float() value; numpy ints are written as before."""
+    params = {
+        "BLM": np.float64(0.123456789),
+        "X": np.float32(0.1),
+        "N": np.int64(5),
+    }
+    out_path = tmp_path / "input.dat"
+    write_input_dat(params, out_path)
+    text = out_path.read_text()
+    assert "np." not in text
+    assert text.splitlines()[2] == "N 5"
+    loaded = read_input_dat(out_path)
+    assert loaded["BLM"] == 0.123456789
+    assert loaded["X"] == float(np.float32(0.1))
+    assert loaded["N"] == 5
