@@ -3,6 +3,7 @@ likely restoration is to succeed and what each action costs (spec §3.1)."""
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -211,8 +212,13 @@ class RecoveryInputs:
             bad = [u for u, c in zip(unit_ids, cost, strict=True) if not c >= 0]
             errors.append(f"unit costs must be finite and >= 0: units {_first(bad)}")
         pv = self.base.pu_vs_features
-        if (np.asarray(pv["amount"].values, dtype=float) < 0).any():
-            errors.append("existing habitat amounts (base.pu_vs_features) must be >= 0")
+        ex = np.asarray(pv["amount"].values, dtype=float)
+        ex_ok = np.isfinite(ex) & (ex >= 0)
+        if not ex_ok.all():
+            bad_ex = sorted({int(u) for u in pv["pu"].values[~ex_ok]})
+            errors.append(
+                f"existing habitat amounts must be finite and >= 0: units {_first(bad_ex)}"
+            )
 
         pot = self.potential
         missing = {"pu", "feature", "amount"} - set(pot.columns)
@@ -301,7 +307,14 @@ class RecoveryInputs:
         name: str, value: object, units: set[int], lo: float, hi: float,
     ) -> list[str]:
         if isinstance(value, pd.Series):
-            ids = {int(i) for i in value.index}
+            if not all(_is_finite_number(i) and float(i) == int(i) for i in value.index):
+                return [f"{name} index must hold integer unit ids"]
+            ids_list = [int(i) for i in value.index]
+            counts = Counter(ids_list)
+            dups = sorted(i for i, c in counts.items() if c > 1)
+            if dups:
+                return [f"{name} has duplicate unit ids {_first(dups)}"]
+            ids = set(ids_list)
             out = []
             if units - ids:
                 out.append(f"{name} has no value for units {_first(sorted(units - ids))}")

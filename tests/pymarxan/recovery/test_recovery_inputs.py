@@ -131,3 +131,38 @@ def test_potential_only_in_locked_out_units_warns() -> None:
     check = check_recovery_inputs(anchor_inputs(status=(0, 0, 3, 3)))
     assert check.errors == []
     assert len(check.warnings) == 1 and "no restoration potential" in check.warnings[0]
+
+
+def test_nan_existing_amount_is_an_error_and_build_refuses() -> None:
+    inputs = anchor_inputs()
+    inputs.base = inputs.base.copy_with(
+        pu_vs_features=inputs.base.pu_vs_features.assign(amount=[float("nan"), 6.0]),
+    )
+    errors = inputs.validate()
+    assert any("existing habitat amounts must be finite and >= 0: units 1" in e for e in errors)
+    with pytest.raises(RecoveryInputError):
+        build_recovery_problem(inputs)
+
+
+def test_duplicate_p_success_index_is_reported_not_a_crash() -> None:
+    p = pd.Series([0.5, 0.5, 0.5, 0.8, 0.1], index=[1, 2, 3, 4, 4])
+    inputs = anchor_inputs(p_success=p)
+    assert any("p_success has duplicate unit ids 4" in e for e in inputs.validate())
+    check = check_recovery_inputs(inputs)
+    assert check.errors and check.warnings == []
+
+
+def test_string_p_success_index_is_reported_and_build_refuses() -> None:
+    p = pd.Series({"1": 0.5, "2": 0.5, "3": 0.5, "4": 0.8})
+    inputs = anchor_inputs(p_success=p)
+    assert any("p_success index must hold integer unit ids" in e for e in inputs.validate())
+    with pytest.raises(RecoveryInputError):
+        build_recovery_problem(inputs)
+
+
+def test_string_restore_cost_index_is_reported_not_a_crash() -> None:
+    rc = pd.Series({"1": 1.0, "2": 1.0, "3": 1.0, "4": 2.0})
+    inputs = anchor_inputs(restore_cost=rc)
+    assert any("restore_cost index must hold integer unit ids" in e for e in inputs.validate())
+    check = check_recovery_inputs(inputs)
+    assert check.errors and check.warnings == []
